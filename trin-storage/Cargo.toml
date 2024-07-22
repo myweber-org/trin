@@ -1,0 +1,30 @@
+[package]
+name = "trin-storage"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/ethereum/trin/tree/master/trin-storage"
+license = "GPL-3.0"
+readme = "README.md"
+keywords = ["ethereum", "portal-network"]
+categories = ["cryptography::cryptocurrencies"]
+description = "Storage library for Trin."
+authors = ["https://github.com/ethereum/trin/graphs/contributors"]
+
+[dependencies]
+alloy-primitives = "0.7.0"
+discv5 = { version = "0.4.1", features = ["serde"] }
+ethportal-api = {path = "../ethportal-api"}
+r2d2 = "0.8.9"
+r2d2_sqlite = "0.24.0"
+rand = "0.8.4"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+strum = { version = "0.26.1", features = ["derive"] }
+tempfile = "3.3.0"
+thiserror = "1.0.57"
+tracing = "0.1.36"
+trin-metrics = { path = "../trin-metrics" }
+
+[dev-dependencies]
+anyhow = "1.0.68"
+quickcheck = "1.0.3"
+rstest = "0.18.2"

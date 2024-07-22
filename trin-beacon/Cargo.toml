@@ -1,0 +1,36 @@
+[package]
+name = "trin-beacon"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/ethereum/trin/tree/master/trin-beacon"
+license = "GPL-3.0"
+readme = "README.md"
+keywords = ["ethereum", "portal-network"]
+categories = ["cryptography::cryptocurrencies"]
+description = "Beacon network subprotocol for Trin."
+authors = ["https://github.com/ethereum/trin/graphs/contributors"]
+
+[dependencies]
+anyhow = "1.0.68"
+chrono = "0.4.38"
+discv5 = { version = "0.4.1", features = ["serde"] }
+ethereum_ssz = "0.5.3"
+ethportal-api = { path = "../ethportal-api" }
+parking_lot = "0.11.2"
+portalnet = { path = "../portalnet" }
+r2d2 = "0.8.9"
+r2d2_sqlite = "0.24.0"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+light-client = { path = "../light-client" }
+serde_json = "1.0.89"
+ssz_types = { git = "https://github.com/KolbyML/ssz_types.git", rev = "2a5922de75f00746890bf4ea9ad663c9d5d58efe" }
+tokio = { version = "1.14.0", features = ["full"] }
+tracing = "0.1.36"
+trin-metrics = { path = "../trin-metrics" }
+trin-storage = { path = "../trin-storage" }
+trin-validation = { path = "../trin-validation" }
+utp-rs = { git = "https://github.com/ethereum/utp", tag = "v0.1.0-alpha.12" }
+
+[dev-dependencies]
+serde_yaml = "0.9.33"
+snap = "1.1.1"

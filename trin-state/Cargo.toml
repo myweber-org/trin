@@ -1,0 +1,39 @@
+[package]
+name = "trin-state"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/ethereum/trin/tree/master/trin-state"
+license = "GPL-3.0"
+readme = "README.md"
+keywords = ["ethereum", "portal-network"]
+categories = ["cryptography::cryptocurrencies"]
+description = "State network subprotocol for Trin."
+authors = ["https://github.com/ethereum/trin/graphs/contributors"]
+
+[dependencies]
+alloy-primitives = { version = "0.7.0", features = ["getrandom"] }
+alloy-rlp = "0.3.4"
+anyhow = "1.0.68"
+discv5 = { version = "0.4.1", features = ["serde"] }
+eth_trie = { git = "https://github.com/kolbyml/eth-trie.rs.git", rev = "7e57d3dfadee126cc9fda2696fb039bf7b6ed688" }
+ethportal-api = { path = "../ethportal-api" }
+keccak-hash = "0.10.0"
+parking_lot = "0.11.2"
+portalnet = { path = "../portalnet" }
+serde_json = "1.0.89"
+thiserror = "1.0.57"
+tokio = {version = "1.14.0", features = ["full"]}
+tracing = "0.1.36"
+trin-storage = { path = "../trin-storage" }
+trin-validation = { path = "../trin-validation" }
+utp-rs = { git = "https://github.com/ethereum/utp", tag = "v0.1.0-alpha.12" }
+
+[dev-dependencies]
+env_logger = "0.9.0"
+rstest = "0.18.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serial_test = "0.5.1"
+test-log = { version = "0.2.11", features = ["trace"] }
+tracing-subscriber = "0.3.15"
+trin-utils = { path = "../trin-utils" }
