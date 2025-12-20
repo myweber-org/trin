@@ -126,3 +126,90 @@ mod tests {
         assert!((stats.1 - 20.3).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let processed: Vec<f64> = values
+            .iter()
+            .filter(|&&x| x.is_finite())
+            .map(|&x| x * 2.0)
+            .collect();
+
+        if processed.is_empty() {
+            return Err("All values were invalid".to_string());
+        }
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
+        self.cache.get(key).map(|values| {
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+            
+            (mean, variance, std_dev)
+        })
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_data() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_data("test", &[1.0, 2.0, 3.0]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_data("empty", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_caching() {
+        let mut processor = DataProcessor::new();
+        let data = &[1.0, 2.0];
+        
+        let first = processor.process_data("cached", data).unwrap();
+        let second = processor.process_data("cached", &[3.0, 4.0]).unwrap();
+        
+        assert_eq!(first, second);
+    }
+}
