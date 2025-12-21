@@ -113,3 +113,133 @@ mod tests {
         assert!((std_dev - 2.054).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: vec![
+                ValidationRule {
+                    min_value: Some(0.0),
+                    max_value: Some(100.0),
+                    required: true,
+                }
+            ],
+        }
+    }
+
+    pub fn process_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data set provided".to_string());
+        }
+
+        for rule in &self.validation_rules {
+            if rule.required && values.len() == 0 {
+                return Err("Data required but none provided".to_string());
+            }
+
+            for &value in values {
+                if let Some(min) = rule.min_value {
+                    if value < min {
+                        return Err(format!("Value {} below minimum {}", value, min));
+                    }
+                }
+                if let Some(max) = rule.max_value {
+                    if value > max {
+                        return Err(format!("Value {} exceeds maximum {}", value, max));
+                    }
+                }
+            }
+        }
+
+        let processed: Vec<f64> = values
+            .iter()
+            .map(|&v| v * 1.1)
+            .collect();
+
+        self.cache.insert(key.to_string(), processed.clone());
+
+        Ok(processed)
+    }
+
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<DataStatistics> {
+        self.cache.get(key).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = data.iter()
+                .map(|&value| {
+                    let diff = mean - value;
+                    diff * diff
+                })
+                .sum::<f64>() / count;
+
+            DataStatistics {
+                mean,
+                variance,
+                count: data.len(),
+                min: *data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+                max: *data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            }
+        })
+    }
+}
+
+pub struct DataStatistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let data = vec![10.0, 20.0, 30.0];
+        
+        let result = processor.process_data("test", &data);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 3);
+        assert!((processed[0] - 11.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        let invalid_data = vec![-5.0, 150.0];
+        
+        let result = processor.process_data("invalid", &invalid_data);
+        assert!(result.is_err());
+    }
+}
