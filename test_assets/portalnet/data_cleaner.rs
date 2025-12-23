@@ -74,3 +74,36 @@ pub fn process_dataset(input: &str, output: &str) -> Result<(), Box<dyn Error>> 
     println!("Processed {} records, {} valid", total_count, valid_count);
     Ok(())
 }
+use std::collections::HashSet;
+
+pub fn clean_and_sort_data(input: Vec<String>) -> Vec<String> {
+    let mut unique_items: HashSet<String> = input.into_iter().collect();
+    let mut sorted_items: Vec<String> = unique_items.into_iter().collect();
+    sorted_items.sort();
+    sorted_items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_and_sort_data() {
+        let input = vec![
+            "banana".to_string(),
+            "apple".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+            "apple".to_string(),
+        ];
+        
+        let result = clean_and_sort_data(input);
+        let expected = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+        ];
+        
+        assert_eq!(result, expected);
+    }
+}
