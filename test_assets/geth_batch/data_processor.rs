@@ -1,132 +1,143 @@
 
-use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
-    validation_rules: ValidationRules,
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
 }
 
-pub struct ValidationRules {
-    min_value: f64,
-    max_value: f64,
-    required_keys: Vec<String>,
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
-    pub fn new(rules: ValidationRules) -> Self {
-        DataProcessor {
-            data: HashMap::new(),
-            validation_rules: rules,
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
         }
     }
 
-    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
-        if !self.validation_rules.required_keys.contains(&key) {
-            return Err(format!("Key '{}' is not in required keys list", key));
-        }
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
 
-        for &value in &values {
-            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
-                return Err(format!("Value {} is out of allowed range [{}, {}]", 
-                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+
+            let id = parts[0].parse::<u32>().unwrap_or(0);
+            let name = parts[1].to_string();
+            let value = parts[2].parse::<f64>().unwrap_or(0.0);
+            let category = parts[3].to_string();
+
+            let record = DataRecord::new(id, name, value, category);
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
             }
         }
 
-        self.data.insert(key, values);
-        Ok(())
+        Ok(count)
     }
 
-    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
-        self.data.get(key).map(|values| {
-            let sum: f64 = values.iter().sum();
-            let count = values.len() as f64;
-            let mean = sum / count;
-            
-            let variance: f64 = values.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count;
-            
-            let std_dev = variance.sqrt();
-            
-            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            
-            Statistics {
-                mean,
-                std_dev,
-                min,
-                max,
-                count: values.len(),
-            }
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn find_max_value(&self) -> Option<&DataRecord> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
         })
     }
 
-    pub fn normalize_data(&mut self, key: &str) -> Result<(), String> {
-        if let Some(values) = self.data.get_mut(key) {
-            let stats = self.calculate_statistics(key).unwrap();
-            
-            if stats.std_dev == 0.0 {
-                return Err("Cannot normalize data with zero standard deviation".to_string());
-            }
-            
-            for value in values.iter_mut() {
-                *value = (*value - stats.mean) / stats.std_dev;
-            }
-            Ok(())
-        } else {
-            Err(format!("Key '{}' not found in dataset", key))
-        }
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
     }
 
-    pub fn get_transformed_data(&self) -> HashMap<String, Vec<f64>> {
-        self.data.clone()
-    }
-}
-
-pub struct Statistics {
-    pub mean: f64,
-    pub std_dev: f64,
-    pub min: f64,
-    pub max: f64,
-    pub count: usize,
-}
-
-impl ValidationRules {
-    pub fn new(min_value: f64, max_value: f64, required_keys: Vec<String>) -> Self {
-        ValidationRules {
-            min_value,
-            max_value,
-            required_keys,
-        }
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_record_validation() {
+        let valid_record = DataRecord::new(1, "Test".to_string(), 10.5, "A".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(2, "".to_string(), -5.0, "".to_string());
+        assert!(!invalid_record.is_valid());
+    }
 
     #[test]
     fn test_data_processor() {
-        let rules = ValidationRules::new(
-            0.0,
-            100.0,
-            vec!["temperature".to_string(), "humidity".to_string()]
-        );
+        let mut processor = DataProcessor::new();
         
-        let mut processor = DataProcessor::new(rules);
-        
-        assert!(processor.add_dataset(
-            "temperature".to_string(),
-            vec![20.5, 22.3, 18.7, 25.1]
-        ).is_ok());
-        
-        assert!(processor.add_dataset(
-            "pressure".to_string(),
-            vec![1013.25, 1012.8]
-        ).is_err());
-        
-        let stats = processor.calculate_statistics("temperature").unwrap();
-        assert!(stats.mean > 0.0);
-        assert_eq!(stats.count, 4);
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,Item1,10.5,CategoryA").unwrap();
+        writeln!(temp_file, "2,Item2,20.3,CategoryB").unwrap();
+        writeln!(temp_file, "3,Item3,15.7,CategoryA").unwrap();
+
+        let count = processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(processor.get_record_count(), 3);
+
+        let category_a = processor.filter_by_category("CategoryA");
+        assert_eq!(category_a.len(), 2);
+
+        let average = processor.calculate_average();
+        assert!((average - 15.5).abs() < 0.1);
+
+        let max_record = processor.find_max_value().unwrap();
+        assert_eq!(max_record.id, 2);
+        assert!((max_record.value - 20.3).abs() < 0.1);
     }
 }
