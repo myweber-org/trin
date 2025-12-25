@@ -1,125 +1,69 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    id: u32,
-    value: f64,
-    category: String,
-    timestamp: String,
-}
-
-impl DataRecord {
-    pub fn new(id: u32, value: f64, category: String, timestamp: String) -> Self {
-        DataRecord {
-            id,
-            value,
-            category,
-            timestamp,
-        }
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.id > 0 && self.value >= 0.0 && !self.category.is_empty()
-    }
-
-    pub fn get_normalized_value(&self, max_value: f64) -> f64 {
-        if max_value > 0.0 {
-            self.value / max_value
-        } else {
-            0.0
-        }
-    }
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            cache: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut count = 0;
-
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if index == 0 {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() >= 4 {
-                let id = parts[0].parse::<u32>().unwrap_or(0);
-                let value = parts[1].parse::<f64>().unwrap_or(0.0);
-                let category = parts[2].to_string();
-                let timestamp = parts[3].to_string();
-
-                let record = DataRecord::new(id, value, category, timestamp);
-                if record.is_valid() {
-                    self.records.push(record);
-                    count += 1;
-                }
-            }
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
         }
 
-        Ok(count)
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let processed = Self::normalize_data(data)?;
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
+    fn normalize_data(data: &[f64]) -> Result<Vec<f64>, String> {
+        let max_value = data
             .iter()
-            .filter(|record| record.category == category)
-            .collect()
-    }
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .ok_or("Cannot find maximum value")?;
 
-    pub fn calculate_average(&self) -> f64 {
-        if self.records.is_empty() {
-            return 0.0;
+        if *max_value == 0.0 {
+            return Err("Maximum value cannot be zero for normalization".to_string());
         }
 
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        sum / self.records.len() as f64
+        Ok(data.iter().map(|&x| x / max_value).collect())
     }
 
-    pub fn find_max_value(&self) -> Option<&DataRecord> {
-        self.records.iter().max_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
-        })
-    }
-
-    pub fn get_statistics(&self) -> (f64, f64, f64) {
-        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+    pub fn calculate_statistics(data: &[f64]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
         
-        if values.is_empty() {
-            return (0.0, 0.0, 0.0);
+        if data.is_empty() {
+            return stats;
         }
 
-        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let avg = self.calculate_average();
+        let sum: f64 = data.iter().sum();
+        let count = data.len() as f64;
+        let mean = sum / count;
 
-        (min, max, avg)
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("count".to_string(), count);
+        stats.insert("sum".to_string(), sum);
+
+        stats
     }
 
-    pub fn export_summary(&self) -> String {
-        let (min, max, avg) = self.get_statistics();
-        let valid_count = self.records.len();
-        
-        format!(
-            "Records processed: {}\nMin value: {:.2}\nMax value: {:.2}\nAverage: {:.2}",
-            valid_count, min, max, avg
-        )
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
     }
 }
 
@@ -128,25 +72,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord::new(1, 10.5, "A".to_string(), "2024-01-01".to_string());
-        assert!(valid_record.is_valid());
-
-        let invalid_record = DataRecord::new(0, -5.0, "".to_string(), "2024-01-01".to_string());
-        assert!(!invalid_record.is_valid());
+    fn test_normalize_data() {
+        let data = vec![2.0, 4.0, 6.0];
+        let result = DataProcessor::normalize_data(&data).unwrap();
+        assert_eq!(result, vec![1.0/3.0, 2.0/3.0, 1.0]);
     }
 
     #[test]
-    fn test_normalized_value() {
-        let record = DataRecord::new(1, 50.0, "Test".to_string(), "2024-01-01".to_string());
-        assert_eq!(record.get_normalized_value(100.0), 0.5);
-        assert_eq!(record.get_normalized_value(0.0), 0.0);
-    }
-
-    #[test]
-    fn test_empty_processor() {
-        let processor = DataProcessor::new();
-        assert_eq!(processor.calculate_average(), 0.0);
-        assert_eq!(processor.find_max_value(), None);
+    fn test_calculate_statistics() {
+        let data = vec![1.0, 2.0, 3.0];
+        let stats = DataProcessor::calculate_statistics(&data);
+        
+        assert_eq!(stats.get("mean"), Some(&2.0));
+        assert_eq!(stats.get("count"), Some(&3.0));
+        assert_eq!(stats.get("sum"), Some(&6.0));
     }
 }
