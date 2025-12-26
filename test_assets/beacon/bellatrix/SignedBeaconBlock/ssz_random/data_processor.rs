@@ -1,232 +1,135 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        
-        let mut count = 0;
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                continue;
-            }
-            
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-            
-            let id = match parts[0].parse::<u32>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let value = match parts[1].parse::<f64>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let category = parts[2].to_string();
-            
-            self.records.push(DataRecord {
-                id,
-                value,
-                category,
-            });
-            
-            count += 1;
-        }
-        
-        Ok(count)
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for rule in &self.validation_rules {
+            if rule.required && data.iter().any(|&x| x.is_nan()) {
+                return Err(format!("Field '{}' contains invalid values", rule.field_name));
+            }
+        }
+
+        let processed_data: Vec<f64> = data
             .iter()
-            .filter(|record| record.category == category)
-            .collect()
-    }
+            .map(|&value| {
+                let mut transformed = value;
+                
+                for rule in &self.validation_rules {
+                    if value < rule.min_value {
+                        transformed = rule.min_value;
+                    } else if value > rule.max_value {
+                        transformed = rule.max_value;
+                    }
+                }
+                
+                transformed * 1.05
+            })
+            .collect();
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
         
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+        Ok(processed_data)
     }
 
-    pub fn get_record_count(&self) -> usize {
-        self.records.len()
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
     }
 
-    pub fn clear(&mut self) {
-        self.records.clear();
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<DatasetStatistics> {
+        self.cache.get(dataset_name).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = data.iter()
+                .map(|&value| {
+                    let diff = value - mean;
+                    diff * diff
+                })
+                .sum::<f64>() / count;
+            
+            DatasetStatistics {
+                mean,
+                variance,
+                min: *data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                max: *data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                count: data.len(),
+            }
+        })
+    }
+}
+
+pub struct DatasetStatistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
+
+impl ValidationRule {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+            required,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        assert_eq!(processor.get_record_count(), 0);
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,10.5,type_a").unwrap();
-        writeln!(temp_file, "2,20.3,type_b").unwrap();
-        writeln!(temp_file, "3,15.7,type_a").unwrap();
-        
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
-        assert_eq!(processor.get_record_count(), 3);
-        
-        let filtered = processor.filter_by_category("type_a");
-        assert_eq!(filtered.len(), 2);
-        
-        let average = processor.calculate_average();
-        assert!(average.is_some());
-        let expected_avg = (10.5 + 20.3 + 15.7) / 3.0;
-        assert!((average.unwrap() - expected_avg).abs() < 0.0001);
-        
-        processor.clear();
-        assert_eq!(processor.get_record_count(), 0);
-    }
-}use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::path::Path;
-
-#[derive(Debug, Deserialize)]
-pub struct Record {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
-}
-
-pub struct DataProcessor {
-    records: Vec<Record>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
-    }
-
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let mut reader = Reader::from_path(path)?;
-        for result in reader.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
-        }
-        Ok(())
-    }
-
-    pub fn validate_records(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
-            .collect()
-    }
-
-    pub fn calculate_total(&self) -> f64 {
-        self.records.iter().map(|r| r.value).sum()
-    }
-
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
-        let mut map = std::collections::HashMap::new();
-        for record in &self.records {
-            map.entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
-        }
-        map
-    }
-
-    pub fn get_statistics(&self) -> (f64, f64, f64) {
-        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
-        let count = values.len() as f64;
-        if count == 0.0 {
-            return (0.0, 0.0, 0.0);
-        }
-
-        let sum: f64 = values.iter().sum();
-        let mean = sum / count;
-
-        let variance: f64 = values
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>()
-            / count;
-
-        let std_dev = variance.sqrt();
-
-        (mean, variance, std_dev)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_data_processing() {
         let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("temperature", -50.0, 100.0, true));
+        
+        let test_data = vec![25.0, 30.0, 35.0, 40.0];
+        let result = processor.process_dataset("test_dataset", &test_data);
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.get_cached_data("test_dataset").unwrap().len(), 4);
+    }
 
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,category").unwrap();
-        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
-        writeln!(temp_file, "2,ItemB,20.3,Category2").unwrap();
-        writeln!(temp_file, "3,ItemC,15.7,Category1").unwrap();
-
-        processor.load_from_csv(temp_file.path()).unwrap();
-
-        assert_eq!(processor.records.len(), 3);
-        assert_eq!(processor.calculate_total(), 46.5);
-
-        let valid = processor.validate_records();
-        assert_eq!(valid.len(), 3);
-
-        let groups = processor.group_by_category();
-        assert_eq!(groups.get("Category1").unwrap().len(), 2);
-        assert_eq!(groups.get("Category2").unwrap().len(), 1);
-
-        let stats = processor.get_statistics();
-        assert!((stats.0 - 15.5).abs() < 0.001);
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        let test_data = vec![10.0, 20.0, 30.0, 40.0];
+        
+        processor.process_dataset("stats_test", &test_data).unwrap();
+        let stats = processor.calculate_statistics("stats_test").unwrap();
+        
+        assert_eq!(stats.mean, 26.25);
+        assert_eq!(stats.count, 4);
     }
 }
