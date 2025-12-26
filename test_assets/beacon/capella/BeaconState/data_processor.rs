@@ -1,61 +1,57 @@
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    value: f64,
-    category: String,
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<Record>,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor { records: Vec::new() }
-    }
-
-    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(path)?;
-        let mut rdr = Reader::from_reader(file);
-        
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
+        DataProcessor {
+            cache: HashMap::new(),
         }
-        
-        Ok(())
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data provided".to_string());
         }
-        
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
-    }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
-        self.records
+        if values.iter().any(|&x| !x.is_finite()) {
+            return Err("Invalid numeric values detected".to_string());
+        }
+
+        let processed: Vec<f64> = values
             .iter()
-            .filter(|r| r.category == category)
-            .collect()
+            .map(|&x| x * 2.0)
+            .filter(|&x| x > 0.0)
+            .collect();
+
+        if processed.is_empty() {
+            return Err("All values filtered out".to_string());
+        }
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
     }
 
-    pub fn max_value(&self) -> Option<&Record> {
-        self.records.iter().max_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap()
-        })
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
     }
 
-    pub fn min_value(&self) -> Option<&Record> {
-        self.records.iter().min_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap()
+    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
+        self.cache.get(key).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = data.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+            
+            (mean, variance, std_dev)
         })
     }
 }
@@ -63,25 +59,27 @@ impl DataProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
 
     #[test]
-    fn test_data_processing() {
+    fn test_valid_processing() {
         let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,10.5,A").unwrap();
-        writeln!(temp_file, "2,20.3,B").unwrap();
-        writeln!(temp_file, "3,15.7,A").unwrap();
-        
-        let path = temp_file.path().to_str().unwrap();
-        processor.load_from_csv(path).unwrap();
-        
-        assert_eq!(processor.calculate_average(), Some(15.5));
-        assert_eq!(processor.filter_by_category("A").len(), 2);
-        assert_eq!(processor.max_value().unwrap().id, 2);
-        assert_eq!(processor.min_value().unwrap().id, 1);
+        let result = processor.process_numeric_data("test1", &[1.0, 2.0, 3.0]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_numeric_data("test2", &[f64::NAN, 1.0]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        processor.process_numeric_data("stats", &[1.0, 2.0, 3.0]).unwrap();
+        let stats = processor.calculate_statistics("stats").unwrap();
+        assert!((stats.0 - 4.0).abs() < 0.001);
     }
 }
