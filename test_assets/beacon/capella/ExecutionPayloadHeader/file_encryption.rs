@@ -1,58 +1,93 @@
 
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::error::Error;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
 
-pub fn encrypt_file(
-    plaintext: &[u8],
-    key: &[u8; 32],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::generate(&mut OsRng);
-    
-    let mut ciphertext = cipher
-        .encrypt(&nonce, plaintext)
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-    
-    let mut result = nonce.to_vec();
-    result.append(&mut ciphertext);
-    Ok(result)
+pub struct XorCipher {
+    key: Vec<u8>,
+    key_index: usize,
 }
 
-pub fn decrypt_file(
-    ciphertext: &[u8],
-    key: &[u8; 32],
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    if ciphertext.len() < 12 {
-        return Err("Invalid ciphertext length".into());
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+            key_index: 0,
+        }
     }
-    
-    let (nonce_bytes, encrypted_data) = ciphertext.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    
-    cipher
-        .decrypt(nonce, encrypted_data)
-        .map_err(|e| format!("Decryption failed: {}", e).into())
+
+    fn next_key_byte(&mut self) -> u8 {
+        let byte = self.key[self.key_index];
+        self.key_index = (self.key_index + 1) % self.key.len();
+        byte
+    }
+
+    pub fn process_bytes(&mut self, data: &[u8]) -> Vec<u8> {
+        data.iter()
+            .map(|&byte| byte ^ self.next_key_byte())
+            .collect()
+    }
+
+    pub fn reset(&mut self) {
+        self.key_index = 0;
+    }
+}
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    let mut cipher = XorCipher::new(key);
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let encrypted_data = cipher.process_bytes(&buffer);
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &str) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::RngCore;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
-        
-        let plaintext = b"Secret data that needs protection";
-        
-        let encrypted = encrypt_file(plaintext, &key).unwrap();
-        let decrypted = decrypt_file(&encrypted, &key).unwrap();
-        
-        assert_eq!(plaintext.to_vec(), decrypted);
+    fn test_xor_cipher_symmetry() {
+        let key = "secret_key";
+        let mut cipher = XorCipher::new(key);
+        let original_data = b"Hello, World! This is a test message.";
+
+        let encrypted = cipher.process_bytes(original_data);
+        cipher.reset();
+        let decrypted = cipher.process_bytes(&encrypted);
+
+        assert_eq!(original_data.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let key = "test_key_123";
+        let original_content = b"Sample file content for encryption test.";
+
+        let mut input_file = NamedTempFile::new()?;
+        input_file.write_all(original_content)?;
+        let input_path = input_file.path();
+
+        let output_file = NamedTempFile::new()?;
+        let output_path = output_file.path();
+
+        encrypt_file(input_path, output_path, key)?;
+        decrypt_file(output_path, input_path, key)?;
+
+        let mut restored_content = Vec::new();
+        fs::File::open(input_path)?.read_to_end(&mut restored_content)?;
+
+        assert_eq!(original_content.to_vec(), restored_content);
+        Ok(())
     }
 }
