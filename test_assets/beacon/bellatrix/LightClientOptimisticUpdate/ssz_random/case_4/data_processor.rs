@@ -1,4 +1,3 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -17,7 +16,7 @@ impl DataProcessor {
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
@@ -34,7 +33,7 @@ impl DataProcessor {
                 .map(|s| s.trim().to_string())
                 .collect();
             
-            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+            if !fields.is_empty() {
                 records.push(fields);
             }
         }
@@ -46,10 +45,10 @@ impl DataProcessor {
         !record.is_empty() && record.iter().all(|field| !field.is_empty())
     }
 
-    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
-        data.iter()
-            .filter_map(|record| record.get(column_index))
-            .cloned()
+    pub fn filter_valid_records(&self, records: Vec<Vec<String>>) -> Vec<Vec<String>> {
+        records
+            .into_iter()
+            .filter(|record| self.validate_record(record))
             .collect()
     }
 }
@@ -61,40 +60,27 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_csv() {
+    fn test_csv_processing() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "John,25,New York").unwrap();
+        writeln!(temp_file, "Jane,30,London").unwrap();
+        writeln!(temp_file, ",,").unwrap();
 
         let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
+        let records = processor.process_csv(temp_file.path()).unwrap();
+        let valid_records = processor.filter_valid_records(records);
 
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
-        assert_eq!(result[1], vec!["Bob", "25", "London"]);
+        assert_eq!(valid_records.len(), 2);
+        assert_eq!(valid_records[0], vec!["John", "25", "New York"]);
+        assert_eq!(valid_records[1], vec!["Jane", "30", "London"]);
     }
 
     #[test]
-    fn test_validate_record() {
+    fn test_validation() {
         let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["data".to_string(), "value".to_string()];
-        let invalid_record = vec!["".to_string(), "value".to_string()];
-
-        assert!(processor.validate_record(&valid_record));
-        assert!(!processor.validate_record(&invalid_record));
-    }
-
-    #[test]
-    fn test_extract_column() {
-        let data = vec![
-            vec!["a".to_string(), "b".to_string(), "c".to_string()],
-            vec!["d".to_string(), "e".to_string(), "f".to_string()],
-        ];
-        
-        let processor = DataProcessor::new(',', false);
-        let column = processor.extract_column(&data, 1);
-        
-        assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
+        assert!(processor.validate_record(&["data".to_string(), "value".to_string()]));
+        assert!(!processor.validate_record(&[]));
+        assert!(!processor.validate_record(&["".to_string(), "value".to_string()]));
     }
 }
