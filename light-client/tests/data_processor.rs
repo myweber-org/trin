@@ -171,3 +171,129 @@ mod tests {
         assert_eq!(avg, 15.0);
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    pub fn new(id: u32, name: String, value: f64, active: bool) -> Self {
+        Record {
+            id,
+            name,
+            value,
+            active,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            record.validate()?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_csv(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut wtr = Writer::from_writer(file);
+
+        for record in &self.records {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: Record) -> Result<(), String> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|r| r.value)
+            .sum()
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records
+            .iter()
+            .find(|r| r.id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record::new(1, "Test".to_string(), 100.0, true);
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = Record::new(2, "".to_string(), -50.0, false);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = Record::new(1, "Item1".to_string(), 10.5, true);
+        let record2 = Record::new(2, "Item2".to_string(), 20.0, false);
+        
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        
+        assert_eq!(processor.filter_active().len(), 1);
+        assert_eq!(processor.calculate_total(), 30.5);
+        assert!(processor.find_by_id(1).is_some());
+        assert!(processor.find_by_id(3).is_none());
+    }
+}
