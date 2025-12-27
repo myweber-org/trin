@@ -1,112 +1,102 @@
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::collections::HashMap;
+use std::path::Path;
 
-pub struct DataProcessor {
-    data: Vec<f64>,
-    frequency_map: HashMap<String, u32>,
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            data: Vec::new(),
-            frequency_map: HashMap::new(),
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
+}
+
+pub fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let path = Path::new(input_path);
+    if !path.exists() {
+        return Err("Input file does not exist".into());
+    }
+
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(input_path)?;
+
+    let mut valid_records = Vec::new();
+    let mut invalid_count = 0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if record.is_valid() {
+            valid_records.push(record);
+        } else {
+            invalid_count += 1;
         }
     }
 
-    pub fn load_numeric_data(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-
-        for line in reader.lines() {
-            let line = line?;
-            if let Ok(value) = line.trim().parse::<f64>() {
-                self.data.push(value);
-            }
-        }
-        Ok(())
+    if valid_records.is_empty() {
+        return Err("No valid records found".into());
     }
 
-    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
-        if self.data.is_empty() {
-            return (0.0, 0.0, 0.0);
-        }
+    let mut writer = WriterBuilder::new()
+        .has_headers(true)
+        .from_path(output_path)?;
 
-        let sum: f64 = self.data.iter().sum();
-        let mean = sum / self.data.len() as f64;
-
-        let variance: f64 = self.data
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / self.data.len() as f64;
-
-        let std_dev = variance.sqrt();
-
-        (mean, variance, std_dev)
+    for record in valid_records {
+        writer.serialize(record)?;
     }
 
-    pub fn process_categorical_data(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-
-        for line in reader.lines() {
-            let line = line?;
-            let category = line.trim().to_string();
-            *self.frequency_map.entry(category).or_insert(0) += 1;
-        }
-        Ok(())
-    }
-
-    pub fn get_top_categories(&self, n: usize) -> Vec<(&String, &u32)> {
-        let mut entries: Vec<_> = self.frequency_map.iter().collect();
-        entries.sort_by(|a, b| b.1.cmp(a.1));
-        entries.into_iter().take(n).collect()
-    }
-
-    pub fn filter_data(&self, threshold: f64) -> Vec<f64> {
-        self.data
-            .iter()
-            .filter(|&&x| x >= threshold)
-            .cloned()
-            .collect()
-    }
+    writer.flush()?;
+    println!("Processed {} records, filtered {} invalid entries", valid_records.len(), invalid_count);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+    use std::fs;
 
     #[test]
-    fn test_statistics_calculation() {
-        let mut processor = DataProcessor::new();
-        let mut temp_file = NamedTempFile::new().unwrap();
-        
-        writeln!(temp_file, "10.5\n20.3\n15.7\n25.1\n18.9").unwrap();
-        
-        processor.load_numeric_data(temp_file.path().to_str().unwrap()).unwrap();
-        let (mean, variance, std_dev) = processor.calculate_statistics();
-        
-        assert!((mean - 18.1).abs() < 0.01);
-        assert!(variance > 0.0);
-        assert!(std_dev > 0.0);
+    fn test_record_validation() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            category: "A".to_string(),
+        };
+        assert!(valid_record.is_valid());
+
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -1.0,
+            category: "B".to_string(),
+        };
+        assert!(!invalid_record.is_valid());
     }
 
     #[test]
-    fn test_categorical_processing() {
-        let mut processor = DataProcessor::new();
-        let mut temp_file = NamedTempFile::new().unwrap();
+    fn test_csv_processing() {
+        let test_input = "test_input.csv";
+        let test_output = "test_output.csv";
         
-        writeln!(temp_file, "apple\nbanana\napple\norange\nbanana\nbanana").unwrap();
-        
-        processor.process_categorical_data(temp_file.path().to_str().unwrap()).unwrap();
-        let top_categories = processor.get_top_categories(2);
-        
-        assert_eq!(top_categories.len(), 2);
-        assert_eq!(*top_categories[0].0, "banana");
-        assert_eq!(*top_categories[0].1, &3);
+        let csv_data = "id,name,value,category\n1,Alice,100.5,X\n2,Bob,-50.0,Y\n3,,75.0,Z\n";
+        fs::write(test_input, csv_data).unwrap();
+
+        let result = process_csv(test_input, test_output);
+        assert!(result.is_ok());
+
+        let output_content = fs::read_to_string(test_output).unwrap();
+        assert!(output_content.contains("Alice"));
+        assert!(!output_content.contains("Bob"));
+        assert!(!output_content.contains(",,"));
+
+        fs::remove_file(test_input).unwrap();
+        fs::remove_file(test_output).unwrap();
     }
 }
