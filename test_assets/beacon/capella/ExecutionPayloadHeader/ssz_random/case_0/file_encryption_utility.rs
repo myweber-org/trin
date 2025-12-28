@@ -1,0 +1,131 @@
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::Path;
+
+pub struct XORCipher {
+    key: Vec<u8>,
+}
+
+impl XORCipher {
+    pub fn new(key: &str) -> Self {
+        XORCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
+        self.process_file(input_path, output_path, true)
+    }
+
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
+        self.process_file(input_path, output_path, false)
+    }
+
+    fn process_file(&self, input_path: &str, output_path: &str, _is_encrypt: bool) -> Result<(), String> {
+        let input_path_obj = Path::new(input_path);
+        let output_path_obj = Path::new(output_path);
+
+        if !input_path_obj.exists() {
+            return Err(format!("Input file does not exist: {}", input_path));
+        }
+
+        let mut input_file = File::open(input_path)
+            .map_err(|e| format!("Failed to open input file: {}", e))?;
+
+        let mut buffer = Vec::new();
+        input_file.read_to_end(&mut buffer)
+            .map_err(|e| format!("Failed to read input file: {}", e))?;
+
+        let processed_data = self.xor_transform(&buffer);
+
+        let mut output_file = File::create(output_path_obj)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+        output_file.write_all(&processed_data)
+            .map_err(|e| format!("Failed to write output file: {}", e))?;
+
+        Ok(())
+    }
+
+    fn xor_transform(&self, data: &[u8]) -> Vec<u8> {
+        let key_len = self.key.len();
+        if key_len == 0 {
+            return data.to_vec();
+        }
+
+        data.iter()
+            .enumerate()
+            .map(|(i, &byte)| byte ^ self.key[i % key_len])
+            .collect()
+    }
+
+    pub fn encrypt_string(&self, text: &str) -> Vec<u8> {
+        self.xor_transform(text.as_bytes())
+    }
+
+    pub fn decrypt_string(&self, encrypted: &[u8]) -> String {
+        let decrypted = self.xor_transform(encrypted);
+        String::from_utf8_lossy(&decrypted).to_string()
+    }
+}
+
+pub fn calculate_file_hash(path: &str) -> Result<String, String> {
+    let content = fs::read(path)
+        .map_err(|e| format!("Failed to read file for hash calculation: {}", e))?;
+
+    let hash = sha256::digest(&content);
+    Ok(hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let cipher = XORCipher::new("secret_key");
+        let original_text = "Hello, World! This is a test message.";
+
+        let encrypted = cipher.encrypt_string(original_text);
+        let decrypted = cipher.decrypt_string(&encrypted);
+
+        assert_eq!(original_text, decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption_decryption() {
+        let cipher = XORCipher::new("test_key_123");
+        let original_content = b"Sample file content for encryption test.";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let output_encrypted = NamedTempFile::new().unwrap();
+        let output_decrypted = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), original_content).unwrap();
+
+        cipher.encrypt_file(
+            input_file.path().to_str().unwrap(),
+            output_encrypted.path().to_str().unwrap()
+        ).unwrap();
+
+        cipher.decrypt_file(
+            output_encrypted.path().to_str().unwrap(),
+            output_decrypted.path().to_str().unwrap()
+        ).unwrap();
+
+        let decrypted_content = fs::read(output_decrypted.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
+
+    #[test]
+    fn test_empty_key() {
+        let cipher = XORCipher::new("");
+        let text = "Test text";
+        
+        let encrypted = cipher.encrypt_string(text);
+        let decrypted = cipher.decrypt_string(&encrypted);
+        
+        assert_eq!(text, decrypted);
+    }
+}
