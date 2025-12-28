@@ -1,58 +1,117 @@
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
 }
 
-pub fn process_csv_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err("File does not exist".into());
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+        }
     }
 
-    let mut reader = Reader::from_path(path)?;
-    let mut records = Vec::new();
+    pub fn add_dataset(&mut self, key: &str, values: Vec<f64>) -> Result<(), String> {
+        if values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
 
-    for result in reader.deserialize() {
-        let record: Record = result?;
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Dataset contains invalid numeric values".to_string());
+        }
+
+        self.data.insert(key.to_string(), values);
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = sum / count as f64;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count as f64;
+            
+            let std_dev = variance.sqrt();
+
+            Statistics {
+                count,
+                sum,
+                mean,
+                variance,
+                std_dev,
+            }
+        })
+    }
+
+    pub fn normalize_data(&self, key: &str) -> Option<Vec<f64>> {
+        self.data.get(key).map(|values| {
+            let stats = self.calculate_statistics(key).unwrap();
+            values.iter()
+                .map(|&x| (x - stats.mean) / stats.std_dev)
+                .collect()
+        })
+    }
+
+    pub fn merge_datasets(&self, keys: &[&str]) -> Option<Vec<f64>> {
+        let mut merged = Vec::new();
         
-        if record.value < 0.0 {
-            return Err(format!("Invalid value in record ID {}", record.id).into());
+        for key in keys {
+            if let Some(values) = self.data.get(*key) {
+                merged.extend(values);
+            } else {
+                return None;
+            }
         }
         
-        records.push(record);
+        Some(merged)
     }
-
-    if records.is_empty() {
-        return Err("No valid records found".into());
-    }
-
-    Ok(records)
 }
 
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count;
-    
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    
-    let std_dev = variance.sqrt();
-    
-    (mean, variance, std_dev)
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
 }
 
-pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
-    records.into_iter()
-        .filter(|r| r.category == category)
-        .collect()
+impl Statistics {
+    pub fn display(&self) -> String {
+        format!(
+            "Count: {}, Sum: {:.2}, Mean: {:.2}, Variance: {:.2}, Std Dev: {:.2}",
+            self.count, self.sum, self.mean, self.variance, self.std_dev
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let dataset = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        assert!(processor.add_dataset("test", dataset).is_ok());
+        
+        let stats = processor.calculate_statistics("test").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.std_dev, 1.4142135623730951);
+        
+        let normalized = processor.normalize_data("test").unwrap();
+        assert_eq!(normalized.len(), 5);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let invalid = vec![1.0, f64::NAN, 3.0];
+        assert!(processor.add_dataset("invalid", invalid).is_err());
+    }
 }
