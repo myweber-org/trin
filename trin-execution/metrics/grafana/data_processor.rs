@@ -1,116 +1,168 @@
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use thiserror::Error;
 
-pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            cache: HashMap::new(),
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationFailed("ID cannot be zero".into()));
         }
-    }
-
-    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Empty dataset provided".to_string());
-        }
-
-        if let Some(cached) = self.cache.get(key) {
-            return Ok(cached.clone());
-        }
-
-        let validated = self.validate_data(data)?;
-        let normalized = self.normalize_data(&validated);
-        let transformed = self.apply_transformations(&normalized);
-
-        self.cache.insert(key.to_string(), transformed.clone());
-        Ok(transformed)
-    }
-
-    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
-        let mut valid_data = Vec::new();
         
-        for &value in data {
-            if value.is_finite() {
-                valid_data.push(value);
-            } else {
-                return Err("Invalid numeric value detected".to_string());
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationFailed("Timestamp cannot be negative".into()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(DataError::ValidationFailed("Values cannot be empty".into()));
+        }
+        
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(DataError::ValidationFailed("Key cannot be empty".into()));
+            }
+            if !value.is_finite() {
+                return Err(DataError::ValidationFailed(
+                    format!("Value for key '{}' must be finite", key)
+                ));
             }
         }
         
-        Ok(valid_data)
+        Ok(())
     }
-
-    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
-        if data.len() < 2 {
-            return data.to_vec();
+    
+    pub fn transform(&mut self, multiplier: f64) -> &mut Self {
+        for value in self.values.values_mut() {
+            *value *= multiplier;
         }
-
-        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let range = max - min;
-
-        if range.abs() < f64::EPSILON {
-            return vec![0.5; data.len()];
+        self
+    }
+    
+    pub fn add_tag(&mut self, tag: String) -> &mut Self {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
         }
-
-        data.iter()
-            .map(|&x| (x - min) / range)
-            .collect()
+        self
     }
+}
 
-    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
-        data.iter()
-            .map(|&x| x.sqrt().abs())
-            .collect()
+pub fn process_records(
+    records: Vec<DataRecord>,
+    multiplier: f64,
+) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for mut record in records {
+        record.validate()?;
+        record.transform(multiplier);
+        processed.push(record);
     }
+    
+    Ok(processed)
+}
 
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
     }
-
-    pub fn get_cache_stats(&self) -> (usize, usize) {
-        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
-        (self.cache.len(), total_items)
+    
+    for record in records {
+        for (key, value) in &record.values {
+            let entry = stats.entry(key.clone()).or_insert(Vec::new());
+            entry.push(*value);
+        }
     }
+    
+    let mut result = HashMap::new();
+    for (key, values) in stats {
+        let count = values.len() as f64;
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        result.insert(format!("{}_mean", key), mean);
+        result.insert(format!("{}_variance", key), variance);
+        result.insert(format!("{}_count", key), count);
+    }
+    
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    
     #[test]
-    fn test_empty_dataset() {
-        let mut processor = DataProcessor::new();
-        let result = processor.process_dataset("test", &[]);
-        assert!(result.is_err());
+    fn test_record_validation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([("temp".into(), 25.5)]),
+            tags: vec!["sensor".into()],
+        };
+        
+        assert!(record.validate().is_ok());
+        
+        record.id = 0;
+        assert!(record.validate().is_err());
     }
-
+    
     #[test]
-    fn test_valid_processing() {
-        let mut processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0, 4.0];
+    fn test_record_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([("value".into(), 10.0)]),
+            tags: vec![],
+        };
         
-        let result = processor.process_dataset("numbers", &data);
-        assert!(result.is_ok());
-        
-        let processed = result.unwrap();
-        assert_eq!(processed.len(), 4);
+        record.transform(2.0);
+        assert_eq!(record.values.get("value"), Some(&20.0));
     }
-
+    
     #[test]
-    fn test_cache_functionality() {
-        let mut processor = DataProcessor::new();
-        let data = vec![10.0, 20.0, 30.0];
+    fn test_process_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1000,
+                values: HashMap::from([("a".into(), 1.0)]),
+                tags: vec![],
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 2000,
+                values: HashMap::from([("b".into(), 2.0)]),
+                tags: vec![],
+            },
+        ];
         
-        let first_result = processor.process_dataset("cached", &data).unwrap();
-        let second_result = processor.process_dataset("cached", &data).unwrap();
-        
-        assert_eq!(first_result, second_result);
-        
-        let stats = processor.get_cache_stats();
-        assert_eq!(stats.0, 1);
+        let processed = process_records(records, 3.0).unwrap();
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].values.get("a"), Some(&3.0));
+        assert_eq!(processed[1].values.get("b"), Some(&6.0));
     }
 }
