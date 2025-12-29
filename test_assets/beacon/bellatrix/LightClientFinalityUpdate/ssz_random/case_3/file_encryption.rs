@@ -1,78 +1,60 @@
 
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use std::error::Error;
 
-const DEFAULT_KEY: u8 = 0x55;
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
 
-pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+impl FileEncryptor {
+    pub fn new() -> Self {
+        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
+        Self {
+            cipher: Aes256Gcm::new(&key),
+        }
+    }
+
+    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Nonce::generate(&mut OsRng);
+        let ciphertext = self.cipher.encrypt(&nonce, plaintext)?;
+        
+        let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+        result.extend_from_slice(nonce.as_slice());
+        result.extend_from_slice(&ciphertext);
+        
+        Ok(result)
+    }
+
+    pub fn decrypt_data(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        if ciphertext.len() < 12 {
+            return Err("Invalid ciphertext length".into());
+        }
+        
+        let nonce = Nonce::from_slice(&ciphertext[..12]);
+        let encrypted_data = &ciphertext[12..];
+        
+        let plaintext = self.cipher.decrypt(nonce, encrypted_data)?;
+        Ok(plaintext)
+    }
+}
+
+pub fn process_file_encryption() -> Result<(), Box<dyn Error>> {
+    let encryptor = FileEncryptor::new();
     
-    let input_data = fs::read(input_path)?;
+    let test_data = b"Confidential document content";
+    println!("Original data: {}", String::from_utf8_lossy(test_data));
     
-    let encrypted_data: Vec<u8> = input_data
-        .iter()
-        .map(|byte| byte ^ encryption_key)
-        .collect();
+    let encrypted = encryptor.encrypt_data(test_data)?;
+    println!("Encrypted data length: {} bytes", encrypted.len());
     
-    fs::write(output_path, encrypted_data)?;
+    let decrypted = encryptor.decrypt_data(&encrypted)?;
+    println!("Decrypted data: {}", String::from_utf8_lossy(&decrypted));
+    
+    assert_eq!(test_data, decrypted.as_slice());
+    println!("Encryption/decryption successful!");
     
     Ok(())
-}
-
-pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    xor_encrypt_file(input_path, output_path, key)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    
-    #[test]
-    fn test_encryption_decryption() {
-        let original_text = b"Hello, this is a secret message!";
-        
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-        
-        fs::write(input_file.path(), original_text).unwrap();
-        
-        xor_encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            Some(0x42)
-        ).unwrap();
-        
-        xor_decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            Some(0x42)
-        ).unwrap();
-        
-        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_text.to_vec(), decrypted_data);
-    }
-    
-    #[test]
-    fn test_default_key() {
-        let test_data = b"Test data for default key";
-        
-        let input_file = NamedTempFile::new().unwrap();
-        let output_file = NamedTempFile::new().unwrap();
-        
-        fs::write(input_file.path(), test_data).unwrap();
-        
-        xor_encrypt_file(
-            input_file.path().to_str().unwrap(),
-            output_file.path().to_str().unwrap(),
-            None
-        ).unwrap();
-        
-        let encrypted = fs::read(output_file.path()).unwrap();
-        let decrypted: Vec<u8> = encrypted.iter().map(|b| b ^ DEFAULT_KEY).collect();
-        
-        assert_eq!(test_data.to_vec(), decrypted);
-    }
 }
