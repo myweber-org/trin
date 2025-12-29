@@ -79,4 +79,148 @@ mod tests {
         assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
         assert_eq!(config.get("NORMAL"), Some(&"value".to_string()));
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub port: u16,
+    pub log_level: String,
+    pub cache_size: usize,
+    pub features: HashMap<String, bool>,
+}
+
+impl Config {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let mut config_map = HashMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", trimmed));
+            }
+            
+            let key = parts[0].trim().to_string();
+            let value = parts[1].trim().to_string();
+            config_map.insert(key, value);
+        }
+        
+        Self::from_map(config_map)
+    }
+    
+    fn from_map(map: HashMap<String, String>) -> Result<Self, String> {
+        let database_url = map.get("database_url")
+            .ok_or("Missing required field: database_url")?
+            .clone();
+        
+        let port = map.get("port")
+            .map(|s| s.parse::<u16>())
+            .unwrap_or(Ok(8080))
+            .map_err(|e| format!("Invalid port value: {}", e))?;
+        
+        let log_level = map.get("log_level")
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| "info".to_string());
+        
+        let cache_size = map.get("cache_size")
+            .map(|s| s.parse::<usize>())
+            .unwrap_or(Ok(1000))
+            .map_err(|e| format!("Invalid cache_size value: {}", e))?;
+        
+        let mut features = HashMap::new();
+        for (key, value) in map {
+            if key.starts_with("feature.") {
+                let feature_name = key.trim_start_matches("feature.").to_string();
+                let enabled = value.parse::<bool>()
+                    .map_err(|e| format!("Invalid boolean value for feature {}: {}", feature_name, e))?;
+                features.insert(feature_name, enabled);
+            }
+        }
+        
+        Ok(Config {
+            database_url,
+            port,
+            log_level,
+            cache_size,
+            features,
+        })
+    }
+    
+    pub fn validate(&self) -> Result<(), String> {
+        if self.database_url.is_empty() {
+            return Err("Database URL cannot be empty".to_string());
+        }
+        
+        if self.port == 0 {
+            return Err("Port cannot be 0".to_string());
+        }
+        
+        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_log_levels.contains(&self.log_level.as_str()) {
+            return Err(format!("Invalid log level: {}", self.log_level));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn is_feature_enabled(&self, feature: &str) -> bool {
+        self.features.get(feature).copied().unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_valid_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "database_url=postgres://localhost/mydb").unwrap();
+        writeln!(file, "port=5432").unwrap();
+        writeln!(file, "log_level=debug").unwrap();
+        writeln!(file, "cache_size=5000").unwrap();
+        writeln!(file, "feature.caching=true").unwrap();
+        writeln!(file, "feature.analytics=false").unwrap();
+        
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost/mydb");
+        assert_eq!(config.port, 5432);
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(config.cache_size, 5000);
+        assert!(config.is_feature_enabled("caching"));
+        assert!(!config.is_feature_enabled("analytics"));
+        assert!(config.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_config_with_defaults() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "database_url=postgres://localhost/test").unwrap();
+        
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.log_level, "info");
+        assert_eq!(config.cache_size, 1000);
+        assert!(config.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "port=not_a_number").unwrap();
+        
+        let result = Config::from_file(file.path());
+        assert!(result.is_err());
+    }
 }
