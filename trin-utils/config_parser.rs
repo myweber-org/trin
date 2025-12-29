@@ -1,102 +1,98 @@
-use std::collections::HashMap;
-use std::env;
-use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 
-pub struct ConfigParser {
-    values: HashMap<String, String>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
 }
 
-impl ConfigParser {
-    pub fn new() -> Self {
-        ConfigParser {
-            values: HashMap::new(),
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    pub max_file_size_mb: u64,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 20,
+                min_connections: 5,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: "./logs/app.log".to_string(),
+                max_file_size_mb: 100,
+            },
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn from_file_or_default<P: AsRef<Path>>(path: P) -> Self {
+        match Self::from_file(path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Failed to load config: {}. Using defaults.", e);
+                Self::default()
+            }
         }
     }
 
-    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
-        let re = Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.*?)\s*$").unwrap();
-        let env_re = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
-
-        for (line_num, line) in content.lines().enumerate() {
-            if line.trim().is_empty() || line.trim().starts_with('#') {
-                continue;
-            }
-
-            if let Some(caps) = re.captures(line) {
-                let key = caps[1].to_string();
-                let mut value = caps[2].to_string();
-
-                for env_cap in env_re.captures_iter(&value) {
-                    let env_var = &env_cap[1];
-                    if let Ok(env_value) = env::var(env_var) {
-                        value = value.replace(&env_cap[0], &env_value);
-                    } else {
-                        return Err(format!(
-                            "Line {}: Environment variable '{}' not found",
-                            line_num + 1,
-                            env_var
-                        ));
-                    }
-                }
-
-                self.values.insert(key, value);
-            } else {
-                return Err(format!("Line {}: Invalid syntax", line_num + 1));
-            }
+    fn validate(&self) -> Result<(), String> {
+        if self.server.port == 0 {
+            return Err("Server port cannot be 0".to_string());
         }
-
+        
+        if self.database.max_connections < self.database.min_connections {
+            return Err("Max connections must be greater than or equal to min connections".to_string());
+        }
+        
+        if self.logging.max_file_size_mb == 0 {
+            return Err("Max file size must be greater than 0".to_string());
+        }
+        
+        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+        if !valid_log_levels.contains(&self.logging.level.as_str()) {
+            return Err(format!("Invalid log level: {}. Must be one of: {:?}", 
+                self.logging.level, valid_log_levels));
+        }
+        
         Ok(())
     }
-
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
-    }
-
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.values.get(key).cloned().unwrap_or(default.to_string())
-    }
-
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key)
-    }
-
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.values.keys()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_parsing() {
-        let mut parser = ConfigParser::new();
-        let config = "DATABASE_HOST=localhost\nDATABASE_PORT=5432\n";
-        parser.load_from_str(config).unwrap();
-
-        assert_eq!(parser.get("DATABASE_HOST"), Some(&"localhost".to_string()));
-        assert_eq!(parser.get("DATABASE_PORT"), Some(&"5432".to_string()));
-        assert_eq!(parser.get("NONEXISTENT"), None);
-    }
-
-    #[test]
-    fn test_env_substitution() {
-        env::set_var("APP_SECRET", "my_secret_key");
-        
-        let mut parser = ConfigParser::new();
-        let config = "SECRET_KEY=${APP_SECRET}\nHOST=localhost";
-        parser.load_from_str(config).unwrap();
-
-        assert_eq!(parser.get("SECRET_KEY"), Some(&"my_secret_key".to_string()));
-        assert_eq!(parser.get("HOST"), Some(&"localhost".to_string()));
-    }
-
-    #[test]
-    fn test_invalid_syntax() {
-        let mut parser = ConfigParser::new();
-        let config = "INVALID LINE";
-        let result = parser.load_from_str(config);
-        assert!(result.is_err());
+    
+    pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(self)
     }
 }
