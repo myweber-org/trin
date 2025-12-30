@@ -1,9 +1,10 @@
-
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce
+    Aes256Gcm, Key, Nonce,
 };
-use std::error::Error;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
 
 pub struct FileEncryptor {
     cipher: Aes256Gcm,
@@ -11,50 +12,45 @@ pub struct FileEncryptor {
 
 impl FileEncryptor {
     pub fn new() -> Self {
-        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
-        Self {
-            cipher: Aes256Gcm::new(&key),
-        }
+        let key = Aes256Gcm::generate_key(&mut OsRng);
+        let cipher = Aes256Gcm::new(&key);
+        FileEncryptor { cipher }
     }
 
-    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        let nonce = Nonce::generate(&mut OsRng);
-        let ciphertext = self.cipher.encrypt(&nonce, plaintext)?;
-        
-        let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
-        result.extend_from_slice(nonce.as_slice());
-        result.extend_from_slice(&ciphertext);
-        
-        Ok(result)
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut file = fs::File::open(input_path)?;
+        let mut plaintext = Vec::new();
+        file.read_to_end(&mut plaintext)?;
+
+        let nonce = Nonce::from_slice(b"unique_nonce_");
+        let ciphertext = self
+            .cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        let mut output_file = fs::File::create(output_path)?;
+        output_file.write_all(&ciphertext)?;
+        Ok(())
     }
 
-    pub fn decrypt_data(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        if ciphertext.len() < 12 {
-            return Err("Invalid ciphertext length".into());
-        }
-        
-        let nonce = Nonce::from_slice(&ciphertext[..12]);
-        let encrypted_data = &ciphertext[12..];
-        
-        let plaintext = self.cipher.decrypt(nonce, encrypted_data)?;
-        Ok(plaintext)
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut file = fs::File::open(input_path)?;
+        let mut ciphertext = Vec::new();
+        file.read_to_end(&mut ciphertext)?;
+
+        let nonce = Nonce::from_slice(b"unique_nonce_");
+        let plaintext = self
+            .cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        let mut output_file = fs::File::create(output_path)?;
+        output_file.write_all(&plaintext)?;
+        Ok(())
     }
 }
 
-pub fn process_file_encryption() -> Result<(), Box<dyn Error>> {
-    let encryptor = FileEncryptor::new();
-    
-    let test_data = b"Confidential document content";
-    println!("Original data: {}", String::from_utf8_lossy(test_data));
-    
-    let encrypted = encryptor.encrypt_data(test_data)?;
-    println!("Encrypted data length: {} bytes", encrypted.len());
-    
-    let decrypted = encryptor.decrypt_data(&encrypted)?;
-    println!("Decrypted data: {}", String::from_utf8_lossy(&decrypted));
-    
-    assert_eq!(test_data, decrypted.as_slice());
-    println!("Encryption/decryption successful!");
-    
-    Ok(())
+pub fn generate_random_key() -> Vec<u8> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    key.to_vec()
 }
