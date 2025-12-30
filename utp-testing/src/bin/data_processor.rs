@@ -1,148 +1,103 @@
-use std::error::Error;
-use std::fmt;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-struct DataRecord {
-    id: u32,
-    value: f64,
-    timestamp: u64,
-}
-
-#[derive(Debug)]
-enum ValidationError {
-    InvalidId,
-    InvalidValue,
-    InvalidTimestamp,
-}
-
-impl fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
-            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
-            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be in the past"),
-        }
-    }
-}
-
-impl Error for ValidationError {}
-
-impl DataRecord {
-    fn new(id: u32, value: f64, timestamp: u64) -> Result<Self, ValidationError> {
-        if id == 0 {
-            return Err(ValidationError::InvalidId);
-        }
-        
-        if value < 0.0 || value > 1000.0 {
-            return Err(ValidationError::InvalidValue);
-        }
-        
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        
-        if timestamp > current_time {
-            return Err(ValidationError::InvalidTimestamp);
-        }
-        
-        Ok(Self { id, value, timestamp })
-    }
-    
-    fn normalize_value(&self) -> f64 {
-        self.value / 1000.0
-    }
-    
-    fn is_anomaly(&self, threshold: f64) -> bool {
-        self.normalize_value() > threshold
-    }
-}
-
-struct DataProcessor {
-    records: Vec<DataRecord>,
-    anomaly_threshold: f64,
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
-    fn new(threshold: f64) -> Self {
-        Self {
-            records: Vec::new(),
-            anomaly_threshold: threshold,
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
         }
     }
-    
-    fn add_record(&mut self, id: u32, value: f64, timestamp: u64) -> Result<(), ValidationError> {
-        let record = DataRecord::new(id, value, timestamp)?;
-        self.records.push(record);
-        Ok(())
-    }
-    
-    fn process_records(&self) -> (Vec<f64>, Vec<DataRecord>) {
-        let mut normalized_values = Vec::new();
-        let mut anomalies = Vec::new();
-        
-        for record in &self.records {
-            normalized_values.push(record.normalize_value());
-            
-            if record.is_anomaly(self.anomaly_threshold) {
-                anomalies.push(record.clone());
-            }
+
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
         }
-        
-        (normalized_values, anomalies)
-    }
-    
-    fn calculate_statistics(&self) -> (f64, f64, f64) {
-        if self.records.is_empty() {
-            return (0.0, 0.0, 0.0);
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
         }
-        
-        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
-        let count = values.len() as f64;
-        let sum: f64 = values.iter().sum();
-        let mean = sum / count;
-        
-        let variance: f64 = values.iter()
-            .map(|&v| (v - mean).powi(2))
-            .sum::<f64>() / count;
-        
+
+        let validated = self.validate_data(data)?;
+        let normalized = self.normalize_data(&validated);
+        let transformed = self.apply_transformations(&normalized);
+
+        self.cache.insert(key.to_string(), transformed.clone());
+        Ok(transformed)
+    }
+
+    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Invalid numeric values detected".to_string());
+        }
+        Ok(data.to_vec())
+    }
+
+    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
         let std_dev = variance.sqrt();
-        
-        (mean, variance, std_dev)
-    }
-}
 
-fn transform_data(records: &[DataRecord]) -> Vec<(u32, f64)> {
-    records.iter()
-        .map(|r| (r.id, r.normalize_value()))
-        .collect()
-}
-
-fn main() {
-    let mut processor = DataProcessor::new(0.8);
-    
-    let sample_data = vec![
-        (1, 450.5, 1672531200),
-        (2, 850.2, 1672534800),
-        (3, 920.7, 1672538400),
-        (4, 150.3, 1672542000),
-    ];
-    
-    for (id, value, timestamp) in sample_data {
-        match processor.add_record(id, value, timestamp) {
-            Ok(_) => println!("Record {} added successfully", id),
-            Err(e) => println!("Failed to add record {}: {}", id, e),
+        if std_dev.abs() < 1e-10 {
+            return vec![0.0; data.len()];
         }
+
+        data.iter()
+            .map(|&x| (x - mean) / std_dev)
+            .collect()
     }
-    
-    let (normalized, anomalies) = processor.process_records();
-    println!("Normalized values: {:?}", normalized);
-    println!("Anomalies detected: {}", anomalies.len());
-    
-    let (mean, variance, std_dev) = processor.calculate_statistics();
-    println!("Statistics - Mean: {:.2}, Variance: {:.2}, Std Dev: {:.2}", 
-             mean, variance, std_dev);
-    
-    let transformed = transform_data(&processor.records);
-    println!("Transformed data: {:?}", transformed);
+
+    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
+        data.iter()
+            .map(|&x| x.powi(2).ln_1p().tanh())
+            .collect()
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_stats(&self) -> (usize, usize) {
+        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
+        (self.cache.len(), total_items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_processor_validation() {
+        let processor = DataProcessor::new();
+        let valid_data = vec![1.0, 2.0, 3.0];
+        let invalid_data = vec![1.0, f64::NAN, 3.0];
+
+        assert!(processor.validate_data(&valid_data).is_ok());
+        assert!(processor.validate_data(&invalid_data).is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0];
+        let normalized = processor.normalize_data(&data);
+
+        let mean = normalized.iter().sum::<f64>() / normalized.len() as f64;
+        assert!(mean.abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_caching() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.5, 2.5, 3.5];
+
+        let result1 = processor.process_dataset("test", &data).unwrap();
+        let result2 = processor.process_dataset("test", &data).unwrap();
+
+        assert_eq!(result1, result2);
+        assert_eq!(processor.cache_stats().0, 1);
+    }
 }
