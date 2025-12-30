@@ -85,3 +85,84 @@ mod tests {
         Ok(())
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: &[u8] = b"secret-passphrase-123";
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let data = fs::read(input_path)?;
+    let encrypted_data = xor_cipher(&data, key);
+    fs::write(output_path, encrypted_data)
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
+    let key_len = key.len();
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key_len])
+        .collect()
+}
+
+pub fn process_files() -> io::Result<()> {
+    let test_data = b"Hello, this is a secret message!";
+    let test_file = "test_original.txt";
+    let encrypted_file = "test_encrypted.bin";
+    let decrypted_file = "test_decrypted.txt";
+
+    fs::write(test_file, test_data)?;
+    
+    println!("Encrypting file...");
+    encrypt_file(test_file, encrypted_file, None)?;
+    
+    println!("Decrypting file...");
+    decrypt_file(encrypted_file, decrypted_file, None)?;
+    
+    let restored_data = fs::read(decrypted_file)?;
+    
+    if test_data == &restored_data[..] {
+        println!("Encryption/decryption successful!");
+        
+        fs::remove_file(test_file)?;
+        fs::remove_file(encrypted_file)?;
+        fs::remove_file(decrypted_file)?;
+    } else {
+        eprintln!("Error: Data mismatch after decryption");
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let data = b"Test data for encryption";
+        let key = b"my-key";
+        
+        let encrypted = xor_cipher(data, key);
+        let decrypted = xor_cipher(&encrypted, key);
+        
+        assert_eq!(data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_different_keys() {
+        let data = b"Sensitive information";
+        let key1 = b"key-one";
+        let key2 = b"key-two";
+        
+        let encrypted1 = xor_cipher(data, key1);
+        let encrypted2 = xor_cipher(data, key2);
+        
+        assert_ne!(encrypted1, encrypted2);
+    }
+}
