@@ -1,87 +1,64 @@
-use serde_json::{json, Value};
-use std::collections::HashSet;
-use std::fs::File;
+
+use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::Path;
+use serde_json::{Value, json};
 
-pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], deduplicate_by_key: Option<&str>) -> Result<Value, Box<dyn std::error::Error>> {
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut merged_array = Vec::new();
-    let mut seen_keys = HashSet::new();
 
-    for path in paths {
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} not found, skipping.", file_path);
+            continue;
+        }
+
         let file = File::open(path)?;
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
         reader.read_to_string(&mut contents)?;
 
         let json_value: Value = serde_json::from_str(&contents)?;
-
-        match json_value {
-            Value::Array(arr) => {
-                for item in arr {
-                    if let Some(key) = deduplicate_by_key {
-                        if let Some(obj) = item.as_object() {
-                            if let Some(key_value) = obj.get(key) {
-                                let key_str = key_value.to_string();
-                                if !seen_keys.contains(&key_str) {
-                                    seen_keys.insert(key_str);
-                                    merged_array.push(item);
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    merged_array.push(item);
-                }
-            }
-            _ => merged_array.push(json_value),
-        }
+        merged_array.push(json_value);
     }
 
-    Ok(json!(merged_array))
+    let output_json = json!(merged_array);
+    let output_str = serde_json::to_string_pretty(&output_json)?;
+    fs::write(output_path, output_str)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use std::io::Write;
     use tempfile::NamedTempFile;
+    use std::io::Write;
 
     #[test]
-    fn test_merge_json_arrays() {
-        let mut file1 = NamedTempFile::new().unwrap();
-        let mut file2 = NamedTempFile::new().unwrap();
+    fn test_merge_json_files() {
+        let json1 = r#"{"id": 1, "name": "Alice"}"#;
+        let json2 = r#"{"id": 2, "name": "Bob"}"#;
 
-        let data1 = json!([{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]);
-        let data2 = json!([{"id": 3, "name": "Charlie"}]);
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
 
-        write!(file1, "{}", data1).unwrap();
-        write!(file2, "{}", data2).unwrap();
+        writeln!(&file1, "{}", json1).unwrap();
+        writeln!(&file2, "{}", json2).unwrap();
 
-        let result = merge_json_files(&[file1.path(), file2.path()], None).unwrap();
-        assert_eq!(result.as_array().unwrap().len(), 3);
-    }
+        let paths = vec![
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
 
-    #[test]
-    fn test_deduplicate_by_key() {
-        let mut file1 = NamedTempFile::new().unwrap();
-        let mut file2 = NamedTempFile::new().unwrap();
+        let result = merge_json_files(&paths, output_file.path().to_str().unwrap());
+        assert!(result.is_ok());
 
-        let data1 = json!([{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]);
-        let data2 = json!([{"id": 2, "name": "Robert"}, {"id": 3, "name": "Charlie"}]);
-
-        write!(file1, "{}", data1).unwrap();
-        write!(file2, "{}", data2).unwrap();
-
-        let result = merge_json_files(&[file1.path(), file2.path()], Some("id")).unwrap();
-        let array = result.as_array().unwrap();
-        assert_eq!(array.len(), 3);
-        
-        let ids: Vec<i64> = array
-            .iter()
-            .filter_map(|v| v["id"].as_i64())
-            .collect();
-        assert_eq!(ids, vec![1, 2, 3]);
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&output_content).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
     }
 }
