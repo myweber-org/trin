@@ -1,21 +1,70 @@
 use std::collections::HashSet;
-use std::io::{self, BufRead};
 
-pub fn clean_data(input: Vec<String>) -> Vec<String> {
-    let mut unique_items: HashSet<String> = input.into_iter().collect();
-    let mut sorted_items: Vec<String> = unique_items.into_iter().collect();
-    sorted_items.sort();
-    sorted_items
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
 }
 
-fn main() {
-    println!("Enter data lines (press Ctrl+D when finished):");
-    let stdin = io::stdin();
-    let input_lines: Vec<String> = stdin.lock().lines().filter_map(Result::ok).collect();
-    
-    let cleaned = clean_data(input_lines);
-    println!("Cleaned and sorted data:");
-    for item in cleaned {
-        println!("{}", item);
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
+    }
+
+    pub fn normalize_text(&self, input: &str) -> String {
+        input.trim().to_lowercase()
+    }
+
+    pub fn is_duplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_text(item);
+        if self.dedupe_set.contains(&normalized) {
+            true
+        } else {
+            self.dedupe_set.insert(normalized);
+            false
+        }
+    }
+
+    pub fn clean_dataset(&mut self, data: Vec<String>) -> Vec<String> {
+        let mut cleaned = Vec::new();
+        
+        for item in data {
+            if !self.is_duplicate(&item) {
+                cleaned.push(item);
+            }
+        }
+        
+        cleaned
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![
+            "Apple".to_string(),
+            "apple".to_string(),
+            "APPLE".to_string(),
+            "Banana".to_string(),
+        ];
+        
+        let cleaned = cleaner.clean_dataset(data);
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaner.get_unique_count(), 2);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        let result = cleaner.normalize_text("  HELLO World  ");
+        assert_eq!(result, "hello world");
     }
 }
