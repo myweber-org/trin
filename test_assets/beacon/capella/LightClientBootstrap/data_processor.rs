@@ -156,3 +156,119 @@ impl DataProcessor {
 pub fn validate_data_format(data: &[Vec<String>], expected_columns: usize) -> bool {
     data.iter().all(|row| row.len() == expected_columns)
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter: ',',
+        }
+    }
+
+    pub fn with_delimiter(mut self, delimiter: char) -> Self {
+        self.delimiter = delimiter;
+        self
+    }
+
+    pub fn process_data<F>(&self, filter_predicate: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut results = Vec::new();
+        let mut line_number = 0;
+
+        for line in reader.lines() {
+            line_number += 1;
+            let line_content = line?;
+            
+            if line_content.trim().is_empty() {
+                continue;
+            }
+
+            let fields: Vec<String> = line_content
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if filter_predicate(&fields) {
+                results.push(fields);
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn count_records(&self) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let count = reader.lines().count();
+        Ok(count)
+    }
+}
+
+pub fn validate_numeric_field(fields: &[String], index: usize) -> bool {
+    if let Some(field) = fields.get(index) {
+        field.parse::<f64>().is_ok()
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        
+        let adults = processor.process_data(|fields| {
+            if fields.len() >= 2 {
+                if let Ok(age) = fields[1].parse::<i32>() {
+                    return age >= 30;
+                }
+            }
+            false
+        }).unwrap();
+
+        assert_eq!(adults.len(), 2);
+        assert_eq!(adults[0][0], "Alice");
+        assert_eq!(adults[1][0], "Charlie");
+    }
+
+    #[test]
+    fn test_record_count() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "header1,header2").unwrap();
+        writeln!(temp_file, "data1,data2").unwrap();
+        writeln!(temp_file, "data3,data4").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let count = processor.count_records().unwrap();
+        
+        assert_eq!(count, 3);
+    }
+}
