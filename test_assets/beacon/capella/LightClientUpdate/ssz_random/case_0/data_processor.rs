@@ -122,3 +122,178 @@ mod tests {
         assert_eq!(results.len(), 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    normalization_factor: f64,
+    validation_threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(normalization_factor: f64, validation_threshold: f64) -> Self {
+        DataProcessor {
+            normalization_factor,
+            validation_threshold,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.is_empty() {
+            return Err(ProcessingError::InvalidData("Empty values vector".to_string()));
+        }
+
+        for (i, &value) in record.values.iter().enumerate() {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::InvalidData(
+                    format!("Invalid value at index {}: {}", i, value)
+                ));
+            }
+        }
+
+        if !record.metadata.contains_key("source") {
+            return Err(ProcessingError::ValidationFailed(
+                "Missing source metadata".to_string()
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        self.validate_record(record)?;
+
+        for value in &mut record.values {
+            *value = *value / self.normalization_factor;
+            
+            if value.abs() > self.validation_threshold {
+                return Err(ProcessingError::TransformationError(
+                    format!("Normalized value {} exceeds threshold", value)
+                ));
+            }
+        }
+
+        record.metadata.insert(
+            "normalized".to_string(),
+            "true".to_string()
+        );
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> Result<HashMap<String, f64>, ProcessingError> {
+        if records.is_empty() {
+            return Err(ProcessingError::InvalidData("No records provided".to_string()));
+        }
+
+        let mut stats = HashMap::new();
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for record in records {
+            self.validate_record(record)?;
+            for &value in &record.values {
+                sum += value;
+                count += 1;
+            }
+        }
+
+        if count > 0 {
+            let mean = sum / count as f64;
+            stats.insert("mean".to_string(), mean);
+            stats.insert("total_records".to_string(), records.len() as f64);
+            stats.insert("total_values".to_string(), count as f64);
+        }
+
+        Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(1.0, 100.0);
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            values: vec![1.0, 2.0, 3.0],
+            metadata,
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new(2.0, 10.0);
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let mut record = DataRecord {
+            id: 1,
+            values: vec![4.0, 6.0, 8.0],
+            metadata,
+        };
+
+        assert!(processor.normalize_values(&mut record).is_ok());
+        assert_eq!(record.values, vec![2.0, 3.0, 4.0]);
+        assert_eq!(record.metadata.get("normalized"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let processor = DataProcessor::new(1.0, 100.0);
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "test".to_string());
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                values: vec![1.0, 2.0],
+                metadata: metadata.clone(),
+            },
+            DataRecord {
+                id: 2,
+                values: vec![3.0, 4.0],
+                metadata,
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records).unwrap();
+        assert_eq!(stats.get("mean"), Some(&2.5));
+        assert_eq!(stats.get("total_records"), Some(&2.0));
+        assert_eq!(stats.get("total_values"), Some(&4.0));
+    }
+}
