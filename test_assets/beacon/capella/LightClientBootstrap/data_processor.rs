@@ -95,3 +95,64 @@ mod tests {
         assert_eq!(processor.get_min_value(), Some(10.5));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process_with_filter(&self, filter_column: usize, filter_value: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut filtered_data = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            let columns: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+            
+            if columns.len() > filter_column && columns[filter_column] == filter_value {
+                filtered_data.push(columns);
+            }
+        }
+
+        Ok(filtered_data)
+    }
+
+    pub fn calculate_average(&self, column_index: usize) -> Result<f64, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for line in reader.lines() {
+            let line = line?;
+            let columns: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+            
+            if columns.len() > column_index {
+                if let Ok(value) = columns[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            Ok(sum / count as f64)
+        } else {
+            Ok(0.0)
+        }
+    }
+}
+
+pub fn validate_data_format(data: &[Vec<String>], expected_columns: usize) -> bool {
+    data.iter().all(|row| row.len() == expected_columns)
+}
