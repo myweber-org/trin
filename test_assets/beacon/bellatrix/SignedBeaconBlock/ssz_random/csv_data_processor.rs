@@ -149,4 +149,90 @@ mod tests {
         assert_eq!(groups.get("Electronics").unwrap().len(), 2);
         assert_eq!(groups.get("Books").unwrap().len(), 1);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+fn load_csv<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    
+    let mut records = Vec::new();
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+    
+    Ok(records)
+}
+
+fn filter_records(records: &[Record], category_filter: &str) -> Vec<Record> {
+    records
+        .iter()
+        .filter(|r| r.category == category_filter && r.active)
+        .cloned()
+        .collect()
+}
+
+fn aggregate_values(records: &[Record]) -> (f64, f64, usize) {
+    let total: f64 = records.iter().map(|r| r.value).sum();
+    let avg = if !records.is_empty() {
+        total / records.len() as f64
+    } else {
+        0.0
+    };
+    let count = records.len();
+    
+    (total, avg, count)
+}
+
+fn save_results<P: AsRef<Path>>(records: &[Record], path: P) -> Result<(), Box<dyn Error>> {
+    let mut writer = WriterBuilder::new()
+        .has_headers(true)
+        .from_path(path)?;
+    
+    for record in records {
+        writer.serialize(record)?;
+    }
+    
+    writer.flush()?;
+    Ok(())
+}
+
+fn process_data(input_path: &str, output_path: &str, category: &str) -> Result<(), Box<dyn Error>> {
+    let all_records = load_csv(input_path)?;
+    let filtered_records = filter_records(&all_records, category);
+    
+    let (total, average, count) = aggregate_values(&filtered_records);
+    println!("Processed {} records", count);
+    println!("Total value: {:.2}", total);
+    println!("Average value: {:.2}", average);
+    
+    if !filtered_records.is_empty() {
+        save_results(&filtered_records, output_path)?;
+        println!("Results saved to {}", output_path);
+    } else {
+        println!("No records matched the filter criteria");
+    }
+    
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/output.csv";
+    let target_category = "electronics";
+    
+    process_data(input_file, output_file, target_category)
 }
