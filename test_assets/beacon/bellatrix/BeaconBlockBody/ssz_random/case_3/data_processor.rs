@@ -1,116 +1,134 @@
 
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub field: String,
+    pub message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error for field '{}': {}", self.field, self.message)
+    }
+}
+
+impl Error for ValidationError {}
 
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    pub threshold: f64,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
-        DataProcessor {
-            delimiter,
-            has_header,
-        }
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor { threshold }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-
-        for (line_number, line_result) in reader.lines().enumerate() {
-            let line = line_result?;
-            
-            if self.has_header && line_number == 0 {
-                continue;
-            }
-
-            let record: Vec<String> = line
-                .split(self.delimiter)
-                .map(|field| field.trim().to_string())
-                .collect();
-
-            if !record.is_empty() {
-                records.push(record);
-            }
+    pub fn validate_input(&self, value: f64) -> Result<(), ValidationError> {
+        if value.is_nan() {
+            return Err(ValidationError {
+                field: "input".to_string(),
+                message: "Value cannot be NaN".to_string(),
+            });
         }
 
-        Ok(records)
+        if value.is_infinite() {
+            return Err(ValidationError {
+                field: "input".to_string(),
+                message: "Value cannot be infinite".to_string(),
+            });
+        }
+
+        if value < 0.0 {
+            return Err(ValidationError {
+                field: "input".to_string(),
+                message: "Value must be non-negative".to_string(),
+            });
+        }
+
+        Ok(())
     }
 
-    pub fn validate_record(&self, record: &[String]) -> bool {
-        !record.is_empty() && record.iter().all(|field| !field.is_empty())
+    pub fn process_data(&self, data: &[f64]) -> Result<Vec<f64>, ValidationError> {
+        let mut processed = Vec::with_capacity(data.len());
+
+        for (i, &value) in data.iter().enumerate() {
+            self.validate_input(value).map_err(|mut e| {
+                e.field = format!("data[{}]", i);
+                e
+            })?;
+
+            let transformed = if value > self.threshold {
+                value.ln()
+            } else {
+                value.sqrt()
+            };
+
+            processed.push(transformed);
+        }
+
+        Ok(processed)
     }
 
-    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<f64> {
-        let mut sum = 0.0;
-        let mut count = 0;
-
-        for record in records {
-            if column_index < record.len() {
-                if let Ok(value) = record[column_index].parse::<f64>() {
-                    sum += value;
-                    count += 1;
-                }
-            }
+    pub fn calculate_statistics(&self, data: &[f64]) -> Result<(f64, f64), ValidationError> {
+        if data.is_empty() {
+            return Err(ValidationError {
+                field: "data".to_string(),
+                message: "Cannot calculate statistics for empty dataset".to_string(),
+            });
         }
 
-        if count > 0 {
-            Some(sum / count as f64)
-        } else {
-            None
-        }
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+
+        Ok((mean, variance.sqrt()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_file_with_header() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
-        assert_eq!(result[1], vec!["Bob", "25", "London"]);
+    fn test_validation_valid_input() {
+        let processor = DataProcessor::new(10.0);
+        assert!(processor.validate_input(5.0).is_ok());
+        assert!(processor.validate_input(0.0).is_ok());
+        assert!(processor.validate_input(15.0).is_ok());
     }
 
     #[test]
-    fn test_validate_record() {
-        let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["data".to_string(), "123".to_string()];
-        let invalid_record = vec!["".to_string(), "value".to_string()];
+    fn test_validation_invalid_input() {
+        let processor = DataProcessor::new(10.0);
+        assert!(processor.validate_input(-5.0).is_err());
+        assert!(processor.validate_input(f64::NAN).is_err());
+        assert!(processor.validate_input(f64::INFINITY).is_err());
+    }
 
-        assert!(processor.validate_record(&valid_record));
-        assert!(!processor.validate_record(&invalid_record));
+    #[test]
+    fn test_process_data() {
+        let processor = DataProcessor::new(10.0);
+        let data = vec![4.0, 16.0, 25.0];
+        let result = processor.process_data(&data).unwrap();
+        
+        assert_eq!(result.len(), 3);
+        assert!((result[0] - 2.0).abs() < 1e-10);
+        assert!((result[1] - 2.772588722239781).abs() < 1e-10);
+        assert!((result[2] - 3.2188758248682006).abs() < 1e-10);
     }
 
     #[test]
     fn test_calculate_statistics() {
-        let processor = DataProcessor::new(',', false);
-        let records = vec![
-            vec!["10.5".to_string(), "20.0".to_string()],
-            vec!["15.5".to_string(), "30.0".to_string()],
-            vec!["invalid".to_string(), "40.0".to_string()],
-        ];
-
-        let average = processor.calculate_statistics(&records, 0).unwrap();
-        assert!((average - 13.0).abs() < 0.0001);
-
-        let average_column_1 = processor.calculate_statistics(&records, 1).unwrap();
-        assert!((average_column_1 - 30.0).abs() < 0.0001);
+        let processor = DataProcessor::new(10.0);
+        let data = vec![2.0, 4.0, 6.0, 8.0];
+        let (mean, std_dev) = processor.calculate_statistics(&data).unwrap();
+        
+        assert!((mean - 5.0).abs() < 1e-10);
+        assert!((std_dev - 2.23606797749979).abs() < 1e-10);
     }
 }
