@@ -63,4 +63,52 @@ mod tests {
 
         Ok(())
     }
+}use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+type JsonObject = serde_json::Map<String, JsonValue>;
+
+pub fn merge_json_files(file_paths: &[impl AsRef<Path>]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged = JsonObject::new();
+
+    for path in file_paths {
+        let file = File::open(path.as_ref())?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+
+        let json_value: JsonValue = serde_json::from_str(&content)?;
+        if let JsonValue::Object(obj) = json_value {
+            merge_objects(&mut merged, obj);
+        } else {
+            return Err("Top-level JSON must be an object".into());
+        }
+    }
+
+    Ok(JsonValue::Object(merged))
+}
+
+fn merge_objects(target: &mut JsonObject, source: JsonObject) {
+    for (key, value) in source {
+        match (target.get_mut(&key), value) {
+            (Some(JsonValue::Object(existing_obj)), JsonValue::Object(new_obj)) => {
+                merge_objects(existing_obj.as_object_mut().unwrap(), new_obj);
+            }
+            (Some(_), new_value) => {
+                target.insert(key, new_value);
+            }
+            (None, new_value) => {
+                target.insert(key, new_value);
+            }
+        }
+    }
+}
+
+pub fn write_merged_json(output_path: impl AsRef<Path>, value: &JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+    let json_string = serde_json::to_string_pretty(value)?;
+    fs::write(output_path, json_string)?;
+    Ok(())
 }
