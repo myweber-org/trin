@@ -103,3 +103,100 @@ mod tests {
         assert_eq!(freq.get("B"), Some(&1));
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validators: HashMap::new(),
+            transformers: HashMap::new(),
+        }
+    }
+
+    pub fn add_validator(&mut self, name: &str, validator: Box<dyn Fn(&str) -> bool>) {
+        self.validators.insert(name.to_string(), validator);
+    }
+
+    pub fn add_transformer(&mut self, name: &str, transformer: Box<dyn Fn(String) -> String>) {
+        self.transformers.insert(name.to_string(), transformer);
+    }
+
+    pub fn validate(&self, name: &str, data: &str) -> Option<bool> {
+        self.validators.get(name).map(|validator| validator(data))
+    }
+
+    pub fn transform(&self, name: &str, data: String) -> Option<String> {
+        self.transformers.get(name).map(|transformer| transformer(data))
+    }
+
+    pub fn process_pipeline(&self, data: &str, validators: &[&str], transformers: &[&str]) -> Result<String, String> {
+        let mut result = data.to_string();
+
+        for validator_name in validators {
+            if let Some(validator) = self.validators.get(*validator_name) {
+                if !validator(&result) {
+                    return Err(format!("Validation failed for: {}", validator_name));
+                }
+            } else {
+                return Err(format!("Validator not found: {}", validator_name));
+            }
+        }
+
+        for transformer_name in transformers {
+            if let Some(transformer) = self.transformers.get(*transformer_name) {
+                result = transformer(result);
+            } else {
+                return Err(format!("Transformer not found: {}", transformer_name));
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.add_validator("not_empty", Box::new(|s: &str| !s.trim().is_empty()));
+    processor.add_validator("is_numeric", Box::new(|s: &str| s.chars().all(|c| c.is_ascii_digit())));
+
+    processor.add_transformer("trim", Box::new(|s: String| s.trim().to_string()));
+    processor.add_transformer("uppercase", Box::new(|s: String| s.to_uppercase()));
+    processor.add_transformer("reverse", Box::new(|s: String| s.chars().rev().collect()));
+
+    processor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation() {
+        let processor = create_default_processor();
+        assert_eq!(processor.validate("not_empty", "test"), Some(true));
+        assert_eq!(processor.validate("not_empty", ""), Some(false));
+        assert_eq!(processor.validate("is_numeric", "123"), Some(true));
+        assert_eq!(processor.validate("is_numeric", "abc"), Some(false));
+    }
+
+    #[test]
+    fn test_transformation() {
+        let processor = create_default_processor();
+        assert_eq!(processor.transform("trim", "  hello  ".to_string()), Some("hello".to_string()));
+        assert_eq!(processor.transform("uppercase", "test".to_string()), Some("TEST".to_string()));
+        assert_eq!(processor.transform("reverse", "abc".to_string()), Some("cba".to_string()));
+    }
+
+    #[test]
+    fn test_pipeline() {
+        let processor = create_default_processor();
+        let result = processor.process_pipeline("  hello  ", &["not_empty"], &["trim", "uppercase"]);
+        assert_eq!(result, Ok("HELLO".to_string()));
+    }
+}
