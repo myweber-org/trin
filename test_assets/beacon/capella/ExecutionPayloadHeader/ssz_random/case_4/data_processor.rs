@@ -207,3 +207,118 @@ impl std::fmt::Display for DataSummary {
         Ok(())
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    records: Vec<HashMap<String, f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        let header_line = lines.next().ok_or("Empty file")??;
+        let headers: Vec<String> = header_line.split(',').map(|s| s.trim().to_string()).collect();
+        
+        for line in lines {
+            let line = line?;
+            let values: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+            
+            if values.len() != headers.len() {
+                continue;
+            }
+            
+            let mut record = HashMap::new();
+            for (i, header) in headers.iter().enumerate() {
+                if let Ok(num) = values[i].parse::<f64>() {
+                    record.insert(header.clone(), num);
+                }
+            }
+            
+            if !record.is_empty() {
+                self.records.push(record);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, column: &str) -> Option<(f64, f64, f64)> {
+        let values: Vec<f64> = self.records
+            .iter()
+            .filter_map(|record| record.get(column).copied())
+            .collect();
+        
+        if values.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        Some((mean, variance, std_dev))
+    }
+
+    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, f64>>
+    where
+        F: Fn(&HashMap<String, f64>) -> bool,
+    {
+        self.records
+            .iter()
+            .filter(|record| predicate(record))
+            .cloned()
+            .collect()
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,score").unwrap();
+        writeln!(temp_file, "1,10.5,85.0").unwrap();
+        writeln!(temp_file, "2,15.3,92.5").unwrap();
+        writeln!(temp_file, "3,8.7,78.2").unwrap();
+        
+        let result = processor.load_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.record_count(), 3);
+        
+        let stats = processor.calculate_statistics("value");
+        assert!(stats.is_some());
+        
+        let filtered = processor.filter_records(|record| {
+            record.get("score").map_or(false, |&score| score > 80.0)
+        });
+        assert_eq!(filtered.len(), 2);
+    }
+}
