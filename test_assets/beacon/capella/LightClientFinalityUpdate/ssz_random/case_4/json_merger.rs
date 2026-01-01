@@ -6,8 +6,12 @@ use std::path::Path;
 pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
     let mut merged_map = Map::new();
 
-    for path_str in file_paths {
-        let path = Path::new(path_str);
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            continue;
+        }
+
         let content = fs::read_to_string(path)?;
         let json_value: Value = serde_json::from_str(&content)?;
 
@@ -15,8 +19,6 @@ pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error
             for (key, value) in map {
                 merged_map.insert(key, value);
             }
-        } else {
-            return Err("Each JSON file must contain a JSON object".into());
         }
     }
 
@@ -35,19 +37,30 @@ mod tests {
         let mut file2 = NamedTempFile::new().unwrap();
 
         writeln!(file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
-        writeln!(file2, r#"{"city": "London", "active": true}"#).unwrap();
+        writeln!(file2, r#"{"city": "Berlin", "active": true}"#).unwrap();
 
-        let paths = [
+        let result = merge_json_files(&[
             file1.path().to_str().unwrap(),
             file2.path().to_str().unwrap(),
-        ];
+        ]).unwrap();
 
-        let result = merge_json_files(&paths).unwrap();
-        let obj = result.as_object().unwrap();
+        assert_eq!(result["name"], "Alice");
+        assert_eq!(result["age"], 30);
+        assert_eq!(result["city"], "Berlin");
+        assert_eq!(result["active"], true);
+    }
 
-        assert_eq!(obj.get("name").unwrap(), "Alice");
-        assert_eq!(obj.get("age").unwrap(), 30);
-        assert_eq!(obj.get("city").unwrap(), "London");
-        assert_eq!(obj.get("active").unwrap(), true);
+    #[test]
+    fn test_merge_with_missing_file() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        writeln!(file1, r#"{"data": "test"}"#).unwrap();
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            "non_existent_file.json",
+        ]).unwrap();
+
+        assert_eq!(result["data"], "test");
+        assert!(result.get("nonexistent").is_none());
     }
 }
