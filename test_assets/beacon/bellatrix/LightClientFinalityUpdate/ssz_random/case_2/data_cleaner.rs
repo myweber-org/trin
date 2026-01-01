@@ -42,3 +42,44 @@ mod tests {
         assert_eq!(clean_data(""), "");
     }
 }
+use std::collections::HashSet;
+
+pub fn normalize_and_deduplicate(data: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+
+    for item in data {
+        let normalized = item.trim().to_lowercase();
+        if seen.insert(normalized.clone()) {
+            result.push(normalized);
+        }
+    }
+
+    result.sort();
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_and_deduplicate() {
+        let input = vec![
+            "  Apple ".to_string(),
+            "apple".to_string(),
+            "BANANA".to_string(),
+            "banana ".to_string(),
+            "Cherry".to_string(),
+        ];
+        let expected = vec!["apple".to_string(), "banana".to_string(), "cherry".to_string()];
+        assert_eq!(normalize_and_deduplicate(input), expected);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let input: Vec<String> = vec![];
+        let result = normalize_and_deduplicate(input);
+        assert!(result.is_empty());
+    }
+}
