@@ -1,112 +1,117 @@
 
+use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
+    id: u32,
+    name: String,
+    value: f64,
+    tags: Vec<String>,
+    metadata: HashMap<String, String>,
 }
-
-#[derive(Debug)]
-pub enum ValidationError {
-    InvalidId,
-    InvalidValue,
-    EmptyCategory,
-}
-
-impl fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
-            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
-            ValidationError::EmptyCategory => write!(f, "Category cannot be empty"),
-        }
-    }
-}
-
-impl Error for ValidationError {}
 
 impl DataRecord {
-    pub fn new(id: u32, value: f64, category: String) -> Result<Self, ValidationError> {
-        if id == 0 {
-            return Err(ValidationError::InvalidId);
-        }
-        
-        if value < 0.0 || value > 1000.0 {
-            return Err(ValidationError::InvalidValue);
-        }
-        
-        if category.trim().is_empty() {
-            return Err(ValidationError::EmptyCategory);
-        }
-        
-        Ok(Self {
+    pub fn new(id: u32, name: String, value: f64) -> Self {
+        Self {
             id,
+            name,
             value,
-            category: category.trim().to_string(),
-        })
-    }
-    
-    pub fn normalize_value(&mut self, factor: f64) {
-        if factor != 0.0 {
-            self.value /= factor;
+            tags: Vec::new(),
+            metadata: HashMap::new(),
         }
     }
-    
-    pub fn to_json(&self) -> String {
-        format!(
-            r#"{{"id":{},"value":{},"category":"{}"}}"#,
-            self.id, self.value, self.category
-        )
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".into());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".into());
+        }
+        if self.id == 0 {
+            return Err("ID must be greater than zero".into());
+        }
+        Ok(())
+    }
+
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+
+    pub fn set_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn transform_value<F>(&mut self, transformer: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        self.value = transformer(self.value);
     }
 }
 
-pub fn process_records(records: &mut [DataRecord], factor: f64) -> Vec<String> {
-    records
-        .iter_mut()
-        .map(|record| {
-            record.normalize_value(factor);
-            record.to_json()
-        })
-        .collect()
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed = Vec::new();
+    
+    for record in records {
+        record.validate()?;
+        
+        let mut processed_record = DataRecord::new(
+            record.id,
+            record.name.to_uppercase(),
+            record.value * 1.1,
+        );
+        
+        for tag in &record.tags {
+            processed_record.add_tag(tag.clone());
+        }
+        
+        for (key, value) in &record.metadata {
+            processed_record.set_metadata(key.clone(), value.clone());
+        }
+        
+        processed.push(processed_record);
+    }
+    
+    Ok(processed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_valid_record_creation() {
-        let record = DataRecord::new(1, 100.5, "analytics".to_string());
-        assert!(record.is_ok());
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "Test".to_string(), 100.0);
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, "".to_string(), -10.0);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 50.0);
+        record.transform_value(|x| x * 2.0);
+        assert_eq!(record.value, 100.0);
+    }
+
+    #[test]
+    fn test_record_processing() {
+        let mut records = vec![
+            DataRecord::new(1, "alpha".to_string(), 10.0),
+            DataRecord::new(2, "beta".to_string(), 20.0),
+        ];
         
-        let record = record.unwrap();
-        assert_eq!(record.id, 1);
-        assert_eq!(record.value, 100.5);
-        assert_eq!(record.category, "analytics");
-    }
-    
-    #[test]
-    fn test_invalid_id() {
-        let record = DataRecord::new(0, 100.5, "analytics".to_string());
-        assert!(matches!(record, Err(ValidationError::InvalidId)));
-    }
-    
-    #[test]
-    fn test_normalize_value() {
-        let mut record = DataRecord::new(1, 100.0, "test".to_string()).unwrap();
-        record.normalize_value(10.0);
-        assert_eq!(record.value, 10.0);
-    }
-    
-    #[test]
-    fn test_to_json() {
-        let record = DataRecord::new(42, 3.14, "science".to_string()).unwrap();
-        let json = record.to_json();
-        assert!(json.contains("\"id\":42"));
-        assert!(json.contains("\"value\":3.14"));
-        assert!(json.contains("\"category\":\"science\""));
+        let result = process_records(&mut records);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed[0].name, "ALPHA");
+        assert_eq!(processed[1].value, 22.0);
     }
 }
