@@ -358,4 +358,169 @@ mod tests {
         assert_eq!(stats.0, 10.5);
         assert_eq!(stats.1, 20.3);
     }
+}use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidCategory,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid numeric value"),
+            ProcessingError::InvalidCategory => write!(f, "Invalid category"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+    allowed_categories: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64, allowed_categories: Vec<String>) -> Self {
+        DataProcessor {
+            threshold,
+            allowed_categories,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value.is_nan() || record.value.is_infinite() {
+            return Err(ProcessingError::InvalidValue);
+        }
+
+        if !self.allowed_categories.contains(&record.category) {
+            return Err(ProcessingError::InvalidCategory);
+        }
+
+        if record.value < 0.0 {
+            return Err(ProcessingError::ValidationFailed(
+                "Negative values not allowed".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: &DataRecord) -> Option<DataRecord> {
+        if record.value > self.threshold {
+            Some(DataRecord {
+                id: record.id,
+                value: record.value * 0.9,
+                category: record.category.clone(),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, ProcessingError>> {
+        records
+            .into_iter()
+            .map(|record| {
+                self.validate_record(&record)?;
+                if let Some(transformed) = self.transform_record(&record) {
+                    Ok(transformed)
+                } else {
+                    Ok(record)
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(
+            100.0,
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        );
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            category: "A".to_string(),
+        };
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_category() {
+        let processor = DataProcessor::new(
+            100.0,
+            vec!["A".to_string(), "B".to_string()],
+        );
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            category: "X".to_string(),
+        };
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(ProcessingError::InvalidCategory)
+        ));
+    }
+
+    #[test]
+    fn test_transform_above_threshold() {
+        let processor = DataProcessor::new(100.0, vec!["TEST".to_string()]);
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            category: "TEST".to_string(),
+        };
+        let transformed = processor.transform_record(&record).unwrap();
+        assert_eq!(transformed.value, 135.0);
+    }
+
+    #[test]
+    fn test_process_batch() {
+        let processor = DataProcessor::new(
+            50.0,
+            vec!["CAT1".to_string(), "CAT2".to_string()],
+        );
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 30.0,
+                category: "CAT1".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                value: 60.0,
+                category: "CAT2".to_string(),
+            },
+            DataRecord {
+                id: 3,
+                value: -10.0,
+                category: "CAT1".to_string(),
+            },
+        ];
+
+        let results = processor.process_batch(records);
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+        assert!(matches!(results[2], Err(ProcessingError::ValidationFailed(_))));
+    }
 }
