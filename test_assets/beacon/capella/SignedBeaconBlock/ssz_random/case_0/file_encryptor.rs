@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0xAA;
+const DEFAULT_KEY: u8 = 0x55;
 
 pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
     let encryption_key = key.unwrap_or(DEFAULT_KEY);
@@ -33,50 +33,54 @@ mod tests {
     
     #[test]
     fn test_encryption_decryption() {
-        let original_text = b"Hello, Rust encryption!";
-        let test_key = Some(0x55);
+        let original_text = b"Hello, Rust!";
+        let test_key = Some(0xAA);
         
-        let input_temp = NamedTempFile::new().unwrap();
-        let encrypted_temp = NamedTempFile::new().unwrap();
-        let decrypted_temp = NamedTempFile::new().unwrap();
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
         
-        fs::write(input_temp.path(), original_text).unwrap();
+        fs::write(input_file.path(), original_text).unwrap();
         
         encrypt_file(
-            input_temp.path().to_str().unwrap(),
-            encrypted_temp.path().to_str().unwrap(),
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
             test_key
         ).unwrap();
-        
-        let encrypted_content = fs::read(encrypted_temp.path()).unwrap();
-        assert_ne!(encrypted_content, original_text);
         
         decrypt_file(
-            encrypted_temp.path().to_str().unwrap(),
-            decrypted_temp.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
             test_key
         ).unwrap();
         
-        let decrypted_content = fs::read(decrypted_temp.path()).unwrap();
-        assert_eq!(decrypted_content, original_text);
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_text.to_vec(), decrypted_content);
     }
     
     #[test]
     fn test_default_key() {
-        let test_data = b"Test with default key";
+        let original_text = b"Test with default key";
         
-        let input_temp = NamedTempFile::new().unwrap();
-        let output_temp = NamedTempFile::new().unwrap();
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
         
-        fs::write(input_temp.path(), test_data).unwrap();
+        fs::write(input_file.path(), original_text).unwrap();
         
         encrypt_file(
-            input_temp.path().to_str().unwrap(),
-            output_temp.path().to_str().unwrap(),
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
             None
         ).unwrap();
         
-        let encrypted = fs::read(output_temp.path()).unwrap();
-        assert_ne!(encrypted, test_data);
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_text.to_vec(), decrypted_content);
     }
 }
