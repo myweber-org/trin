@@ -232,3 +232,192 @@ mod tests {
         assert_eq!(processor.calculate_average(), None);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    validation_threshold: f64,
+    normalization_factor: f64,
+}
+
+impl DataProcessor {
+    pub fn new(validation_threshold: f64, normalization_factor: f64) -> Self {
+        DataProcessor {
+            validation_threshold,
+            normalization_factor,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.is_empty() {
+            return Err(ProcessingError::InvalidData("Empty values vector".to_string()));
+        }
+
+        for value in &record.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::InvalidData(
+                    "Invalid numeric value detected".to_string(),
+                ));
+            }
+        }
+
+        if record.id == 0 {
+            return Err(ProcessingError::ValidationFailed("Invalid record ID".to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_values(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        self.validate_record(record)?;
+
+        for value in &mut record.values {
+            *value = (*value * self.normalization_factor).abs();
+            
+            if *value > self.validation_threshold {
+                return Err(ProcessingError::TransformationError(
+                    "Value exceeds threshold after transformation".to_string(),
+                ));
+            }
+        }
+
+        record.metadata.insert(
+            "processed".to_string(),
+            "true".to_string(),
+        );
+        record.metadata.insert(
+            "normalization_factor".to_string(),
+            self.normalization_factor.to_string(),
+        );
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> Result<HashMap<String, f64>, ProcessingError> {
+        if records.is_empty() {
+            return Err(ProcessingError::InvalidData("No records provided".to_string()));
+        }
+
+        let mut stats = HashMap::new();
+        let mut total_values = 0;
+        let mut sum = 0.0;
+        let mut min = f64::MAX;
+        let mut max = f64::MIN;
+
+        for record in records {
+            self.validate_record(record)?;
+            
+            for value in &record.values {
+                total_values += 1;
+                sum += value;
+                min = min.min(*value);
+                max = max.max(*value);
+            }
+        }
+
+        let mean = if total_values > 0 { sum / total_values as f64 } else { 0.0 };
+
+        stats.insert("mean".to_string(), mean);
+        stats.insert("min".to_string(), min);
+        stats.insert("max".to_string(), max);
+        stats.insert("total_records".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+
+        Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_valid_record() {
+        let processor = DataProcessor::new(100.0, 1.0);
+        let record = DataRecord {
+            id: 1,
+            values: vec![10.0, 20.0, 30.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_record() {
+        let processor = DataProcessor::new(100.0, 1.0);
+        let record = DataRecord {
+            id: 0,
+            values: vec![10.0, f64::NAN, 30.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_values() {
+        let mut processor = DataProcessor::new(50.0, 2.0);
+        let mut record = DataRecord {
+            id: 1,
+            values: vec![10.0, 20.0, 30.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.transform_values(&mut record).is_ok());
+        assert_eq!(record.values, vec![20.0, 40.0, 60.0]);
+        assert_eq!(record.metadata.get("processed"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(100.0, 1.0);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                values: vec![10.0, 20.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                values: vec![30.0, 40.0],
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records).unwrap();
+        
+        assert_eq!(stats.get("mean"), Some(&25.0));
+        assert_eq!(stats.get("min"), Some(&10.0));
+        assert_eq!(stats.get("max"), Some(&40.0));
+        assert_eq!(stats.get("total_records"), Some(&2.0));
+        assert_eq!(stats.get("total_values"), Some(&4.0));
+    }
+}
