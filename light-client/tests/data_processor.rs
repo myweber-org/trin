@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fs::File;
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct DataRecord {
     pub id: u32,
     pub value: f64,
@@ -33,30 +34,30 @@ impl DataProcessor {
         Ok(())
     }
 
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
     pub fn calculate_average(&self) -> Option<f64> {
         if self.records.is_empty() {
             return None;
         }
 
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
         Some(sum / self.records.len() as f64)
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
     }
 
     pub fn validate_records(&self) -> Vec<&DataRecord> {
         self.records
             .iter()
-            .filter(|r| r.value.is_finite() && !r.category.is_empty())
+            .filter(|record| record.value.is_finite() && !record.category.is_empty())
             .collect()
     }
 
-    pub fn record_count(&self) -> usize {
+    pub fn count_records(&self) -> usize {
         self.records.len()
     }
 }
@@ -68,7 +69,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_data_processor() {
         let mut processor = DataProcessor::new();
         
         let mut temp_file = NamedTempFile::new().unwrap();
@@ -79,14 +80,14 @@ mod tests {
         
         let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
         assert!(result.is_ok());
-        assert_eq!(processor.record_count(), 3);
+        assert_eq!(processor.count_records(), 3);
+        
+        let alpha_records = processor.filter_by_category("alpha");
+        assert_eq!(alpha_records.len(), 2);
         
         let avg = processor.calculate_average();
         assert!(avg.is_some());
         assert!((avg.unwrap() - 15.5).abs() < 0.1);
-        
-        let alpha_records = processor.filter_by_category("alpha");
-        assert_eq!(alpha_records.len(), 2);
         
         let valid_records = processor.validate_records();
         assert_eq!(valid_records.len(), 3);
