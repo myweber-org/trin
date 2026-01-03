@@ -233,4 +233,72 @@ mod tests {
         assert!((stats.0 - 100.5).abs() < 0.1);
         assert!((stats.1 - 300.7).abs() < 0.1);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_data_file(file_path: &str, category_filter: Option<&str>) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = Reader::from_reader(file);
+    let mut filtered_records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        
+        match category_filter {
+            Some(filter) if record.category == filter => filtered_records.push(record),
+            None => filtered_records.push(record),
+            _ => continue,
+        }
+    }
+
+    Ok(filtered_records)
+}
+
+pub fn calculate_average(records: &[Record]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_process_data_file() {
+        let csv_data = "id,name,value,category\n1,ItemA,10.5,Alpha\n2,ItemB,20.3,Beta\n3,ItemC,15.7,Alpha";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let result = process_data_file(temp_file.path().to_str().unwrap(), Some("Alpha"));
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let records = vec![
+            Record { id: 1, name: "Test1".to_string(), value: 10.0, category: "Test".to_string() },
+            Record { id: 2, name: "Test2".to_string(), value: 20.0, category: "Test".to_string() },
+        ];
+        
+        assert_eq!(calculate_average(&records), Some(15.0));
+        assert_eq!(calculate_average(&[]), None);
+    }
 }
