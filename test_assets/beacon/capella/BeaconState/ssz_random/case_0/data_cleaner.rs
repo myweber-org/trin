@@ -54,3 +54,74 @@ mod tests {
         assert_eq!(result, vec!["ab", "abc"]);
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner<T> {
+    data: Vec<T>,
+}
+
+impl<T> DataCleaner<T> {
+    pub fn new(data: Vec<T>) -> Self {
+        DataCleaner { data }
+    }
+
+    pub fn remove_duplicates(&mut self) -> Vec<T>
+    where
+        T: Eq + std::hash::Hash + Clone,
+    {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+
+        for item in self.data.drain(..) {
+            if seen.insert(item.clone()) {
+                result.push(item);
+            }
+        }
+
+        self.data = result.clone();
+        result
+    }
+
+    pub fn filter<F>(&mut self, predicate: F) -> Vec<T>
+    where
+        F: Fn(&T) -> bool,
+    {
+        let mut result = Vec::new();
+        let mut filtered = Vec::new();
+
+        for item in self.data.drain(..) {
+            if predicate(&item) {
+                result.push(item.clone());
+                filtered.push(item);
+            }
+        }
+
+        self.data = filtered;
+        result
+    }
+
+    pub fn get_data(&self) -> &Vec<T> {
+        &self.data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_duplicates() {
+        let mut cleaner = DataCleaner::new(vec![1, 2, 2, 3, 4, 4, 5]);
+        let result = cleaner.remove_duplicates();
+        assert_eq!(result, vec![1, 2, 3, 4, 5]);
+        assert_eq!(cleaner.get_data(), &vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_filter() {
+        let mut cleaner = DataCleaner::new(vec![1, 2, 3, 4, 5, 6]);
+        let result = cleaner.filter(|&x| x % 2 == 0);
+        assert_eq!(result, vec![2, 4, 6]);
+        assert_eq!(cleaner.get_data(), &vec![2, 4, 6]);
+    }
+}
