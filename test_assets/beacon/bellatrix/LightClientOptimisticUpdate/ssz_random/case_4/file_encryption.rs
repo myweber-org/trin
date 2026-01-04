@@ -156,3 +156,127 @@ mod tests {
         assert_eq!(test_data.to_vec(), decrypted_content);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct FileEncryptor {
+    key: Vec<u8>,
+}
+
+impl FileEncryptor {
+    pub fn new(key: &str) -> Self {
+        FileEncryptor {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &str, dest_path: &str) -> io::Result<()> {
+        self.process_file(source_path, dest_path, true)
+    }
+
+    pub fn decrypt_file(&self, source_path: &str, dest_path: &str) -> io::Result<()> {
+        self.process_file(source_path, dest_path, false)
+    }
+
+    fn process_file(&self, source_path: &str, dest_path: &str, is_encrypt: bool) -> io::Result<()> {
+        let source = Path::new(source_path);
+        let dest = Path::new(dest_path);
+
+        if !source.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Source file not found: {}", source_path),
+            ));
+        }
+
+        let mut source_file = fs::File::open(source)?;
+        let mut dest_file = fs::File::create(dest)?;
+
+        let mut buffer = [0u8; 4096];
+        let key_len = self.key.len();
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            for i in 0..bytes_read {
+                buffer[i] ^= self.key[key_index];
+                key_index = (key_index + 1) % key_len;
+            }
+
+            dest_file.write_all(&buffer[..bytes_read])?;
+        }
+
+        dest_file.flush()?;
+        Ok(())
+    }
+
+    pub fn encrypt_string(&self, text: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(text.len());
+        let mut key_index = 0;
+        let key_len = self.key.len();
+
+        for byte in text.bytes() {
+            result.push(byte ^ self.key[key_index]);
+            key_index = (key_index + 1) % key_len;
+        }
+
+        result
+    }
+
+    pub fn decrypt_bytes(&self, data: &[u8]) -> String {
+        let mut result = Vec::with_capacity(data.len());
+        let mut key_index = 0;
+        let key_len = self.key.len();
+
+        for &byte in data {
+            result.push(byte ^ self.key[key_index]);
+            key_index = (key_index + 1) % key_len;
+        }
+
+        String::from_utf8_lossy(&result).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let encryptor = FileEncryptor::new("secret_key");
+        let original_text = "Hello, World! This is a test message.";
+
+        let encrypted = encryptor.encrypt_string(original_text);
+        let decrypted = encryptor.decrypt_bytes(&encrypted);
+
+        assert_eq!(original_text, decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption() {
+        let encryptor = FileEncryptor::new("test_key_123");
+        let temp_file = NamedTempFile::new().unwrap();
+        let temp_path = temp_file.path().to_str().unwrap();
+
+        let test_content = "Sample file content for encryption test.";
+        fs::write(temp_path, test_content).unwrap();
+
+        let encrypted_path = "test_encrypted.tmp";
+        let decrypted_path = "test_decrypted.tmp";
+
+        encryptor.encrypt_file(temp_path, encrypted_path).unwrap();
+        encryptor.decrypt_file(encrypted_path, decrypted_path).unwrap();
+
+        let decrypted_content = fs::read_to_string(decrypted_path).unwrap();
+        assert_eq!(test_content, decrypted_content);
+
+        fs::remove_file(encrypted_path).ok();
+        fs::remove_file(decrypted_path).ok();
+    }
+}
