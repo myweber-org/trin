@@ -153,4 +153,85 @@ mod tests {
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use std::fs::{File, read, write};
+use std::io::{Read, Write};
+use std::path::Path;
+
+pub struct XORCipher {
+    key: Vec<u8>,
+}
+
+impl XORCipher {
+    pub fn new(key: &str) -> Self {
+        XORCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &str, dest_path: &str) -> Result<(), std::io::Error> {
+        let mut content = read(source_path)?;
+        self.xor_transform(&mut content);
+        write(dest_path, &content)?;
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, source_path: &str, dest_path: &str) -> Result<(), std::io::Error> {
+        self.encrypt_file(source_path, dest_path)
+    }
+
+    fn xor_transform(&self, data: &mut [u8]) {
+        let key_len = self.key.len();
+        for (i, byte) in data.iter_mut().enumerate() {
+            *byte ^= self.key[i % key_len];
+        }
+    }
+}
+
+pub fn process_files(input_file: &str, output_file: &str, key: &str) -> Result<(), String> {
+    let cipher = XORCipher::new(key);
+    
+    if !Path::new(input_file).exists() {
+        return Err(format!("Input file '{}' not found", input_file));
+    }
+
+    cipher.encrypt_file(input_file, output_file)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_symmetry() {
+        let cipher = XORCipher::new("secret_key");
+        let original = b"Hello, World!";
+        let mut encrypted = original.to_vec();
+        
+        cipher.xor_transform(&mut encrypted);
+        assert_ne!(original, encrypted.as_slice());
+        
+        cipher.xor_transform(&mut encrypted);
+        assert_eq!(original, encrypted.as_slice());
+    }
+
+    #[test]
+    fn test_file_encryption() {
+        let temp_input = NamedTempFile::new().unwrap();
+        let temp_output = NamedTempFile::new().unwrap();
+        
+        write(temp_input.path(), b"Test data").unwrap();
+        
+        let cipher = XORCipher::new("test_key");
+        cipher.encrypt_file(
+            temp_input.path().to_str().unwrap(),
+            temp_output.path().to_str().unwrap()
+        ).unwrap();
+        
+        let encrypted = read(temp_output.path()).unwrap();
+        assert_ne!(b"Test data", encrypted.as_slice());
+    }
 }
