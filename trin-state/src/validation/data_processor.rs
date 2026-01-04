@@ -1,67 +1,88 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    file_path: String,
     delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new(file_path: &str, delimiter: char) -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            file_path: file_path.to_string(),
             delimiter,
+            has_header,
         }
     }
 
-    pub fn process_with_filter<F>(&self, filter_fn: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
-    where
-        F: Fn(&[String]) -> bool,
-    {
-        let file = File::open(&self.file_path)?;
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let mut results = Vec::new();
+        let mut records = Vec::new();
 
-        for line in reader.lines() {
+        for (line_number, line) in reader.lines().enumerate() {
             let line = line?;
-            let columns: Vec<String> = line
+            
+            if line_number == 0 && self.has_header {
+                continue;
+            }
+
+            let record: Vec<String> = line
                 .split(self.delimiter)
-                .map(|s| s.trim().to_string())
+                .map(|field| field.trim().to_string())
                 .collect();
 
-            if filter_fn(&columns) {
-                results.push(columns);
+            if !record.is_empty() {
+                records.push(record);
             }
         }
 
-        Ok(results)
+        Ok(records)
     }
 
-    pub fn calculate_column_average(&self, column_index: usize) -> Result<f64, Box<dyn Error>> {
-        let file = File::open(&self.file_path)?;
-        let reader = BufReader::new(file);
-        let mut sum = 0.0;
-        let mut count = 0;
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), String> {
+        if records.is_empty() {
+            return Err("No records found".to_string());
+        }
 
-        for line in reader.lines() {
-            let line = line?;
-            let columns: Vec<&str> = line.split(self.delimiter).collect();
+        let expected_len = records[0].len();
+        for (idx, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(format!(
+                    "Record {} has {} fields, expected {}",
+                    idx + 1,
+                    record.len(),
+                    expected_len
+                ));
+            }
+        }
 
-            if column_index < columns.len() {
-                if let Ok(value) = columns[column_index].trim().parse::<f64>() {
-                    sum += value;
-                    count += 1;
+        Ok(())
+    }
+
+    pub fn calculate_column_averages(&self, records: &[Vec<String>]) -> Vec<f64> {
+        if records.is_empty() {
+            return Vec::new();
+        }
+
+        let num_columns = records[0].len();
+        let mut sums = vec![0.0; num_columns];
+        let mut counts = vec![0; num_columns];
+
+        for record in records {
+            for (i, field) in record.iter().enumerate() {
+                if let Ok(value) = field.parse::<f64>() {
+                    sums[i] += value;
+                    counts[i] += 1;
                 }
             }
         }
 
-        if count > 0 {
-            Ok(sum / count as f64)
-        } else {
-            Ok(0.0)
-        }
+        sums.iter()
+            .zip(counts.iter())
+            .map(|(&sum, &count)| if count > 0 { sum / count as f64 } else { 0.0 })
+            .collect()
     }
 }
 
@@ -72,22 +93,43 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_process_file_with_header() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary").unwrap();
-        writeln!(temp_file, "Alice,30,50000").unwrap();
-        writeln!(temp_file, "Bob,25,45000").unwrap();
-        writeln!(temp_file, "Charlie,35,60000").unwrap();
+        writeln!(temp_file, "col1,col2,col3").unwrap();
+        writeln!(temp_file, "1.5,2.0,3.5").unwrap();
+        writeln!(temp_file, "4.0,5.5,6.0").unwrap();
 
-        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
         
-        let filtered = processor
-            .process_with_filter(|cols| cols.len() > 1 && cols[1].parse::<i32>().unwrap_or(0) > 28)
-            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["1.5", "2.0", "3.5"]);
+    }
 
-        assert_eq!(filtered.len(), 2);
+    #[test]
+    fn test_validate_records() {
+        let records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
         
-        let avg_age = processor.calculate_column_average(1).unwrap();
-        assert!((avg_age - 30.0).abs() < 0.001);
+        let processor = DataProcessor::new(',', false);
+        assert!(processor.validate_records(&records).is_ok());
+    }
+
+    #[test]
+    fn test_calculate_averages() {
+        let records = vec![
+            vec!["1.0".to_string(), "2.0".to_string()],
+            vec!["3.0".to_string(), "4.0".to_string()],
+            vec!["5.0".to_string(), "6.0".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        let averages = processor.calculate_column_averages(&records);
+        
+        assert_eq!(averages.len(), 2);
+        assert!((averages[0] - 3.0).abs() < 0.0001);
+        assert!((averages[1] - 4.0).abs() < 0.0001);
     }
 }
