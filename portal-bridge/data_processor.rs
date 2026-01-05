@@ -1,164 +1,167 @@
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum ProcessingError {
-    #[error("Invalid data format")]
-    InvalidFormat,
-    #[error("Missing required field: {0}")]
-    MissingField(String),
-    #[error("Validation failed: {0}")]
-    ValidationFailed(String),
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: HashMap<String, f64>,
-    pub tags: Vec<String>,
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
 }
 
 pub struct DataProcessor {
-    validation_rules: Vec<ValidationRule>,
-    transformation_pipeline: Vec<Transformation>,
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor {
-            validation_rules: Vec::new(),
-            transformation_pipeline: Vec::new(),
+        Self {
+            records: Vec::new(),
         }
     }
 
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
-    }
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
 
-    pub fn add_transformation(&mut self, transformation: Transformation) {
-        self.transformation_pipeline.push(transformation);
-    }
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line_num == 0 {
+                continue;
+            }
 
-    pub fn process(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
-        for rule in &self.validation_rules {
-            rule.validate(record)?;
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let name = parts[1].to_string();
+            let value = match parts[2].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+
+            let category = parts[3].to_string();
+
+            let record = DataRecord::new(id, name, value, category);
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
+            }
         }
 
-        for transformation in &self.transformation_pipeline {
-            transformation.apply(record);
-        }
-
-        Ok(())
+        Ok(count)
     }
 
-    pub fn batch_process(
-        &self,
-        records: &mut [DataRecord],
-    ) -> Vec<Result<(), ProcessingError>> {
-        records
-            .iter_mut()
-            .map(|record| self.process(record))
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
             .collect()
     }
-}
 
-pub trait ValidationRule {
-    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError>;
-}
-
-pub trait Transformation {
-    fn apply(&self, record: &mut DataRecord);
-}
-
-pub struct RequiredFieldRule {
-    field_name: String,
-}
-
-impl RequiredFieldRule {
-    pub fn new(field_name: &str) -> Self {
-        RequiredFieldRule {
-            field_name: field_name.to_string(),
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
         }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
     }
-}
 
-impl ValidationRule for RequiredFieldRule {
-    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError> {
-        if !record.values.contains_key(&self.field_name) {
-            return Err(ProcessingError::MissingField(self.field_name.clone()));
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
         }
-        Ok(())
+
+        let values: Vec<f64> = self.records.iter().map(|record| record.value).collect();
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let avg = self.calculate_average().unwrap_or(0.0);
+
+        (min, max, avg)
     }
-}
 
-pub struct NormalizeTransformation {
-    field_name: String,
-    target_mean: f64,
-    target_std: f64,
-}
-
-impl NormalizeTransformation {
-    pub fn new(field_name: &str, target_mean: f64, target_std: f64) -> Self {
-        NormalizeTransformation {
-            field_name: field_name.to_string(),
-            target_mean,
-            target_std,
-        }
+    pub fn count_records(&self) -> usize {
+        self.records.len()
     }
-}
 
-impl Transformation for NormalizeTransformation {
-    fn apply(&self, record: &mut DataRecord) {
-        if let Some(value) = record.values.get_mut(&self.field_name) {
-            *value = (*value - self.target_mean) / self.target_std;
-        }
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_required_field_validation() {
-        let mut processor = DataProcessor::new();
-        processor.add_validation_rule(RequiredFieldRule::new("temperature"));
+    fn test_data_record_validation() {
+        let valid_record = DataRecord::new(1, "Test".to_string(), 10.5, "A".to_string());
+        assert!(valid_record.is_valid());
 
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1234567890,
-            values: HashMap::new(),
-            tags: vec![],
-        };
-
-        let result = processor.process(&mut record);
-        assert!(result.is_err());
-
-        record.values.insert("temperature".to_string(), 25.5);
-        let result = processor.process(&mut record);
-        assert!(result.is_ok());
+        let invalid_record = DataRecord::new(2, "".to_string(), -5.0, "".to_string());
+        assert!(!invalid_record.is_valid());
     }
 
     #[test]
-    fn test_normalize_transformation() {
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,Item1,10.5,CategoryA").unwrap();
+        writeln!(temp_file, "2,Item2,20.0,CategoryB").unwrap();
+        writeln!(temp_file, "3,Item3,15.75,CategoryA").unwrap();
+
         let mut processor = DataProcessor::new();
-        processor.add_transformation(NormalizeTransformation::new("value", 0.0, 1.0));
+        let result = processor.load_from_csv(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(processor.count_records(), 3);
+    }
 
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1234567890,
-            values: {
-                let mut map = HashMap::new();
-                map.insert("value".to_string(), 5.0);
-                map
-            },
-            tags: vec![],
-        };
+    #[test]
+    fn test_filtering() {
+        let mut processor = DataProcessor::new();
+        processor.records.push(DataRecord::new(1, "A".to_string(), 10.0, "X".to_string()));
+        processor.records.push(DataRecord::new(2, "B".to_string(), 20.0, "Y".to_string()));
+        processor.records.push(DataRecord::new(3, "C".to_string(), 30.0, "X".to_string()));
 
-        processor.process(&mut record).unwrap();
-        assert_eq!(record.values.get("value"), Some(&5.0));
+        let filtered = processor.filter_by_category("X");
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.records.push(DataRecord::new(1, "A".to_string(), 10.0, "X".to_string()));
+        processor.records.push(DataRecord::new(2, "B".to_string(), 20.0, "Y".to_string()));
+        processor.records.push(DataRecord::new(3, "C".to_string(), 30.0, "Z".to_string()));
+
+        let stats = processor.get_statistics();
+        assert_eq!(stats, (10.0, 30.0, 20.0));
     }
 }
