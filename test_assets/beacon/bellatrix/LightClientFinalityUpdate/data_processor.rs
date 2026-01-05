@@ -1,49 +1,119 @@
-
-use csv::Reader;
-use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
 }
 
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        validate_record(&record)?;
-        records.push(record);
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
     }
 
-    Ok(records)
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), String> {
+        if records.is_empty() {
+            return Err("No valid records found".to_string());
+        }
+
+        let expected_len = records[0].len();
+        for (i, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(format!(
+                    "Record {} has {} fields, expected {}",
+                    i + 1,
+                    record.len(),
+                    expected_len
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn extract_column(&self, records: &[Vec<String>], column_index: usize) -> Result<Vec<String>, String> {
+        if column_index >= records[0].len() {
+            return Err(format!("Column index {} out of bounds", column_index));
+        }
+
+        Ok(records
+            .iter()
+            .map(|record| record[column_index].clone())
+            .collect())
+    }
 }
 
-fn validate_record(record: &Record) -> Result<(), Box<dyn Error>> {
-    if record.name.is_empty() {
-        return Err("Name cannot be empty".into());
-    }
-    if record.value < 0.0 {
-        return Err("Value cannot be negative".into());
-    }
-    if !["A", "B", "C"].contains(&record.category.as_str()) {
-        return Err("Invalid category".into());
-    }
-    Ok(())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
-    let total: f64 = records.iter().map(|r| r.value).sum();
-    let average = total / records.len() as f64;
-    let max_value = records.iter().map(|r| r.value).fold(0.0, f64::max);
-    let category_count = records.iter().filter(|r| r.category == "A").count();
+    #[test]
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Alice,25,London").unwrap();
 
-    (average, max_value, category_count)
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["John", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_validate_records() {
+        let records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        assert!(processor.validate_records(&records).is_ok());
+    }
+
+    #[test]
+    fn test_extract_column() {
+        let records = vec![
+            vec!["John".to_string(), "30".to_string()],
+            vec!["Alice".to_string(), "25".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        let column = processor.extract_column(&records, 0).unwrap();
+        
+        assert_eq!(column, vec!["John", "Alice"]);
+    }
 }
