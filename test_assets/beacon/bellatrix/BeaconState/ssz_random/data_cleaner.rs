@@ -90,4 +90,58 @@ mod tests {
         assert!(!cleaner.validate_email("user@com"));
         assert!(!cleaner.validate_email("user @example.com"));
     }
+}use std::collections::HashSet;
+use std::hash::Hash;
+
+pub fn deduplicate<T: Eq + Hash + Clone>(items: Vec<T>) -> Vec<T> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    
+    for item in items {
+        if seen.insert(item.clone()) {
+            result.push(item);
+        }
+    }
+    
+    result
+}
+
+pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
+    strings
+        .into_iter()
+        .map(|s| s.trim().to_lowercase())
+        .collect()
+}
+
+pub fn filter_empty_strings(strings: Vec<String>) -> Vec<String> {
+    strings
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let input = vec![1, 2, 2, 3, 4, 4, 5];
+        let expected = vec![1, 2, 3, 4, 5];
+        assert_eq!(deduplicate(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let input = vec!["  HELLO  ".to_string(), "World".to_string()];
+        let expected = vec!["hello".to_string(), "world".to_string()];
+        assert_eq!(normalize_strings(input), expected);
+    }
+
+    #[test]
+    fn test_filter_empty_strings() {
+        let input = vec!["hello".to_string(), "".to_string(), "world".to_string()];
+        let expected = vec!["hello".to_string(), "world".to_string()];
+        assert_eq!(filter_empty_strings(input), expected);
+    }
 }
