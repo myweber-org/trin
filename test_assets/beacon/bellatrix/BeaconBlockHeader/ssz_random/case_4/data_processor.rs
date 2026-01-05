@@ -151,3 +151,144 @@ mod tests {
         assert_eq!(stats.1, 46.0);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ProcessingError {
+    details: String,
+}
+
+impl ProcessingError {
+    fn new(msg: &str) -> ProcessingError {
+        ProcessingError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<Self, ProcessingError> {
+        if id == 0 {
+            return Err(ProcessingError::new("ID cannot be zero"));
+        }
+        if !value.is_finite() {
+            return Err(ProcessingError::new("Value must be finite"));
+        }
+        if timestamp < 0 {
+            return Err(ProcessingError::new("Timestamp cannot be negative"));
+        }
+
+        Ok(DataRecord {
+            id,
+            value,
+            timestamp,
+        })
+    }
+
+    pub fn transform(&self, multiplier: f64) -> Result<f64, ProcessingError> {
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::new("Multiplier must be positive"));
+        }
+        Ok(self.value * multiplier)
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<f64>, ProcessingError> {
+    if records.is_empty() {
+        return Err(ProcessingError::new("No records to process"));
+    }
+
+    let mut results = Vec::with_capacity(records.len());
+    for record in records {
+        let transformed = record.transform(2.5)?;
+        results.push(transformed);
+    }
+
+    Ok(results)
+}
+
+pub fn calculate_statistics(values: &[f64]) -> (f64, f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = values.iter().sum();
+    let count = values.len() as f64;
+    let mean = sum / count;
+
+    let variance: f64 = values
+        .iter()
+        .map(|&x| (x - mean).powi(2))
+        .sum::<f64>()
+        / count;
+
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 42.5, 1234567890).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.timestamp, 1234567890);
+    }
+
+    #[test]
+    fn test_invalid_record_id() {
+        let result = DataRecord::new(0, 42.5, 1234567890);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord::new(1, 10.0, 1234567890).unwrap();
+        let transformed = record.transform(3.0).unwrap();
+        assert_eq!(transformed, 30.0);
+    }
+
+    #[test]
+    fn test_process_multiple_records() {
+        let records = vec![
+            DataRecord::new(1, 10.0, 1000).unwrap(),
+            DataRecord::new(2, 20.0, 2000).unwrap(),
+            DataRecord::new(3, 30.0, 3000).unwrap(),
+        ];
+
+        let results = process_records(&records).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], 25.0);
+        assert_eq!(results[1], 50.0);
+        assert_eq!(results[2], 75.0);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = calculate_statistics(&values);
+        
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert!((std_dev - 1.4142135623730951).abs() < 1e-10);
+    }
+}
