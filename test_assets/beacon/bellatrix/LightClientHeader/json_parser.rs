@@ -1,231 +1,60 @@
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs;
 
-#[derive(Debug, PartialEq)]
-pub enum JsonValue {
-    Null,
-    Bool(bool),
-    Number(f64),
-    String(String),
-    Array(Vec<JsonValue>),
-    Object(HashMap<String, JsonValue>),
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Config {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
 }
 
-pub struct JsonParser {
-    input: Vec<char>,
-    position: usize,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub tls_enabled: bool,
 }
 
-impl JsonParser {
-    pub fn new(input: &str) -> Self {
-        JsonParser {
-            input: input.chars().collect(),
-            position: 0,
-        }
-    }
-
-    fn peek(&self) -> Option<char> {
-        self.input.get(self.position).copied()
-    }
-
-    fn consume(&mut self, expected: char) -> Result<(), String> {
-        match self.peek() {
-            Some(ch) if ch == expected => {
-                self.position += 1;
-                Ok(())
-            }
-            Some(ch) => Err(format!("Expected '{}', found '{}'", expected, ch)),
-            None => Err(format!("Expected '{}', found EOF", expected)),
-        }
-    }
-
-    fn skip_whitespace(&mut self) {
-        while let Some(ch) = self.peek() {
-            if ch.is_whitespace() {
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    pub fn parse(&mut self) -> Result<JsonValue, String> {
-        self.skip_whitespace();
-        let result = self.parse_value()?;
-        self.skip_whitespace();
-        if self.position < self.input.len() {
-            return Err("Unexpected trailing characters".to_string());
-        }
-        Ok(result)
-    }
-
-    fn parse_value(&mut self) -> Result<JsonValue, String> {
-        self.skip_whitespace();
-        match self.peek() {
-            Some('n') => self.parse_null(),
-            Some('t') | Some('f') => self.parse_bool(),
-            Some('"') => self.parse_string(),
-            Some('[') => self.parse_array(),
-            Some('{') => self.parse_object(),
-            Some(ch) if ch.is_digit(10) || ch == '-' => self.parse_number(),
-            _ => Err("Invalid JSON value".to_string()),
-        }
-    }
-
-    fn parse_null(&mut self) -> Result<JsonValue, String> {
-        let expected = "null";
-        for ch in expected.chars() {
-            self.consume(ch)?;
-        }
-        Ok(JsonValue::Null)
-    }
-
-    fn parse_bool(&mut self) -> Result<JsonValue, String> {
-        if self.input[self.position..].starts_with(&['t', 'r', 'u', 'e']) {
-            for ch in "true".chars() {
-                self.consume(ch)?;
-            }
-            Ok(JsonValue::Bool(true))
-        } else if self.input[self.position..].starts_with(&['f', 'a', 'l', 's', 'e']) {
-            for ch in "false".chars() {
-                self.consume(ch)?;
-            }
-            Ok(JsonValue::Bool(false))
-        } else {
-            Err("Invalid boolean value".to_string())
-        }
-    }
-
-    fn parse_string(&mut self) -> Result<JsonValue, String> {
-        self.consume('"')?;
-        let mut result = String::new();
-        while let Some(ch) = self.peek() {
-            if ch == '"' {
-                break;
-            }
-            result.push(ch);
-            self.position += 1;
-        }
-        self.consume('"')?;
-        Ok(JsonValue::String(result))
-    }
-
-    fn parse_number(&mut self) -> Result<JsonValue, String> {
-        let start = self.position;
-        while let Some(ch) = self.peek() {
-            if ch.is_digit(10) || ch == '.' || ch == '-' || ch == 'e' || ch == 'E' {
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-        let num_str: String = self.input[start..self.position].iter().collect();
-        match num_str.parse::<f64>() {
-            Ok(num) => Ok(JsonValue::Number(num)),
-            Err(_) => Err("Invalid number format".to_string()),
-        }
-    }
-
-    fn parse_array(&mut self) -> Result<JsonValue, String> {
-        self.consume('[')?;
-        self.skip_whitespace();
-        let mut array = Vec::new();
-        if self.peek() == Some(']') {
-            self.consume(']')?;
-            return Ok(JsonValue::Array(array));
-        }
-        loop {
-            let value = self.parse_value()?;
-            array.push(value);
-            self.skip_whitespace();
-            if self.peek() == Some(']') {
-                self.consume(']')?;
-                break;
-            }
-            self.consume(',')?;
-            self.skip_whitespace();
-        }
-        Ok(JsonValue::Array(array))
-    }
-
-    fn parse_object(&mut self) -> Result<JsonValue, String> {
-        self.consume('{')?;
-        self.skip_whitespace();
-        let mut map = HashMap::new();
-        if self.peek() == Some('}') {
-            self.consume('}')?;
-            return Ok(JsonValue::Object(map));
-        }
-        loop {
-            let key = match self.parse_value()? {
-                JsonValue::String(s) => s,
-                _ => return Err("Object key must be a string".to_string()),
-            };
-            self.skip_whitespace();
-            self.consume(':')?;
-            self.skip_whitespace();
-            let value = self.parse_value()?;
-            map.insert(key, value);
-            self.skip_whitespace();
-            if self.peek() == Some('}') {
-                self.consume('}')?;
-                break;
-            }
-            self.consume(',')?;
-            self.skip_whitespace();
-        }
-        Ok(JsonValue::Object(map))
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub timeout_seconds: u64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn parse_config_file(file_path: &str) -> Result<Config, Box<dyn Error>> {
+    let content = fs::read_to_string(file_path)?;
+    let config: Config = serde_json::from_str(&content)?;
+    Ok(config)
+}
 
-    #[test]
-    fn test_parse_null() {
-        let mut parser = JsonParser::new("null");
-        assert_eq!(parser.parse(), Ok(JsonValue::Null));
+pub fn validate_config(config: &Config) -> Result<(), String> {
+    if config.server.port == 0 {
+        return Err("Server port cannot be zero".to_string());
     }
-
-    #[test]
-    fn test_parse_bool() {
-        let mut parser = JsonParser::new("true");
-        assert_eq!(parser.parse(), Ok(JsonValue::Bool(true)));
-        let mut parser = JsonParser::new("false");
-        assert_eq!(parser.parse(), Ok(JsonValue::Bool(false)));
+    
+    if config.database.max_connections == 0 {
+        return Err("Database max connections must be greater than zero".to_string());
     }
-
-    #[test]
-    fn test_parse_string() {
-        let mut parser = JsonParser::new(r#""hello world""#);
-        assert_eq!(
-            parser.parse(),
-            Ok(JsonValue::String("hello world".to_string()))
-        );
+    
+    if config.database.timeout_seconds > 3600 {
+        return Err("Database timeout cannot exceed one hour".to_string());
     }
+    
+    Ok(())
+}
 
-    #[test]
-    fn test_parse_number() {
-        let mut parser = JsonParser::new("42.5");
-        assert_eq!(parser.parse(), Ok(JsonValue::Number(42.5)));
-    }
-
-    #[test]
-    fn test_parse_array() {
-        let mut parser = JsonParser::new("[1, 2, 3]");
-        let expected = JsonValue::Array(vec![
-            JsonValue::Number(1.0),
-            JsonValue::Number(2.0),
-            JsonValue::Number(3.0),
-        ]);
-        assert_eq!(parser.parse(), Ok(expected));
-    }
-
-    #[test]
-    fn test_parse_object() {
-        let mut parser = JsonParser::new(r#"{"key": "value"}"#);
-        let mut map = HashMap::new();
-        map.insert("key".to_string(), JsonValue::String("value".to_string()));
-        assert_eq!(parser.parse(), Ok(JsonValue::Object(map)));
+pub fn generate_default_config() -> Config {
+    Config {
+        server: ServerConfig {
+            host: "localhost".to_string(),
+            port: 8080,
+            tls_enabled: false,
+        },
+        database: DatabaseConfig {
+            url: "postgresql://localhost:5432/mydb".to_string(),
+            max_connections: 10,
+            timeout_seconds: 30,
+        },
     }
 }
