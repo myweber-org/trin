@@ -1,194 +1,91 @@
-
+use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use std::error::Error;
+use std::fs::File;
 
-#[derive(Error, Debug)]
-pub enum DataError {
-    #[error("Invalid input data: {0}")]
-    InvalidInput(String),
-    #[error("Transformation failed: {0}")]
-    TransformationFailed(String),
-    #[error("Validation error: {0}")]
-    ValidationError(String),
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataRecord {
-    pub id: u64,
-    pub value: f64,
-    pub timestamp: i64,
-    pub category: String,
+struct DataProcessor {
+    records: Vec<Record>,
 }
 
-impl DataRecord {
-    pub fn validate(&self) -> Result<(), DataError> {
-        if self.id == 0 {
-            return Err(DataError::ValidationError("ID cannot be zero".to_string()));
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
         }
-        
-        if self.value.is_nan() || self.value.is_infinite() {
-            return Err(DataError::ValidationError(
-                "Value must be a finite number".to_string(),
-            ));
+    }
+
+    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
         }
-        
-        if self.timestamp < 0 {
-            return Err(DataError::ValidationError(
-                "Timestamp cannot be negative".to_string(),
-            ));
-        }
-        
-        if self.category.trim().is_empty() {
-            return Err(DataError::ValidationError(
-                "Category cannot be empty".to_string(),
-            ));
-        }
-        
+
         Ok(())
     }
+
+    fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    fn save_filtered_to_csv(&self, category: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_category(category);
+        let file = File::create(output_path)?;
+        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
+
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    fn add_record(&mut self, id: u32, name: String, value: f64, category: String) {
+        self.records.push(Record {
+            id,
+            name,
+            value,
+            category,
+        });
+    }
 }
 
-pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, DataError> {
-    let mut processed = Vec::with_capacity(records.len());
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
     
-    for record in records {
-        record.validate()?;
-        
-        let transformed = transform_record(record)?;
-        processed.push(transformed);
-    }
+    processor.add_record(1, "Item A".to_string(), 25.5, "Alpha".to_string());
+    processor.add_record(2, "Item B".to_string(), 42.0, "Beta".to_string());
+    processor.add_record(3, "Item C".to_string(), 18.75, "Alpha".to_string());
     
-    Ok(processed)
-}
-
-fn transform_record(mut record: DataRecord) -> Result<DataRecord, DataError> {
-    if record.value < 0.0 {
-        record.value = record.value.abs();
-    }
+    println!("Average value: {:.2}", processor.calculate_average());
     
-    record.category = record.category.to_uppercase();
+    let alpha_records = processor.filter_by_category("Alpha");
+    println!("Alpha category records: {}", alpha_records.len());
     
-    if record.timestamp == 0 {
-        record.timestamp = chrono::Utc::now().timestamp();
-    }
+    processor.save_filtered_to_csv("Alpha", "alpha_records.csv")?;
     
-    Ok(record)
-}
-
-pub fn calculate_statistics(records: &[DataRecord]) -> Option<Statistics> {
-    if records.is_empty() {
-        return None;
-    }
-    
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let count = records.len() as f64;
-    let mean = sum / count;
-    
-    let variance: f64 = records
-        .iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>()
-        / count;
-    
-    Some(Statistics {
-        count: records.len(),
-        sum,
-        mean,
-        variance,
-        std_dev: variance.sqrt(),
-    })
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Statistics {
-    pub count: usize,
-    pub sum: f64,
-    pub mean: f64,
-    pub variance: f64,
-    pub std_dev: f64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord {
-            id: 1,
-            value: 42.5,
-            timestamp: 1234567890,
-            category: "test".to_string(),
-        };
-        
-        assert!(valid_record.validate().is_ok());
-        
-        let invalid_record = DataRecord {
-            id: 0,
-            value: f64::NAN,
-            timestamp: -1,
-            category: "".to_string(),
-        };
-        
-        assert!(invalid_record.validate().is_err());
-    }
-    
-    #[test]
-    fn test_process_records() {
-        let records = vec![
-            DataRecord {
-                id: 1,
-                value: -10.5,
-                timestamp: 0,
-                category: "alpha".to_string(),
-            },
-            DataRecord {
-                id: 2,
-                value: 20.0,
-                timestamp: 1000,
-                category: "beta".to_string(),
-            },
-        ];
-        
-        let result = process_records(records);
-        assert!(result.is_ok());
-        
-        let processed = result.unwrap();
-        assert_eq!(processed[0].value, 10.5);
-        assert_eq!(processed[0].category, "ALPHA");
-        assert!(processed[0].timestamp > 0);
-        assert_eq!(processed[1].category, "BETA");
-    }
-    
-    #[test]
-    fn test_calculate_statistics() {
-        let records = vec![
-            DataRecord {
-                id: 1,
-                value: 10.0,
-                timestamp: 1,
-                category: "test".to_string(),
-            },
-            DataRecord {
-                id: 2,
-                value: 20.0,
-                timestamp: 2,
-                category: "test".to_string(),
-            },
-            DataRecord {
-                id: 3,
-                value: 30.0,
-                timestamp: 3,
-                category: "test".to_string(),
-            },
-        ];
-        
-        let stats = calculate_statistics(&records).unwrap();
-        
-        assert_eq!(stats.count, 3);
-        assert_eq!(stats.sum, 60.0);
-        assert_eq!(stats.mean, 20.0);
-        assert!(stats.variance > 0.0);
-        assert!(stats.std_dev > 0.0);
-    }
+    Ok(())
 }
