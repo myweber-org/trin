@@ -264,4 +264,108 @@ mod tests {
         assert!((mean - 20.0).abs() < 0.001);
         assert!((variance - 66.666).abs() < 0.001);
     }
+}use csv::Reader;
+use std::error::Error;
+use std::fs::File;
+
+pub struct DataProcessor {
+    data: Vec<Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { data: Vec::new() }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.records() {
+            let record = result?;
+            let row: Vec<f64> = record.iter()
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            
+            if !row.is_empty() {
+                self.data.push(row);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self, column_index: usize) -> Option<f64> {
+        if column_index >= self.data.first()?.len() {
+            return None;
+        }
+
+        let sum: f64 = self.data.iter()
+            .filter_map(|row| row.get(column_index))
+            .sum();
+        
+        let count = self.data.len() as f64;
+        Some(sum / count)
+    }
+
+    pub fn calculate_standard_deviation(&self, column_index: usize) -> Option<f64> {
+        let mean = self.calculate_mean(column_index)?;
+        
+        let variance: f64 = self.data.iter()
+            .filter_map(|row| row.get(column_index))
+            .map(|&value| (value - mean).powi(2))
+            .sum::<f64>() / (self.data.len() as f64 - 1.0);
+        
+        Some(variance.sqrt())
+    }
+
+    pub fn filter_by_threshold(&self, column_index: usize, threshold: f64) -> Vec<Vec<f64>> {
+        self.data.iter()
+            .filter(|row| {
+                row.get(column_index)
+                    .map_or(false, |&value| value > threshold)
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_summary_statistics(&self) -> Vec<(usize, f64, f64)> {
+        if self.data.is_empty() {
+            return Vec::new();
+        }
+
+        let column_count = self.data[0].len();
+        (0..column_count)
+            .filter_map(|col| {
+                let mean = self.calculate_mean(col)?;
+                let std_dev = self.calculate_standard_deviation(col)?;
+                Some((col, mean, std_dev))
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1.0,2.0,3.0\n4.0,5.0,6.0\n7.0,8.0,9.0").unwrap();
+        
+        let mut processor = DataProcessor::new();
+        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.calculate_mean(0), Some(4.0));
+        assert_eq!(processor.calculate_standard_deviation(0), Some(3.0));
+        
+        let filtered = processor.filter_by_threshold(1, 4.0);
+        assert_eq!(filtered.len(), 2);
+        
+        let stats = processor.get_summary_statistics();
+        assert_eq!(stats.len(), 3);
+    }
 }
