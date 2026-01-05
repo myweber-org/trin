@@ -128,3 +128,122 @@ pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
     
     (mean, variance, std_dev)
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ProcessingError {
+    details: String,
+}
+
+impl ProcessingError {
+    fn new(msg: &str) -> ProcessingError {
+        ProcessingError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ProcessingError {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::new("ID cannot be zero"));
+        }
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(ProcessingError::new("Value must be a finite number"));
+        }
+        if self.timestamp < 0 {
+            return Err(ProcessingError::new("Timestamp cannot be negative"));
+        }
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::new("Multiplier must be positive"));
+        }
+        self.value *= multiplier;
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<(), ProcessingError> {
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.transform(multiplier)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1625097600,
+        };
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 42.5,
+            timestamp: 1625097600,
+        };
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let mut record = DataRecord {
+            id: 1,
+            value: 10.0,
+            timestamp: 1625097600,
+        };
+        assert!(record.transform(2.5).is_ok());
+        assert_eq!(record.value, 25.0);
+    }
+
+    #[test]
+    fn test_process_multiple_records() {
+        let mut records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 1625097600,
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                timestamp: 1625097600,
+            },
+        ];
+        assert!(process_records(&mut records, 3.0).is_ok());
+        assert_eq!(records[0].value, 30.0);
+        assert_eq!(records[1].value, 60.0);
+    }
+}
