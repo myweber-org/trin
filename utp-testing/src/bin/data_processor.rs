@@ -238,3 +238,130 @@ mod tests {
         assert_eq!(normalized.unwrap(), 0.5);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessedData {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub is_valid: bool,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidValue(f64),
+    EmptyCategory,
+    InvalidId,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidValue(val) => write!(f, "Invalid value: {}", val),
+            DataError::EmptyCategory => write!(f, "Category cannot be empty"),
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor { threshold }
+    }
+
+    pub fn validate_data(&self, id: u32, value: f64, category: &str) -> Result<(), DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+
+        if value < 0.0 || value > 1000.0 {
+            return Err(DataError::InvalidValue(value));
+        }
+
+        if category.trim().is_empty() {
+            return Err(DataError::EmptyCategory);
+        }
+
+        Ok(())
+    }
+
+    pub fn process(&self, id: u32, value: f64, category: &str) -> Result<ProcessedData, DataError> {
+        self.validate_data(id, value, category)?;
+
+        let normalized_value = if value > self.threshold {
+            value / 2.0
+        } else {
+            value * 1.5
+        };
+
+        let is_valid = normalized_value >= 50.0 && normalized_value <= 800.0;
+
+        Ok(ProcessedData {
+            id,
+            value: normalized_value,
+            category: category.to_string(),
+            is_valid,
+        })
+    }
+
+    pub fn batch_process(
+        &self,
+        items: &[(u32, f64, &str)],
+    ) -> Vec<Result<ProcessedData, DataError>> {
+        items
+            .iter()
+            .map(|&(id, value, category)| self.process(id, value, category))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_data_processing() {
+        let processor = DataProcessor::new(500.0);
+        let result = processor.process(1, 300.0, "electronics");
+
+        assert!(result.is_ok());
+        let data = result.unwrap();
+        assert_eq!(data.id, 1);
+        assert_eq!(data.value, 450.0);
+        assert_eq!(data.category, "electronics");
+        assert!(data.is_valid);
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let processor = DataProcessor::new(500.0);
+        let result = processor.process(0, 300.0, "test");
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DataError::InvalidId));
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::new(500.0);
+        let items = vec![
+            (1, 300.0, "category_a"),
+            (2, 600.0, "category_b"),
+            (0, 200.0, "category_c"),
+        ];
+
+        let results = processor.batch_process(&items);
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+        assert!(results[2].is_err());
+    }
+}
