@@ -302,3 +302,181 @@ mod tests {
         assert!((max - 20.3).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    MissingField,
+    CategoryNotFound,
+    TransformationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid numeric value"),
+            ProcessingError::MissingField => write!(f, "Required field is missing"),
+            ProcessingError::CategoryNotFound => write!(f, "Category does not exist"),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    categories: HashMap<String, Vec<String>>,
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            categories: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_category(&mut self, category: String, allowed_values: Vec<String>) {
+        self.categories.insert(category, allowed_values);
+    }
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.id == 0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+
+        if record.name.is_empty() {
+            return Err(ProcessingError::MissingField);
+        }
+
+        if let Some(allowed_values) = self.categories.get(&record.category) {
+            if !allowed_values.contains(&record.category) {
+                return Err(ProcessingError::CategoryNotFound);
+            }
+        }
+
+        for rule in &self.validation_rules {
+            rule(record)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(
+        &self,
+        record: &DataRecord,
+        transformer: impl Fn(&DataRecord) -> Result<DataRecord, ProcessingError>,
+    ) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(record)?;
+        transformer(record)
+    }
+
+    pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if records.is_empty() {
+            return stats;
+        }
+
+        let sum: f64 = records.iter().map(|r| r.value).sum();
+        let count = records.len() as f64;
+        let avg = sum / count;
+        
+        let min = records.iter().map(|r| r.value).fold(f64::INFINITY, f64::min);
+        let max = records.iter().map(|r| r.value).fold(f64::NEG_INFINITY, f64::max);
+
+        stats.insert("total_records".to_string(), count);
+        stats.insert("sum".to_string(), sum);
+        stats.insert("average".to_string(), avg);
+        stats.insert("minimum".to_string(), min);
+        stats.insert("maximum".to_string(), max);
+
+        stats
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let mut processor = DataProcessor::new();
+        processor.add_category("type_a".to_string(), vec!["type_a".to_string()]);
+
+        let valid_record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.0,
+            category: "type_a".to_string(),
+        };
+
+        assert!(processor.validate_record(&valid_record).is_ok());
+
+        let invalid_record = DataRecord {
+            id: 0,
+            name: "".to_string(),
+            value: -1.0,
+            category: "invalid".to_string(),
+        };
+
+        assert!(processor.validate_record(&invalid_record).is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "A".to_string(),
+                value: 10.0,
+                category: "test".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                name: "B".to_string(),
+                value: 20.0,
+                category: "test".to_string(),
+            },
+            DataRecord {
+                id: 3,
+                name: "C".to_string(),
+                value: 30.0,
+                category: "test".to_string(),
+            },
+        ];
+
+        let stats = DataProcessor::calculate_statistics(&records);
+        
+        assert_eq!(stats.get("total_records"), Some(&3.0));
+        assert_eq!(stats.get("sum"), Some(&60.0));
+        assert_eq!(stats.get("average"), Some(&20.0));
+        assert_eq!(stats.get("minimum"), Some(&10.0));
+        assert_eq!(stats.get("maximum"), Some(&30.0));
+    }
+}
