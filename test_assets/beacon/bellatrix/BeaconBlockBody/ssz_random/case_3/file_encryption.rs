@@ -74,4 +74,54 @@ mod tests {
         let decrypted: Vec<u8> = encrypted.iter().map(|byte| byte ^ DEFAULT_KEY).collect();
         assert_eq!(test_data.to_vec(), decrypted);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+
+const BUFFER_SIZE: usize = 8192;
+
+pub fn xor_cipher(input: &[u8], key: &[u8]) -> Vec<u8> {
+    input
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
+
+pub fn process_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
+
+    let mut buffer = [0u8; BUFFER_SIZE];
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let processed = xor_cipher(&buffer[..bytes_read], key);
+        output_file.write_all(&processed)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let data = b"Hello, World!";
+        let key = b"secret";
+        let encrypted = xor_cipher(data, key);
+        let decrypted = xor_cipher(&encrypted, key);
+        assert_eq!(data.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_empty_data() {
+        let data = b"";
+        let key = b"key";
+        let result = xor_cipher(data, key);
+        assert!(result.is_empty());
+    }
 }
