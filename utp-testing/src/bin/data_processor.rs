@@ -365,3 +365,199 @@ mod tests {
         assert!(results[2].is_err());
     }
 }
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+use log::{error, info, warn};
+
+#[derive(Debug)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: &str) -> Self {
+        DataRecord {
+            id,
+            value,
+            timestamp: timestamp.to_string(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("Invalid ID: cannot be zero".to_string());
+        }
+        if self.value < 0.0 || self.value > 1000.0 {
+            return Err(format!("Value {} out of valid range [0, 1000]", self.value));
+        }
+        if self.timestamp.is_empty() {
+            return Err("Timestamp cannot be empty".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn to_csv(&self) -> String {
+        format!("{},{},{}\n", self.id, self.value, self.timestamp)
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    processed_count: usize,
+    error_count: usize,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            processed_count: 0,
+            error_count: 0,
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
+        info!("Loading data from: {}", path.as_ref().display());
+        
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                warn!("Invalid format at line {}: {}", line_num + 1, line);
+                self.error_count += 1;
+                continue;
+            }
+            
+            match self.parse_record(&parts) {
+                Ok(record) => {
+                    self.records.push(record);
+                    self.processed_count += 1;
+                }
+                Err(e) => {
+                    error!("Failed to parse line {}: {}", line_num + 1, e);
+                    self.error_count += 1;
+                }
+            }
+        }
+        
+        info!("Loaded {} records, {} errors", self.processed_count, self.error_count);
+        Ok(())
+    }
+
+    fn parse_record(&self, parts: &[&str]) -> Result<DataRecord, String> {
+        let id = parts[0].parse::<u32>()
+            .map_err(|e| format!("Invalid ID: {}", e))?;
+        
+        let value = parts[1].parse::<f64>()
+            .map_err(|e| format!("Invalid value: {}", e))?;
+        
+        let timestamp = parts[2].trim().to_string();
+        
+        let record = DataRecord::new(id, value, &timestamp);
+        record.validate()?;
+        
+        Ok(record)
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<&DataRecord> {
+        self.records.iter()
+            .filter(|record| record.value >= threshold)
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let count = self.records.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = self.records.iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+
+    pub fn save_results<P: AsRef<Path>>(&self, path: P, threshold: f64) -> io::Result<()> {
+        let filtered = self.filter_by_threshold(threshold);
+        let (mean, variance, std_dev) = self.calculate_statistics();
+        
+        let mut file = File::create(path)?;
+        
+        writeln!(file, "# Data Processing Results")?;
+        writeln!(file, "# Total records: {}", self.records.len())?;
+        writeln!(file, "# Processed: {}, Errors: {}", self.processed_count, self.error_count)?;
+        writeln!(file, "# Statistics - Mean: {:.2}, Variance: {:.2}, StdDev: {:.2}", 
+                 mean, variance, std_dev)?;
+        writeln!(file, "# Threshold filter: {}", threshold)?;
+        writeln!(file, "# Filtered records: {}", filtered.len())?;
+        writeln!(file, "# ID,Value,Timestamp")?;
+        
+        for record in filtered {
+            file.write_all(record.to_csv().as_bytes())?;
+        }
+        
+        info!("Results saved with {} filtered records", filtered.len());
+        Ok(())
+    }
+
+    pub fn get_summary(&self) -> String {
+        format!(
+            "Records: {}, Processed: {}, Errors: {}",
+            self.records.len(),
+            self.processed_count,
+            self.error_count
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 500.0, "2024-01-15T10:30:00Z");
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_id = DataRecord::new(0, 500.0, "2024-01-15T10:30:00Z");
+        assert!(invalid_id.validate().is_err());
+
+        let invalid_value = DataRecord::new(1, 1500.0, "2024-01-15T10:30:00Z");
+        assert!(invalid_value.validate().is_err());
+    }
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,100.5,2024-01-15T10:30:00Z").unwrap();
+        writeln!(temp_file, "2,200.0,2024-01-15T11:00:00Z").unwrap();
+        writeln!(temp_file, "3,50.0,2024-01-15T11:30:00Z").unwrap();
+        
+        processor.load_from_file(temp_file.path()).unwrap();
+        
+        let filtered = processor.filter_by_threshold(150.0);
+        assert_eq!(filtered.len(), 1);
+        
+        let stats = processor.calculate_statistics();
+        assert!((stats.0 - 116.833).abs() < 0.001);
+    }
+}
