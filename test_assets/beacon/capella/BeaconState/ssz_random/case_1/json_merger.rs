@@ -1,69 +1,67 @@
 
-use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufReader, Write};
+use serde_json::{Value, Map};
+use std::fs;
 use std::path::Path;
 
-use serde_json::{Value, Map};
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
 
-pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged_map: Map<String, Value> = Map::new();
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
 
-    for input_path in input_paths {
-        let path = Path::new(input_path);
-        if !path.exists() {
-            eprintln!("Warning: File {} not found, skipping.", input_path);
-            continue;
-        }
-
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let json_value: Value = serde_json::from_reader(reader)?;
-
-        if let Value::Object(map) = json_value {
-            for (key, value) in map {
-                if merged_map.contains_key(&key) {
-                    eprintln!("Warning: Key '{}' already exists, overwriting with value from {}.", key, input_path);
-                }
-                merged_map.insert(key, value);
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                merge_value(&mut merged, key, value);
             }
-        } else {
-            eprintln!("Warning: File {} does not contain a JSON object at root, skipping.", input_path);
         }
     }
 
-    let output_file = File::create(output_path)?;
-    serde_json::to_writer_pretty(output_file, &Value::Object(merged_map))?;
+    Ok(Value::Object(merged))
+}
 
-    println!("Successfully merged {} files into {}", input_paths.len(), output_path);
-    Ok(())
+fn merge_value(map: &mut Map<String, Value>, key: String, new_value: Value) {
+    match map.get_mut(&key) {
+        Some(existing) => {
+            if let (Value::Object(existing_obj), Value::Object(new_obj)) = (existing, &new_value) {
+                for (nested_key, nested_value) in new_obj {
+                    merge_value(existing_obj, nested_key.clone(), nested_value.clone());
+                }
+            } else if existing.is_array() && new_value.is_array() {
+                if let (Value::Array(existing_arr), Value::Array(new_arr)) = (existing, new_value) {
+                    existing_arr.extend(new_arr);
+                }
+            } else {
+                map.insert(key, new_value);
+            }
+        }
+        None => {
+            map.insert(key, new_value);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_merge_json_files() {
+    fn test_merge_objects() {
         let file1 = NamedTempFile::new().unwrap();
         let file2 = NamedTempFile::new().unwrap();
-        let output_file = NamedTempFile::new().unwrap();
 
-        fs::write(file1.path(), r#"{"a": 1, "b": "test"}"#).unwrap();
-        fs::write(file2.path(), r#"{"c": true, "d": [1,2,3]}"#).unwrap();
+        fs::write(&file1, r#"{"a": 1, "b": {"x": 10}}"#).unwrap();
+        fs::write(&file2, r#"{"b": {"y": 20}, "c": 3}"#).unwrap();
 
-        let inputs = &[file1.path().to_str().unwrap(), file2.path().to_str().unwrap()];
-        let output_path = output_file.path().to_str().unwrap();
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let expected = json!({
+            "a": 1,
+            "b": {"x": 10, "y": 20},
+            "c": 3
+        });
 
-        let result = merge_json_files(inputs, output_path);
-        assert!(result.is_ok());
-
-        let content = fs::read_to_string(output_path).unwrap();
-        let parsed: Value = serde_json::from_str(&content).unwrap();
-        assert!(parsed.get("a").is_some());
-        assert!(parsed.get("b").is_some());
-        assert!(parsed.get("c").is_some());
-        assert!(parsed.get("d").is_some());
+        assert_eq!(result, expected);
     }
 }
