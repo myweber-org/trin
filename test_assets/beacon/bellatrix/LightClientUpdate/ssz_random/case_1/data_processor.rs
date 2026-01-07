@@ -229,3 +229,89 @@ mod tests {
         assert_eq!(type_a_records.len(), 2);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_numeric_data(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty data array provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let validated_data: Vec<f64> = data
+            .iter()
+            .filter(|&&x| x.is_finite())
+            .cloned()
+            .collect();
+
+        if validated_data.len() < data.len() {
+            return Err("Invalid numeric values detected in input data".to_string());
+        }
+
+        let mean = validated_data.iter().sum::<f64>() / validated_data.len() as f64;
+        let processed: Vec<f64> = validated_data
+            .iter()
+            .map(|&x| (x - mean).abs())
+            .collect();
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn get_cache_stats(&self) -> (usize, usize) {
+        let total_entries = self.cache.len();
+        let total_values: usize = self.cache.values().map(|v| v.len()).sum();
+        (total_entries, total_values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_valid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = processor.process_numeric_data("test_key", &data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 5);
+    }
+
+    #[test]
+    fn test_process_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, f64::NAN, 3.0];
+        let result = processor.process_numeric_data("invalid_key", &data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_functionality() {
+        let mut processor = DataProcessor::new();
+        let data = vec![10.0, 20.0, 30.0];
+        
+        let first_result = processor.process_numeric_data("cached_key", &data).unwrap();
+        let second_result = processor.process_numeric_data("cached_key", &data).unwrap();
+        
+        assert_eq!(first_result, second_result);
+        assert_eq!(processor.get_cache_stats().0, 1);
+    }
+}
