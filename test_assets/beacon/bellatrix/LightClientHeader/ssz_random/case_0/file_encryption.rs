@@ -1,63 +1,59 @@
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
 
-const BUFFER_SIZE: usize = 8192;
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use std::error::Error;
 
-pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
-    process_file(input_path, output_path, key)
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
 }
 
-pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
-    process_file(input_path, output_path, key)
+impl FileEncryptor {
+    pub fn new() -> Self {
+        let key = Aes256Gcm::generate_key(&mut OsRng);
+        let cipher = Aes256Gcm::new(&key);
+        Self { cipher }
+    }
+
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Nonce::from_slice(b"unique_nonce_");
+        let ciphertext = self.cipher.encrypt(nonce, plaintext)?;
+        Ok(ciphertext)
+    }
+
+    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Nonce::from_slice(b"unique_nonce_");
+        let plaintext = self.cipher.decrypt(nonce, ciphertext)?;
+        Ok(plaintext)
+    }
 }
 
-fn process_file(input_path: &Path, output_path: &Path, key: &[u8]) -> io::Result<()> {
-    let mut input_file = fs::File::open(input_path)?;
-    let mut output_file = fs::File::create(output_path)?;
+pub fn process_file_data(data: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
+    let encryptor = FileEncryptor::new();
+    let encrypted = encryptor.encrypt(data)?;
+    let decrypted = encryptor.decrypt(&encrypted)?;
     
-    let mut buffer = [0u8; BUFFER_SIZE];
-    let key_len = key.len();
-    let mut key_index = 0;
-    
-    loop {
-        let bytes_read = input_file.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        
-        for i in 0..bytes_read {
-            buffer[i] ^= key[key_index];
-            key_index = (key_index + 1) % key_len;
-        }
-        
-        output_file.write_all(&buffer[..bytes_read])?;
+    if data != decrypted.as_slice() {
+        return Err("Decryption failed: data mismatch".into());
     }
     
-    Ok(())
+    Ok((encrypted, decrypted))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_decryption() {
-        let original_content = b"Hello, World! This is a test message.";
-        let key = b"secret_key";
+    fn test_encryption_roundtrip() {
+        let test_data = b"Confidential file content";
+        let result = process_file_data(test_data);
         
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
+        assert!(result.is_ok());
+        let (encrypted, decrypted) = result.unwrap();
         
-        fs::write(input_file.path(), original_content).unwrap();
-        
-        encrypt_file(input_file.path(), encrypted_file.path(), key).unwrap();
-        decrypt_file(encrypted_file.path(), decrypted_file.path(), key).unwrap();
-        
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content, decrypted_content.as_slice());
+        assert_ne!(encrypted, test_data);
+        assert_eq!(decrypted, test_data);
     }
 }
