@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
+    cache: HashMap<String, Vec<f64>>,
     validation_rules: Vec<ValidationRule>,
 }
 
@@ -16,134 +16,85 @@ pub struct ValidationRule {
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            data: HashMap::new(),
+            cache: HashMap::new(),
             validation_rules: Vec::new(),
         }
-    }
-
-    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) -> Result<(), String> {
-        if name.is_empty() {
-            return Err("Dataset name cannot be empty".to_string());
-        }
-
-        if values.is_empty() {
-            return Err("Dataset values cannot be empty".to_string());
-        }
-
-        self.data.insert(name, values);
-        Ok(())
     }
 
     pub fn add_validation_rule(&mut self, rule: ValidationRule) {
         self.validation_rules.push(rule);
     }
 
-    pub fn validate_all(&self) -> Vec<ValidationResult> {
-        let mut results = Vec::new();
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
 
         for rule in &self.validation_rules {
-            if let Some(values) = self.data.get(&rule.field_name) {
-                let validation_result = self.validate_dataset(&rule, values);
-                results.push(validation_result);
-            } else if rule.required {
-                results.push(ValidationResult {
-                    field_name: rule.field_name.clone(),
-                    valid: false,
-                    message: "Required field not found".to_string(),
-                });
+            if rule.required && data.iter().any(|&x| x.is_nan()) {
+                return Err(format!("Field '{}' contains invalid values", rule.field_name));
             }
         }
 
-        results
+        let processed_data: Vec<f64> = data
+            .iter()
+            .map(|&value| {
+                let mut transformed = value;
+                
+                for rule in &self.validation_rules {
+                    if value < rule.min_value {
+                        transformed = rule.min_value;
+                    } else if value > rule.max_value {
+                        transformed = rule.max_value;
+                    }
+                }
+                
+                transformed * 1.05
+            })
+            .collect();
+
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
+        
+        Ok(processed_data)
     }
 
-    fn validate_dataset(&self, rule: &ValidationRule, values: &[f64]) -> ValidationResult {
-        let mut invalid_count = 0;
-        
-        for &value in values {
-            if value < rule.min_value || value > rule.max_value {
-                invalid_count += 1;
-            }
-        }
-
-        if invalid_count > 0 {
-            ValidationResult {
-                field_name: rule.field_name.clone(),
-                valid: false,
-                message: format!("{} values out of range", invalid_count),
-            }
-        } else {
-            ValidationResult {
-                field_name: rule.field_name.clone(),
-                valid: true,
-                message: "All values within valid range".to_string(),
-            }
-        }
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
     }
 
     pub fn calculate_statistics(&self, dataset_name: &str) -> Option<DatasetStatistics> {
-        self.data.get(dataset_name).map(|values| {
-            let count = values.len();
-            let sum: f64 = values.iter().sum();
-            let mean = sum / count as f64;
+        self.cache.get(dataset_name).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
             
-            let variance: f64 = values.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count as f64;
+            let variance: f64 = data.iter()
+                .map(|&value| (value - mean).powi(2))
+                .sum::<f64>() / count;
             
-            let std_dev = variance.sqrt();
-
             DatasetStatistics {
-                count,
                 mean,
-                std_dev,
-                min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
-                max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                variance,
+                min: *data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                max: *data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                count: data.len(),
             }
         })
     }
-
-    pub fn normalize_dataset(&mut self, dataset_name: &str) -> Result<(), String> {
-        if let Some(values) = self.data.get_mut(dataset_name) {
-            if values.is_empty() {
-                return Err("Cannot normalize empty dataset".to_string());
-            }
-
-            let stats = self.calculate_statistics(dataset_name).unwrap();
-            
-            if stats.std_dev == 0.0 {
-                return Err("Cannot normalize dataset with zero standard deviation".to_string());
-            }
-
-            for value in values.iter_mut() {
-                *value = (*value - stats.mean) / stats.std_dev;
-            }
-            
-            Ok(())
-        } else {
-            Err(format!("Dataset '{}' not found", dataset_name))
-        }
-    }
-}
-
-pub struct ValidationResult {
-    field_name: String,
-    valid: bool,
-    message: String,
 }
 
 pub struct DatasetStatistics {
-    count: usize,
-    mean: f64,
-    std_dev: f64,
-    min: f64,
-    max: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
 }
 
 impl ValidationRule {
-    pub fn new(field_name: String, min_value: f64, max_value: f64, required: bool) -> Self {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
         ValidationRule {
-            field_name,
+            field_name: field_name.to_string(),
             min_value,
             max_value,
             required,
@@ -156,34 +107,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_dataset() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
-        let result = processor.add_dataset("test_data".to_string(), vec![1.0, 2.0, 3.0]);
+        processor.add_validation_rule(ValidationRule::new("temperature", -50.0, 150.0, true));
+        
+        let test_data = vec![25.0, 30.0, 35.0, 40.0];
+        let result = processor.process_dataset("test_set", &test_data);
+        
         assert!(result.is_ok());
+        assert_eq!(processor.get_cached_data("test_set").unwrap().len(), 4);
     }
 
     #[test]
-    fn test_calculate_statistics() {
+    fn test_statistics_calculation() {
         let mut processor = DataProcessor::new();
-        processor.add_dataset("test_data".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        let test_data = vec![10.0, 20.0, 30.0, 40.0];
         
-        let stats = processor.calculate_statistics("test_data").unwrap();
-        assert_eq!(stats.count, 5);
-        assert_eq!(stats.mean, 3.0);
-        assert_eq!(stats.min, 1.0);
-        assert_eq!(stats.max, 5.0);
-    }
-
-    #[test]
-    fn test_validation() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("temperature".to_string(), vec![20.5, 25.0, 30.2, 15.8]).unwrap();
+        processor.process_dataset("stats_test", &test_data).unwrap();
+        let stats = processor.calculate_statistics("stats_test").unwrap();
         
-        let rule = ValidationRule::new("temperature".to_string(), 10.0, 35.0, true);
-        processor.add_validation_rule(rule);
-        
-        let results = processor.validate_all();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].valid);
+        assert_eq!(stats.mean, 26.25);
+        assert_eq!(stats.min, 10.5);
+        assert_eq!(stats.max, 42.0);
+        assert_eq!(stats.count, 4);
     }
 }
