@@ -1,135 +1,114 @@
-
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<HashMap<String, String>>,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            cache: HashMap::new(),
         }
     }
 
-    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
+        }
 
-        if let Some(header_result) = lines.next() {
-            let header_line = header_result?;
-            let headers: Vec<String> = header_line.split(',').map(|s| s.trim().to_string()).collect();
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
 
-            for line_result in lines {
-                let line = line_result?;
-                let values: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
-                
-                if values.len() == headers.len() {
-                    let mut record = HashMap::new();
-                    for (i, header) in headers.iter().enumerate() {
-                        record.insert(header.clone(), values[i].clone());
-                    }
-                    self.records.push(record);
-                }
+        let validated = self.validate_data(data)?;
+        let normalized = self.normalize_data(&validated);
+        let transformed = self.apply_transformations(&normalized);
+
+        self.cache.insert(key.to_string(), transformed.clone());
+        Ok(transformed)
+    }
+
+    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
+        for &value in data {
+            if !value.is_finite() {
+                return Err("Invalid numeric value detected".to_string());
             }
         }
+        Ok(data.to_vec())
+    }
+
+    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
         
-        Ok(())
-    }
-
-    pub fn calculate_average(&self, column_name: &str) -> Option<f64> {
-        let mut sum = 0.0;
-        let mut count = 0;
-
-        for record in &self.records {
-            if let Some(value_str) = record.get(column_name) {
-                if let Ok(value) = value_str.parse::<f64>() {
-                    sum += value;
-                    count += 1;
-                }
-            }
+        if variance.abs() < 1e-10 {
+            return vec![0.0; data.len()];
         }
 
-        if count > 0 {
-            Some(sum / count as f64)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_unique_values(&self, column_name: &str) -> Vec<String> {
-        let mut unique_values = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-
-        for record in &self.records {
-            if let Some(value) = record.get(column_name) {
-                if !seen.contains(value) {
-                    seen.insert(value.clone());
-                    unique_values.push(value.clone());
-                }
-            }
-        }
-
-        unique_values
-    }
-
-    pub fn filter_records<F>(&self, predicate: F) -> Vec<HashMap<String, String>>
-    where
-        F: Fn(&HashMap<String, String>) -> bool,
-    {
-        self.records.iter()
-            .filter(|record| predicate(record))
-            .cloned()
+        data.iter()
+            .map(|&x| (x - mean) / variance.sqrt())
             .collect()
     }
 
-    pub fn record_count(&self) -> usize {
-        self.records.len()
+    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
+        data.iter()
+            .map(|&x| x.powi(2).ln_1p().tanh())
+            .collect()
     }
 
-    pub fn column_names(&self) -> Vec<String> {
-        if let Some(first_record) = self.records.first() {
-            first_record.keys().cloned().collect()
-        } else {
-            Vec::new()
-        }
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_stats(&self) -> (usize, usize) {
+        let total_items = self.cache.len();
+        let total_values = self.cache.values()
+            .map(|v| v.len())
+            .sum();
+        (total_items, total_values)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,score").unwrap();
-        writeln!(temp_file, "Alice,25,85.5").unwrap();
-        writeln!(temp_file, "Bob,30,92.0").unwrap();
-        writeln!(temp_file, "Charlie,25,78.5").unwrap();
+    fn test_processor_validation() {
+        let processor = DataProcessor::new();
+        let valid_data = vec![1.0, 2.0, 3.0];
+        let invalid_data = vec![1.0, f64::NAN, 3.0];
 
+        assert!(processor.validate_data(&valid_data).is_ok());
+        assert!(processor.validate_data(&invalid_data).is_err());
+    }
+
+    #[test]
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
-        let result = processor.load_csv(temp_file.path().to_str().unwrap());
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        
+        let result = processor.process_dataset("test", &data);
         assert!(result.is_ok());
-        assert_eq!(processor.record_count(), 3);
+        
+        let cached_result = processor.process_dataset("test", &data);
+        assert_eq!(result.unwrap(), cached_result.unwrap());
+    }
 
-        let avg_age = processor.calculate_average("age");
-        assert_eq!(avg_age, Some(26.666666666666668));
-
-        let unique_ages = processor.get_unique_values("age");
-        assert_eq!(unique_ages.len(), 2);
-        assert!(unique_ages.contains(&"25".to_string()));
-        assert!(unique_ages.contains(&"30".to_string()));
-
-        let filtered = processor.filter_records(|record| {
-            record.get("age").map_or(false, |age| age == "25")
-        });
-        assert_eq!(filtered.len(), 2);
+    #[test]
+    fn test_cache_operations() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0];
+        
+        processor.process_dataset("key1", &data).unwrap();
+        processor.process_dataset("key2", &data).unwrap();
+        
+        let stats = processor.cache_stats();
+        assert_eq!(stats, (2, 6));
+        
+        processor.clear_cache();
+        assert_eq!(processor.cache_stats(), (0, 0));
     }
 }
