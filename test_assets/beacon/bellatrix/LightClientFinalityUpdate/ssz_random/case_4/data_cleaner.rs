@@ -67,3 +67,51 @@ mod tests {
         assert_eq!(cleaner.get_data().len(), 2);
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+fn normalize_string(s: &str) -> String {
+    s.trim().to_lowercase()
+}
+
+fn filter_record(record: &Record) -> bool {
+    record.value >= 0.0 && !record.name.is_empty()
+}
+
+fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    for result in reader.deserialize() {
+        let mut record: Record = result?;
+        
+        record.name = normalize_string(&record.name);
+        record.category = normalize_string(&record.category);
+        
+        if filter_record(&record) {
+            writer.serialize(&record)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "raw_data.csv";
+    let output_file = "cleaned_data.csv";
+    
+    process_csv(input_file, output_file)?;
+    
+    println!("Data cleaning completed successfully");
+    Ok(())
+}
