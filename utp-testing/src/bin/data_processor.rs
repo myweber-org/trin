@@ -560,4 +560,87 @@ mod tests {
         let stats = processor.calculate_statistics();
         assert!((stats.0 - 116.833).abs() < 0.001);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { records: Vec::new() }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut reader = Reader::from_reader(file);
+
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_value(&self, threshold: f64) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.value >= threshold && record.active)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == target_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "id,name,value,active").unwrap();
+        writeln!(file, "1,alpha,42.5,true").unwrap();
+        writeln!(file, "2,beta,18.3,false").unwrap();
+        writeln!(file, "3,gamma,67.2,true").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_load_and_filter() {
+        let test_file = create_test_csv();
+        let mut processor = DataProcessor::new();
+        
+        processor.load_from_csv(test_file.path().to_str().unwrap()).unwrap();
+        
+        let filtered = processor.filter_by_value(40.0);
+        assert_eq!(filtered.len(), 2);
+        
+        let avg = processor.calculate_average().unwrap();
+        assert!((avg - 42.666).abs() < 0.001);
+    }
 }
