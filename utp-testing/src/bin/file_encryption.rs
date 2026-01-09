@@ -1,115 +1,87 @@
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use hex;
-use rand::Rng;
-use std::error::Error;
 
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-
-pub fn generate_key() -> [u8; 32] {
-    let mut rng = rand::thread_rng();
-    let mut key = [0u8; 32];
-    rng.fill(&mut key);
-    key
-}
-
-pub fn generate_iv() -> [u8; 16] {
-    let mut rng = rand::thread_rng();
-    let mut iv = [0u8; 16];
-    rng.fill(&mut iv);
-    iv
-}
-
-pub fn encrypt_data(plaintext: &[u8], key: &[u8; 32], iv: &[u8; 16]) -> Result<String, Box<dyn Error>> {
-    let ciphertext = Aes256CbcEnc::new(key.into(), iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
-    Ok(hex::encode(ciphertext))
-}
-
-pub fn decrypt_data(ciphertext_hex: &str, key: &[u8; 32], iv: &[u8; 16]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let ciphertext = hex::decode(ciphertext_hex)?;
-    let plaintext = Aes256CbcDec::new(key.into(), iv.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)?;
-    Ok(plaintext)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_encryption_roundtrip() {
-        let key = generate_key();
-        let iv = generate_iv();
-        let original_data = b"Secret message for encryption test";
-
-        let encrypted = encrypt_data(original_data, &key, &iv).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key, &iv).unwrap();
-
-        assert_eq!(original_data.to_vec(), decrypted);
-    }
-}use aes_gcm::{
+use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
 };
-use std::error::Error;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
 
-pub fn encrypt_data(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(b"unique_nonce_");
-    
-    let ciphertext = cipher.encrypt(nonce, plaintext)
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-    
-    let mut result = nonce.to_vec();
-    result.extend_from_slice(&ciphertext);
-    Ok(result)
+const NONCE_SIZE: usize = 12;
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path) -> io::Result<()> {
+    let mut rng = OsRng;
+    let key = Aes256Gcm::generate_key(&mut rng);
+    let cipher = Aes256Gcm::new(&key);
+
+    let nonce_bytes: [u8; NONCE_SIZE] = rand::random();
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let mut input_file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    input_file.read_to_end(&mut plaintext)?;
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&key)?;
+    output_file.write_all(nonce_bytes.as_ref())?;
+    output_file.write_all(&ciphertext)?;
+
+    Ok(())
 }
 
-pub fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    if ciphertext.len() < 12 {
-        return Err("Invalid ciphertext length".into());
+pub fn decrypt_file(input_path: &Path, output_path: &Path) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut encrypted_data = Vec::new();
+    input_file.read_to_end(&mut encrypted_data)?;
+
+    if encrypted_data.len() < 32 + NONCE_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "File too short to contain key and nonce",
+        ));
     }
-    
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let (nonce_slice, encrypted_data) = ciphertext.split_at(12);
-    let nonce = Nonce::from_slice(nonce_slice);
-    
-    let plaintext = cipher.decrypt(nonce, encrypted_data)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-    
-    Ok(plaintext)
-}
 
-pub fn generate_key() -> Vec<u8> {
-    let key: [u8; 32] = OsRng.gen();
-    key.to_vec()
+    let key = Key::<Aes256Gcm>::from_slice(&encrypted_data[..32]);
+    let cipher = Aes256Gcm::new(key);
+
+    let nonce_start = 32;
+    let nonce_end = nonce_start + NONCE_SIZE;
+    let nonce = Nonce::from_slice(&encrypted_data[nonce_start..nonce_end]);
+
+    let ciphertext = &encrypted_data[nonce_end..];
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&plaintext)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let key = generate_key();
-        let original_data = b"Secret message for encryption test";
-        
-        let encrypted = encrypt_data(original_data, &key).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key).unwrap();
-        
-        assert_eq!(original_data.to_vec(), decrypted);
-    }
-    
-    #[test]
-    fn test_wrong_key_fails() {
-        let key1 = generate_key();
-        let key2 = generate_key();
-        let data = b"Test data";
-        
-        let encrypted = encrypt_data(data, &key1).unwrap();
-        let result = decrypt_data(&encrypted, &key2);
-        
-        assert!(result.is_err());
+    fn test_encryption_decryption() {
+        let original_content = b"Secret data that needs protection";
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), original_content).unwrap();
+
+        encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+        decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.as_ref(), decrypted_content);
     }
 }
