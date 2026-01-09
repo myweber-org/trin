@@ -1,61 +1,105 @@
+
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub valid: bool,
+}
 
 pub struct DataProcessor {
-    data: Vec<f64>,
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor { data: Vec::new() }
+        DataProcessor {
+            records: Vec::new(),
+        }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
         let reader = BufReader::new(file);
+        let mut count = 0;
 
-        for line in reader.lines() {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
-            if let Ok(value) = line.trim().parse::<f64>() {
-                self.data.push(value);
+            
+            if line_num == 0 {
+                continue;
             }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            let category = parts[2].to_string();
+            let valid = parts[3].parse::<bool>().unwrap_or(false);
+
+            let record = DataRecord {
+                id,
+                value,
+                category,
+                valid,
+            };
+
+            self.records.push(record);
+            count += 1;
         }
 
-        Ok(())
+        Ok(count)
     }
 
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = self.data.iter().sum();
-        Some(sum / self.data.len() as f64)
-    }
-
-    pub fn calculate_standard_deviation(&self) -> Option<f64> {
-        if self.data.len() < 2 {
-            return None;
-        }
-
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.data
+    pub fn filter_valid(&self) -> Vec<&DataRecord> {
+        self.records
             .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.data.len() - 1) as f64;
-
-        Some(variance.sqrt())
+            .filter(|record| record.valid)
+            .collect()
     }
 
-    pub fn get_summary(&self) -> String {
-        let mean = self.calculate_mean()
-            .map_or("N/A".to_string(), |v| format!("{:.4}", v));
-        let std_dev = self.calculate_standard_deviation()
-            .map_or("N/A".to_string(), |v| format!("{:.4}", v));
-        let count = self.data.len();
+    pub fn calculate_average(&self) -> Option<f64> {
+        let valid_records: Vec<&DataRecord> = self.filter_valid();
+        
+        if valid_records.is_empty() {
+            return None;
+        }
 
-        format!("Count: {}, Mean: {}, Std Dev: {}", count, mean, std_dev)
+        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
+        Some(sum / valid_records.len() as f64)
+    }
+
+    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&DataRecord>> {
+        let mut groups = std::collections::HashMap::new();
+        
+        for record in &self.records {
+            groups
+                .entry(record.category.clone())
+                .or_insert_with(Vec::new)
+                .push(record);
+        }
+        
+        groups
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
     }
 }
 
@@ -66,19 +110,71 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor() {
+    fn test_data_processor_creation() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.count_records(), 0);
+    }
+
+    #[test]
+    fn test_load_csv() {
         let mut processor = DataProcessor::new();
         
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "10.5\n15.2\n12.8\n18.3\n14.1").unwrap();
+        writeln!(temp_file, "id,value,category,valid").unwrap();
+        writeln!(temp_file, "1,10.5,CategoryA,true").unwrap();
+        writeln!(temp_file, "2,20.3,CategoryB,false").unwrap();
+        writeln!(temp_file, "3,15.7,CategoryA,true").unwrap();
         
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        let result = processor.load_from_csv(temp_file.path());
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+        assert_eq!(processor.count_records(), 3);
+    }
+
+    #[test]
+    fn test_filter_valid() {
+        let mut processor = DataProcessor::new();
         
-        let mean = processor.calculate_mean().unwrap();
-        let std_dev = processor.calculate_standard_deviation().unwrap();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category,valid").unwrap();
+        writeln!(temp_file, "1,10.5,CategoryA,true").unwrap();
+        writeln!(temp_file, "2,20.3,CategoryB,false").unwrap();
+        writeln!(temp_file, "3,15.7,CategoryA,true").unwrap();
         
-        assert!((mean - 14.18).abs() < 0.01);
-        assert!((std_dev - 2.89).abs() < 0.01);
+        processor.load_from_csv(temp_file.path()).unwrap();
+        let valid_records = processor.filter_valid();
+        assert_eq!(valid_records.len(), 2);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category,valid").unwrap();
+        writeln!(temp_file, "1,10.0,CategoryA,true").unwrap();
+        writeln!(temp_file, "2,20.0,CategoryB,true").unwrap();
+        writeln!(temp_file, "3,30.0,CategoryA,true").unwrap();
+        
+        processor.load_from_csv(temp_file.path()).unwrap();
+        let average = processor.calculate_average();
+        assert_eq!(average, Some(20.0));
+    }
+
+    #[test]
+    fn test_group_by_category() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category,valid").unwrap();
+        writeln!(temp_file, "1,10.5,CategoryA,true").unwrap();
+        writeln!(temp_file, "2,20.3,CategoryB,false").unwrap();
+        writeln!(temp_file, "3,15.7,CategoryA,true").unwrap();
+        
+        processor.load_from_csv(temp_file.path()).unwrap();
+        let groups = processor.group_by_category();
+        
+        assert_eq!(groups.get("CategoryA").unwrap().len(), 2);
+        assert_eq!(groups.get("CategoryB").unwrap().len(), 1);
     }
 }
