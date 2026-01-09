@@ -69,3 +69,39 @@ mod tests {
         assert_eq!(decrypted_content, plain_text);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+
+fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
+
+fn process_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let processed_data = xor_cipher(&buffer, key);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&processed_data)?;
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 4 {
+        eprintln!("Usage: {} <input> <output> <key>", args[0]);
+        std::process::exit(1);
+    }
+
+    let key = args[3].as_bytes();
+    process_file(&args[1], &args[2], key)?;
+
+    println!("File processed successfully");
+    Ok(())
+}
