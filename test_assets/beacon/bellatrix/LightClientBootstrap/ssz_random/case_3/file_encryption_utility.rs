@@ -21,8 +21,8 @@ impl FileEncryptor {
         let argon2 = Argon2::default();
         let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
         
-        let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
-        let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
+        let key_bytes = password_hash.hash.unwrap().as_bytes();
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes[..32]);
         let cipher = Aes256Gcm::new(key);
         
         Ok(Self { cipher })
@@ -32,8 +32,7 @@ impl FileEncryptor {
         let data = fs::read(input_path)?;
         let nonce = Nonce::generate(&mut OsRng);
         
-        let encrypted_data = self.cipher.encrypt(&nonce, data.as_ref())
-            .map_err(|e| format!("Encryption failed: {}", e))?;
+        let encrypted_data = self.cipher.encrypt(&nonce, data.as_ref())?;
         
         let mut output = nonce.to_vec();
         output.extend_from_slice(&encrypted_data);
@@ -52,8 +51,7 @@ impl FileEncryptor {
         let nonce = Nonce::from_slice(&encrypted_data[..12]);
         let ciphertext = &encrypted_data[12..];
         
-        let decrypted_data = self.cipher.decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Decryption failed: {}", e))?;
+        let decrypted_data = self.cipher.decrypt(nonce, ciphertext)?;
         
         fs::write(output_path, decrypted_data)?;
         Ok(())
@@ -66,9 +64,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let encryptor = FileEncryptor::new("test_password").unwrap();
-        let test_data = b"Hello, secure world!";
+    fn test_encryption_decryption() {
+        let test_password = "secure_password_123";
+        let test_data = b"Test data for encryption and decryption";
+        
+        let encryptor = FileEncryptor::new(test_password).unwrap();
         
         let input_file = NamedTempFile::new().unwrap();
         let encrypted_file = NamedTempFile::new().unwrap();
@@ -87,6 +87,6 @@ mod tests {
         ).unwrap();
         
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(test_data.to_vec(), decrypted_data);
+        assert_eq!(decrypted_data, test_data);
     }
 }
