@@ -88,4 +88,95 @@ mod tests {
         assert_eq!(stats.get("min"), Some(&1.0));
         assert_eq!(stats.get("max"), Some(&4.0));
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value
+                .partial_cmp(&b.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    pub fn validate_records(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (index, record) in self.records.iter().enumerate() {
+            if record.name.trim().is_empty() {
+                errors.push(format!("Record {} has empty name", index));
+            }
+            if record.value < 0.0 {
+                errors.push(format!("Record {} has negative value: {}", index, record.value));
+            }
+        }
+        errors
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_processing() {
+        let csv_data = "id,name,value,category\n1,ItemA,42.5,Alpha\n2,ItemB,17.3,Beta\n3,ItemC,89.1,Alpha";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let mut processor = DataProcessor::new();
+        processor.load_from_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(processor.records.len(), 3);
+        assert_eq!(processor.filter_by_category("Alpha").len(), 2);
+        assert!((processor.calculate_average().unwrap() - 49.6333).abs() < 0.001);
+        assert_eq!(processor.find_max_value().unwrap().id, 3);
+        assert!(processor.validate_records().is_empty());
+    }
 }
