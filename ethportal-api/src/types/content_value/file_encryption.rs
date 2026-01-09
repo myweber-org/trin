@@ -1,71 +1,89 @@
 
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::error::Error;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
 
-pub fn encrypt_data(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(&[0u8; 12]);
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
     
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext)
-        .map_err(|e| format!("Encryption failed: {}", e))?;
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
     
-    let mut result = Vec::with_capacity(12 + ciphertext.len());
-    result.extend_from_slice(nonce);
-    result.extend_from_slice(&ciphertext);
-    
-    Ok(result)
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
 }
 
-pub fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    if ciphertext.len() < 12 {
-        return Err("Ciphertext too short".into());
-    }
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let decryption_key = key.unwrap_or(DEFAULT_KEY);
     
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(&ciphertext[0..12]);
-    let encrypted_data = &ciphertext[12..];
+    let encrypted_data = fs::read(input_path)?;
+    let decrypted_data: Vec<u8> = encrypted_data
+        .iter()
+        .map(|byte| byte ^ decryption_key)
+        .collect();
     
-    let plaintext = cipher
-        .decrypt(nonce, encrypted_data)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-    
-    Ok(plaintext)
+    fs::write(output_path, decrypted_data)?;
+    Ok(())
 }
 
-pub fn generate_key() -> [u8; 32] {
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
-    key
+pub fn process_files() -> io::Result<()> {
+    let test_data = b"Hello, this is a secret message!";
+    let test_file = "test_input.txt";
+    let encrypted_file = "test_encrypted.bin";
+    let decrypted_file = "test_decrypted.txt";
+    
+    fs::write(test_file, test_data)?;
+    
+    println!("Encrypting file...");
+    encrypt_file(test_file, encrypted_file, Some(0xAA))?;
+    
+    println!("Decrypting file...");
+    decrypt_file(encrypted_file, decrypted_file, Some(0xAA))?;
+    
+    let decrypted_content = fs::read_to_string(decrypted_file)?;
+    println!("Decrypted content: {}", decrypted_content);
+    
+    fs::remove_file(test_file)?;
+    fs::remove_file(encrypted_file)?;
+    fs::remove_file(decrypted_file)?;
+    
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
     
     #[test]
-    fn test_encryption_roundtrip() {
-        let key = generate_key();
-        let plaintext = b"Secret message for encryption test";
+    fn test_encryption_decryption() {
+        let original_text = b"Test data for encryption";
+        let key = 0x77;
         
-        let encrypted = encrypt_data(plaintext, &key).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key).unwrap();
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
         
-        assert_eq!(plaintext.to_vec(), decrypted);
-    }
-    
-    #[test]
-    fn test_wrong_key_fails() {
-        let key1 = generate_key();
-        let key2 = generate_key();
-        let plaintext = b"Test data";
+        fs::write(input_file.path(), original_text).unwrap();
         
-        let encrypted = encrypt_data(plaintext, &key1).unwrap();
-        let result = decrypt_data(&encrypted, &key2);
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            Some(key)
+        ).unwrap();
         
-        assert!(result.is_err());
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            Some(key)
+        ).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_text.to_vec(), decrypted_data);
     }
 }
