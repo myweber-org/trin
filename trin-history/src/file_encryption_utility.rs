@@ -124,4 +124,131 @@ mod tests {
         let key = generate_random_key();
         assert_eq!(key.len(), 32);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use argon2::{
+    password_hash::{rand_core::OsRng as ArgonRng, PasswordHasher, SaltString},
+    Argon2,
+};
+use std::fs;
+use std::io::{self, Read, Write};
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+
+pub fn encrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)?;
+
+    let salt = SaltString::generate(&mut ArgonRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+    let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+
+    let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&[0u8; NONCE_LENGTH]);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(salt.as_bytes())?;
+    output.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(
+    input_path: &str,
+    output_path: &str,
+    password: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(input_path)?;
+    let mut encrypted_data = Vec::new();
+    file.read_to_end(&mut encrypted_data)?;
+
+    if encrypted_data.len() < SALT_LENGTH {
+        return Err("File too short to contain salt".into());
+    }
+
+    let (salt_bytes, ciphertext) = encrypted_data.split_at(SALT_LENGTH);
+    let salt = SaltString::from_b64(std::str::from_utf8(salt_bytes)?)?;
+
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+    let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+
+    let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&[0u8; NONCE_LENGTH]);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    fs::write(output_path, plaintext)?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("File Encryption Utility");
+    println!("1. Encrypt file");
+    println!("2. Decrypt file");
+
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    let choice = choice.trim();
+
+    match choice {
+        "1" => {
+            println!("Enter input file path:");
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            let input = input.trim();
+
+            println!("Enter output file path:");
+            let mut output = String::new();
+            io::stdin().read_line(&mut output)?;
+            let output = output.trim();
+
+            println!("Enter password:");
+            let mut password = String::new();
+            io::stdin().read_line(&mut password)?;
+            let password = password.trim();
+
+            encrypt_file(input, output, password)?;
+            println!("Encryption completed successfully.");
+        }
+        "2" => {
+            println!("Enter input file path:");
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            let input = input.trim();
+
+            println!("Enter output file path:");
+            let mut output = String::new();
+            io::stdin().read_line(&mut output)?;
+            let output = output.trim();
+
+            println!("Enter password:");
+            let mut password = String::new();
+            io::stdin().read_line(&mut password)?;
+            let password = password.trim();
+
+            decrypt_file(input, output, password)?;
+            println!("Decryption completed successfully.");
+        }
+        _ => println!("Invalid choice."),
+    }
+
+    Ok(())
 }
