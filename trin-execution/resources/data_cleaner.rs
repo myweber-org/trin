@@ -1,74 +1,51 @@
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
 
-use std::collections::HashSet;
-
-pub struct DataCleaner {
-    pub remove_duplicates: bool,
-    pub normalize_whitespace: bool,
-    pub trim_strings: bool,
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
 }
 
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            remove_duplicates: true,
-            normalize_whitespace: true,
-            trim_strings: true,
+fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    for result in reader.deserialize() {
+        let mut record: Record = result?;
+        
+        record.name = record.name.trim().to_string();
+        record.category = record.category.to_uppercase();
+        
+        if record.value < 0.0 {
+            record.value = 0.0;
         }
+        
+        writer.serialize(&record)?;
     }
 
-    pub fn clean_dataset(&self, data: Vec<String>) -> Vec<String> {
-        let mut processed: Vec<String> = data
-            .into_iter()
-            .map(|item| {
-                let mut result = item;
-                
-                if self.trim_strings {
-                    result = result.trim().to_string();
-                }
-                
-                if self.normalize_whitespace {
-                    result = result.split_whitespace().collect::<Vec<&str>>().join(" ");
-                }
-                
-                result
-            })
-            .collect();
-
-        if self.remove_duplicates {
-            let unique_set: HashSet<String> = processed.drain(..).collect();
-            processed = unique_set.into_iter().collect();
-        }
-
-        processed.sort();
-        processed
-    }
+    writer.flush()?;
+    Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() && 
+    record.value >= 0.0 && 
+    !record.category.is_empty()
+}
 
-    #[test]
-    fn test_cleaner_removes_duplicates() {
-        let cleaner = DataCleaner::new();
-        let data = vec![
-            "apple".to_string(),
-            "banana".to_string(),
-            "apple".to_string(),
-            "cherry".to_string(),
-        ];
-        
-        let cleaned = cleaner.clean_dataset(data);
-        assert_eq!(cleaned.len(), 3);
-        assert_eq!(cleaned, vec!["apple", "banana", "cherry"]);
+fn main() -> Result<(), Box<dyn Error>> {
+    let input = "data/raw.csv";
+    let output = "data/cleaned.csv";
+    
+    match clean_csv_data(input, output) {
+        Ok(_) => println!("Data cleaning completed successfully"),
+        Err(e) => eprintln!("Error during data cleaning: {}", e),
     }
-
-    #[test]
-    fn test_cleaner_normalizes_whitespace() {
-        let cleaner = DataCleaner::new();
-        let data = vec!["  hello   world  ".to_string()];
-        
-        let cleaned = cleaner.clean_dataset(data);
-        assert_eq!(cleaned[0], "hello world");
-    }
+    
+    Ok(())
 }
