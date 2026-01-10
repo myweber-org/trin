@@ -1,123 +1,175 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+    pub timestamp: u64,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String, timestamp: u64) -> Self {
+        DataRecord {
+            id,
+            value,
+            category,
+            timestamp,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.id > 0 && self.value.is_finite() && !self.category.is_empty()
+    }
+}
+
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            delimiter,
-            has_header,
+            records: Vec::new(),
         }
     }
 
-    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
+    pub fn add_record(&mut self, record: DataRecord) {
+        if record.is_valid() {
+            self.records.push(record);
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
+        let mut rdr = csv::Reader::from_reader(reader);
+        let mut count = 0;
 
-        if self.has_header {
-            lines.next();
-        }
-
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() {
-                records.push(fields);
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
             }
         }
 
-        Ok(records)
+        Ok(count)
     }
 
-    pub fn validate_numeric_fields(&self, data: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, Box<dyn Error>> {
-        let mut numeric_values = Vec::new();
-        
-        for (row_index, row) in data.iter().enumerate() {
-            if column_index < row.len() {
-                match row[column_index].parse::<f64>() {
-                    Ok(value) => numeric_values.push(value),
-                    Err(_) => return Err(format!("Invalid numeric value at row {}, column {}: '{}'", 
-                        row_index + 1, column_index, row[column_index]).into()),
-                }
-            } else {
-                return Err(format!("Column index {} out of bounds at row {}", column_index, row_index + 1).into());
-            }
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut wtr = csv::Writer::from_writer(writer);
+
+        for record in &self.records {
+            wtr.serialize(record)?;
         }
-        
-        Ok(numeric_values)
+
+        wtr.flush()?;
+        Ok(())
     }
 
-    pub fn calculate_statistics(&self, numbers: &[f64]) -> (f64, f64, f64) {
-        if numbers.is_empty() {
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn get_stats(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
             return (0.0, 0.0, 0.0);
         }
 
-        let sum: f64 = numbers.iter().sum();
-        let mean = sum / numbers.len() as f64;
-        
-        let variance: f64 = numbers.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / numbers.len() as f64;
-        
-        let std_dev = variance.sqrt();
-        
-        (mean, variance, std_dev)
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let avg = self.calculate_average().unwrap_or(0.0);
+
+        (min, max, avg)
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_processing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary").unwrap();
-        writeln!(temp_file, "Alice,30,50000.5").unwrap();
-        writeln!(temp_file, "Bob,25,45000.0").unwrap();
-        
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_csv(temp_file.path()).unwrap();
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "50000.5"]);
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 42.5, "test".to_string(), 1234567890);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(0, 42.5, "test".to_string(), 1234567890);
+        assert!(!invalid_record.is_valid());
     }
 
     #[test]
-    fn test_numeric_validation() {
-        let data = vec![
-            vec!["10.5".to_string(), "20.0".to_string()],
-            vec!["15.0".to_string(), "25.5".to_string()],
-        ];
-        
-        let processor = DataProcessor::new(',', false);
-        let numbers = processor.validate_numeric_fields(&data, 0).unwrap();
-        
-        assert_eq!(numbers, vec![10.5, 15.0]);
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert!(processor.is_empty());
+
+        processor.add_record(DataRecord::new(1, 10.0, "A".to_string(), 1000));
+        processor.add_record(DataRecord::new(2, 20.0, "A".to_string(), 2000));
+        processor.add_record(DataRecord::new(3, 30.0, "B".to_string(), 3000));
+
+        assert_eq!(processor.len(), 3);
+        assert_eq!(processor.filter_by_category("A").len(), 2);
+        assert_eq!(processor.calculate_average(), Some(20.0));
+
+        let (min, max, avg) = processor.get_stats();
+        assert_eq!(min, 10.0);
+        assert_eq!(max, 30.0);
+        assert_eq!(avg, 20.0);
     }
 
     #[test]
-    fn test_statistics_calculation() {
-        let numbers = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let processor = DataProcessor::new(',', false);
-        let (mean, variance, std_dev) = processor.calculate_statistics(&numbers);
-        
-        assert_eq!(mean, 3.0);
-        assert_eq!(variance, 2.0);
-        assert_eq!(std_dev, 2.0_f64.sqrt());
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        processor.add_record(DataRecord::new(1, 10.0, "test".to_string(), 1000));
+        processor.add_record(DataRecord::new(2, 20.0, "test".to_string(), 2000));
+
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+
+        processor.save_to_csv(path)?;
+
+        let mut new_processor = DataProcessor::new();
+        let count = new_processor.load_from_csv(path)?;
+
+        assert_eq!(count, 2);
+        assert_eq!(new_processor.len(), 2);
+        Ok(())
     }
 }
