@@ -1,80 +1,179 @@
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use argon2::{
+    password_hash::{rand_core::OsRng as ArgonRng, PasswordHasher, SaltString},
+    Argon2,
+};
+use std::fs;
+use std::io::{self, Read, Write};
 use std::path::Path;
 
-pub struct XORCipher {
-    key: Vec<u8>,
+const NONCE_SIZE: usize = 12;
+const SALT_SIZE: usize = 16;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub nonce: [u8; NONCE_SIZE],
+    pub salt: [u8; SALT_SIZE],
 }
 
-impl XORCipher {
-    pub fn new(key: &str) -> Self {
-        XORCipher {
-            key: key.as_bytes().to_vec(),
-        }
-    }
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, String> {
+    let salt_string = SaltString::encode_b64(salt).map_err(|e| e.to_string())?;
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt_string)
+        .map_err(|e| e.to_string())?;
 
-    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
-        self.process_file(input_path, output_path, true)
-    }
+    let hash_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+    let key_bytes: [u8; 32] = hash_bytes.as_bytes()[..32]
+        .try_into()
+        .map_err(|_| "Hash too short")?;
 
-    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
-        self.process_file(input_path, output_path, false)
-    }
-
-    fn process_file(&self, input_path: &str, output_path: &str, _is_encrypt: bool) -> Result<(), String> {
-        let input_path_obj = Path::new(input_path);
-        let output_path_obj = Path::new(output_path);
-
-        if !input_path_obj.exists() {
-            return Err(format!("Input file does not exist: {}", input_path));
-        }
-
-        let mut input_file = File::open(input_path)
-            .map_err(|e| format!("Failed to open input file: {}", e))?;
-
-        let mut buffer = Vec::new();
-        input_file.read_to_end(&mut buffer)
-            .map_err(|e| format!("Failed to read input file: {}", e))?;
-
-        let processed_data = self.xor_transform(&buffer);
-
-        let mut output_file = File::create(output_path_obj)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-        output_file.write_all(&processed_data)
-            .map_err(|e| format!("Failed to write output file: {}", e))?;
-
-        Ok(())
-    }
-
-    fn xor_transform(&self, data: &[u8]) -> Vec<u8> {
-        let key_len = self.key.len();
-        if key_len == 0 {
-            return data.to_vec();
-        }
-
-        data.iter()
-            .enumerate()
-            .map(|(i, &byte)| byte ^ self.key[i % key_len])
-            .collect()
-    }
-
-    pub fn encrypt_string(&self, text: &str) -> Vec<u8> {
-        self.xor_transform(text.as_bytes())
-    }
-
-    pub fn decrypt_string(&self, encrypted: &[u8]) -> String {
-        let decrypted = self.xor_transform(encrypted);
-        String::from_utf8_lossy(&decrypted).to_string()
-    }
+    Ok(Key::<Aes256Gcm>::from_slice(&key_bytes).clone())
 }
 
-pub fn calculate_file_hash(path: &str) -> Result<String, String> {
-    let content = fs::read(path)
-        .map_err(|e| format!("Failed to read file for hash calculation: {}", e))?;
+pub fn encrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str,
+) -> Result<EncryptionResult, String> {
+    let mut file = fs::File::open(input_path).map_err(|e| e.to_string())?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| e.to_string())?;
 
-    let hash = sha256::digest(&content);
-    Ok(hash)
+    let mut rng = OsRng;
+    let mut salt = [0u8; SALT_SIZE];
+    ArgonRng.fill_bytes(&mut salt);
+
+    let key = derive_key(password, &salt)?;
+    let cipher = Aes256Gcm::new(&key);
+
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    rng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = fs::File::create(output_path).map_err(|e| e.to_string())?;
+    output_file
+        .write_all(&ciphertext)
+        .map_err(|e| e.to_string())?;
+
+    Ok(EncryptionResult {
+        ciphertext,
+        nonce: nonce_bytes,
+        salt,
+    })
+}
+
+pub fn decrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str,
+    nonce: &[u8; NONCE_SIZE],
+    salt: &[u8; SALT_SIZE],
+) -> Result<Vec<u8>, String> {
+    let mut file = fs::File::open(input_path).map_err(|e| e.to_string())?;
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext).map_err(|e| e.to_string())?;
+
+    let key = derive_key(password, salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(nonce);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = fs::File::create(output_path).map_err(|e| e.to_string())?;
+    output_file
+        .write_all(&plaintext)
+        .map_err(|e| e.to_string())?;
+
+    Ok(plaintext)
+}
+
+pub fn interactive_encrypt() -> Result<(), String> {
+    println!("Enter input file path:");
+    let mut input_path = String::new();
+    io::stdin()
+        .read_line(&mut input_path)
+        .map_err(|e| e.to_string())?;
+    let input_path = Path::new(input_path.trim());
+
+    println!("Enter output file path:");
+    let mut output_path = String::new();
+    io::stdin()
+        .read_line(&mut output_path)
+        .map_err(|e| e.to_string())?;
+    let output_path = Path::new(output_path.trim());
+
+    println!("Enter encryption password:");
+    let mut password = String::new();
+    io::stdin()
+        .read_line(&mut password)
+        .map_err(|e| e.to_string())?;
+    let password = password.trim();
+
+    let result = encrypt_file(input_path, output_path, password)?;
+    println!("Encryption successful!");
+    println!("Nonce (hex): {}", hex::encode(result.nonce));
+    println!("Salt (hex): {}", hex::encode(result.salt));
+    println!("Save these values for decryption.");
+
+    Ok(())
+}
+
+pub fn interactive_decrypt() -> Result<(), String> {
+    println!("Enter encrypted file path:");
+    let mut input_path = String::new();
+    io::stdin()
+        .read_line(&mut input_path)
+        .map_err(|e| e.to_string())?;
+    let input_path = Path::new(input_path.trim());
+
+    println!("Enter output file path:");
+    let mut output_path = String::new();
+    io::stdin()
+        .read_line(&mut output_path)
+        .map_err(|e| e.to_string())?;
+    let output_path = Path::new(output_path.trim());
+
+    println!("Enter decryption password:");
+    let mut password = String::new();
+    io::stdin()
+        .read_line(&mut password)
+        .map_err(|e| e.to_string())?;
+    let password = password.trim();
+
+    println!("Enter nonce (hex):");
+    let mut nonce_hex = String::new();
+    io::stdin()
+        .read_line(&mut nonce_hex)
+        .map_err(|e| e.to_string())?;
+    let nonce = hex::decode(nonce_hex.trim())
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "Invalid nonce length")?;
+
+    println!("Enter salt (hex):");
+    let mut salt_hex = String::new();
+    io::stdin()
+        .read_line(&mut salt_hex)
+        .map_err(|e| e.to_string())?;
+    let salt = hex::decode(salt_hex.trim())
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "Invalid salt length")?;
+
+    decrypt_file(input_path, output_path, password, &nonce, &salt)?;
+    println!("Decryption successful!");
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -83,49 +182,28 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_xor_cipher_symmetry() {
-        let cipher = XORCipher::new("secret_key");
-        let original_text = "Hello, World! This is a test message.";
-
-        let encrypted = cipher.encrypt_string(original_text);
-        let decrypted = cipher.decrypt_string(&encrypted);
-
-        assert_eq!(original_text, decrypted);
-    }
-
-    #[test]
-    fn test_file_encryption_decryption() {
-        let cipher = XORCipher::new("test_key_123");
-        let original_content = b"Sample file content for encryption test.";
+    fn test_encryption_roundtrip() {
+        let plaintext = b"Test encryption data";
+        let password = "secure_password_123";
 
         let input_file = NamedTempFile::new().unwrap();
-        let output_encrypted = NamedTempFile::new().unwrap();
-        let output_decrypted = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
 
-        fs::write(input_file.path(), original_content).unwrap();
+        fs::write(input_file.path(), plaintext).unwrap();
 
-        cipher.encrypt_file(
-            input_file.path().to_str().unwrap(),
-            output_encrypted.path().to_str().unwrap()
-        ).unwrap();
+        let enc_result =
+            encrypt_file(input_file.path(), encrypted_file.path(), password).unwrap();
 
-        cipher.decrypt_file(
-            output_encrypted.path().to_str().unwrap(),
-            output_decrypted.path().to_str().unwrap()
-        ).unwrap();
+        let decrypted = decrypt_file(
+            encrypted_file.path(),
+            decrypted_file.path(),
+            password,
+            &enc_result.nonce,
+            &enc_result.salt,
+        )
+        .unwrap();
 
-        let decrypted_content = fs::read(output_decrypted.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
-    }
-
-    #[test]
-    fn test_empty_key() {
-        let cipher = XORCipher::new("");
-        let text = "Test text";
-        
-        let encrypted = cipher.encrypt_string(text);
-        let decrypted = cipher.decrypt_string(&encrypted);
-        
-        assert_eq!(text, decrypted);
+        assert_eq!(plaintext.to_vec(), decrypted);
     }
 }
