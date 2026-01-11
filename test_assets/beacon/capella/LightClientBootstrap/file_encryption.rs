@@ -1,154 +1,60 @@
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use hex;
-use rand::RngCore;
+
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
 
-const KEY_SIZE: usize = 32;
-const IV_SIZE: usize = 16;
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
 
-pub fn generate_key() -> Vec<u8> {
-    let mut key = vec![0u8; KEY_SIZE];
-    rand::thread_rng().fill_bytes(&mut key);
-    key
-}
-
-pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), String> {
-    if key.len() != KEY_SIZE {
-        return Err(format!("Key must be {} bytes", KEY_SIZE));
-    }
-
-    let mut file = fs::File::open(input_path)
-        .map_err(|e| format!("Failed to open input file: {}", e))?;
-    let mut plaintext = Vec::new();
-    file.read_to_end(&mut plaintext)
-        .map_err(|e| format!("Failed to read input file: {}", e))?;
-
-    let mut iv = [0u8; IV_SIZE];
-    rand::thread_rng().fill_bytes(&mut iv);
-
-    let ciphertext = Aes256CbcEnc::new(key.into(), &iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
-
-    let mut output = fs::File::create(output_path)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-    output.write_all(&iv).map_err(|e| format!("Failed to write IV: {}", e))?;
-    output.write_all(&ciphertext).map_err(|e| format!("Failed to write ciphertext: {}", e))?;
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
 
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), String> {
-    if key.len() != KEY_SIZE {
-        return Err(format!("Key must be {} bytes", KEY_SIZE));
-    }
-
-    let mut file = fs::File::open(input_path)
-        .map_err(|e| format!("Failed to open input file: {}", e))?;
-    let mut encrypted_data = Vec::new();
-    file.read_to_end(&mut encrypted_data)
-        .map_err(|e| format!("Failed to read input file: {}", e))?;
-
-    if encrypted_data.len() < IV_SIZE {
-        return Err("File too short to contain IV".to_string());
-    }
-
-    let (iv, ciphertext) = encrypted_data.split_at(IV_SIZE);
-    let iv_array: [u8; IV_SIZE] = iv.try_into().unwrap();
-
-    let plaintext = Aes256CbcDec::new(key.into(), &iv_array.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-
-    fs::write(output_path, plaintext)
-        .map_err(|e| format!("Failed to write output file: {}", e))?;
-
-    Ok(())
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_encryption_decryption() {
-        let key = generate_key();
-        let test_data = b"Hello, this is a secret message!";
+        let original_content = b"Secret data to protect";
+        let key = b"mysecretkey";
 
         let input_file = NamedTempFile::new().unwrap();
         let encrypted_file = NamedTempFile::new().unwrap();
         let decrypted_file = NamedTempFile::new().unwrap();
 
-        fs::write(input_file.path(), test_data).unwrap();
+        fs::write(input_file.path(), original_content).unwrap();
 
-        encrypt_file(
+        xor_encrypt_file(
             input_file.path().to_str().unwrap(),
             encrypted_file.path().to_str().unwrap(),
-            &key,
-        ).unwrap();
+            key,
+        )
+        .unwrap();
 
-        decrypt_file(
+        xor_decrypt_file(
             encrypted_file.path().to_str().unwrap(),
             decrypted_file.path().to_str().unwrap(),
-            &key,
-        ).unwrap();
+            key,
+        )
+        .unwrap();
 
-        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(test_data.to_vec(), decrypted_data);
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content, decrypted_content.as_slice());
     }
-}
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::fs;
-use std::io::{self, Write};
-
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let key = Key::<Aes256Gcm>::generate(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::generate(&mut OsRng);
-
-    let plaintext = fs::read(input_path)?;
-    let ciphertext = cipher
-        .encrypt(&nonce, plaintext.as_ref())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    let mut output = fs::File::create(output_path)?;
-    output.write_all(&nonce)?;
-    output.write_all(&ciphertext)?;
-
-    println!("Encryption successful. Key: {}", hex::encode(key));
-    Ok(())
-}
-
-pub fn decrypt_file(input_path: &str, output_path: &str, key_hex: &str) -> io::Result<()> {
-    let key_bytes = hex::decode(key_hex)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(key);
-
-    let data = fs::read(input_path)?;
-    if data.len() < 12 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File too short to contain nonce",
-        ));
-    }
-
-    let (nonce_bytes, ciphertext) = data.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
-
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    fs::write(output_path, plaintext)?;
-    println!("Decryption successful.");
-    Ok(())
 }
