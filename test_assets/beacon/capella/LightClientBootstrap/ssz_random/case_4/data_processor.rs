@@ -286,3 +286,156 @@ mod tests {
         assert_eq!(transformed, vec![2.0, 4.0, 6.0]);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue(f64),
+    InvalidTimestamp(i64),
+    EmptyCategory,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            ProcessingError::InvalidTimestamp(t) => write!(f, "Invalid timestamp: {}", t),
+            ProcessingError::EmptyCategory => write!(f, "Category cannot be empty"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    min_value: f64,
+    max_value: f64,
+    allowed_categories: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(min_value: f64, max_value: f64, allowed_categories: Vec<String>) -> Self {
+        DataProcessor {
+            min_value,
+            max_value,
+            allowed_categories,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value < self.min_value || record.value > self.max_value {
+            return Err(ProcessingError::InvalidValue(record.value));
+        }
+
+        if record.timestamp < 0 {
+            return Err(ProcessingError::InvalidTimestamp(record.timestamp));
+        }
+
+        if record.category.trim().is_empty() {
+            return Err(ProcessingError::EmptyCategory);
+        }
+
+        if !self.allowed_categories.contains(&record.category) {
+            return Err(ProcessingError::ValidationFailed(format!(
+                "Category '{}' not allowed",
+                record.category
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_value(&self, record: &DataRecord) -> f64 {
+        let normalized = (record.value - self.min_value) / (self.max_value - self.min_value);
+        normalized * 100.0
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut processed = Vec::with_capacity(records.len());
+        
+        for record in records {
+            self.validate_record(&record)?;
+            
+            let mut transformed = record.clone();
+            transformed.value = self.transform_value(&record);
+            processed.push(transformed);
+        }
+        
+        Ok(processed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(
+            0.0,
+            100.0,
+            vec!["A".to_string(), "B".to_string()],
+        );
+        
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 1234567890,
+            category: "A".to_string(),
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_value() {
+        let processor = DataProcessor::new(
+            0.0,
+            100.0,
+            vec!["A".to_string()],
+        );
+        
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 1234567890,
+            category: "A".to_string(),
+        };
+        
+        match processor.validate_record(&record) {
+            Err(ProcessingError::InvalidValue(v)) => assert_eq!(v, 150.0),
+            _ => panic!("Expected InvalidValue error"),
+        }
+    }
+
+    #[test]
+    fn test_transform_value() {
+        let processor = DataProcessor::new(
+            0.0,
+            100.0,
+            vec!["A".to_string()],
+        );
+        
+        let record = DataRecord {
+            id: 1,
+            value: 75.0,
+            timestamp: 1234567890,
+            category: "A".to_string(),
+        };
+        
+        let transformed = processor.transform_value(&record);
+        assert!((transformed - 75.0).abs() < 0.001);
+    }
+}
