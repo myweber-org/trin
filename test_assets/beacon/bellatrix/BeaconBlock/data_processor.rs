@@ -1,123 +1,118 @@
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
-use std::collections::HashMap;
-
-pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
-    validation_rules: Vec<ValidationRule>,
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
 }
 
-pub struct ValidationRule {
-    field_name: String,
-    min_value: f64,
-    max_value: f64,
-    required: bool,
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            cache: HashMap::new(),
-            validation_rules: Vec::new(),
+            records: Vec::new(),
         }
     }
 
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
-    }
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
 
-    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Dataset cannot be empty".to_string());
-        }
-
-        let validated_data = self.validate_data(data)?;
-        let transformed_data = self.transform_data(&validated_data);
-        
-        self.cache.insert(dataset_name.to_string(), transformed_data.clone());
-        
-        Ok(transformed_data)
-    }
-
-    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
-        for rule in &self.validation_rules {
-            if rule.required && data.is_empty() {
-                return Err(format!("Field '{}' is required but missing", rule.field_name));
-            }
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
             
-            for &value in data {
-                if value < rule.min_value || value > rule.max_value {
-                    return Err(format!(
-                        "Value {} for field '{}' is outside allowed range [{}, {}]",
-                        value, rule.field_name, rule.min_value, rule.max_value
-                    ));
-                }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
             }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                return Err(format!("Invalid CSV format at line {}", line_num + 1).into());
+            }
+
+            let id = parts[0].parse::<u32>()?;
+            let value = parts[1].parse::<f64>()?;
+            let category = parts[2].to_string();
+
+            if !Self::validate_record(&category, value) {
+                return Err(format!("Validation failed at line {}", line_num + 1).into());
+            }
+
+            self.records.push(DataRecord { id, value, category });
+            count += 1;
         }
-        
-        Ok(data.to_vec())
+
+        Ok(count)
     }
 
-    fn transform_data(&self, data: &[f64]) -> Vec<f64> {
-        let mean = data.iter().sum::<f64>() / data.len() as f64;
-        let std_dev = self.calculate_std_dev(data, mean);
-        
-        data.iter()
-            .map(|&x| (x - mean) / std_dev)
+    fn validate_record(category: &str, value: f64) -> bool {
+        !category.is_empty() && value >= 0.0 && value <= 1000.0
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
             .collect()
     }
 
-    fn calculate_std_dev(&self, data: &[f64], mean: f64) -> f64 {
-        let variance = data.iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / data.len() as f64;
-        
-        variance.sqrt()
-    }
-
-    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
-        self.cache.get(dataset_name)
-    }
-
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
-    }
-}
-
-impl ValidationRule {
-    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
-        ValidationRule {
-            field_name: field_name.to_string(),
-            min_value,
-            max_value,
-            required,
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
         }
+
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let avg = self.calculate_average().unwrap_or(0.0);
+
+        (min, max, avg)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_data_processor() {
         let mut processor = DataProcessor::new();
-        processor.add_validation_rule(ValidationRule::new("temperature", -50.0, 100.0, true));
         
-        let data = vec![20.5, 25.0, 30.5, 35.0];
-        let result = processor.process_dataset("weather", &data);
-        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,100.5,CategoryA").unwrap();
+        writeln!(temp_file, "2,200.3,CategoryB").unwrap();
+        writeln!(temp_file, "3,300.7,CategoryA").unwrap();
+
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
         assert!(result.is_ok());
-        assert_eq!(processor.get_cached_data("weather").unwrap().len(), 4);
-    }
+        assert_eq!(result.unwrap(), 3);
 
-    #[test]
-    fn test_validation_failure() {
-        let mut processor = DataProcessor::new();
-        processor.add_validation_rule(ValidationRule::new("pressure", 900.0, 1100.0, true));
-        
-        let invalid_data = vec![850.0, 950.0, 1150.0];
-        let result = processor.process_dataset("pressure_data", &invalid_data);
-        
-        assert!(result.is_err());
+        let avg = processor.calculate_average();
+        assert!(avg.is_some());
+        assert!((avg.unwrap() - 200.5).abs() < 0.1);
+
+        let filtered = processor.filter_by_category("CategoryA");
+        assert_eq!(filtered.len(), 2);
+
+        let stats = processor.get_statistics();
+        assert!((stats.0 - 100.5).abs() < 0.1);
+        assert!((stats.1 - 300.7).abs() < 0.1);
     }
 }
