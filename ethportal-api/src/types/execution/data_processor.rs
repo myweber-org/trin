@@ -1,173 +1,97 @@
-
 use std::error::Error;
-use std::fmt;
-
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-}
-
-#[derive(Debug)]
-pub enum ProcessingError {
-    InvalidValue(f64),
-    InvalidCategory(String),
-    EmptyDataset,
-}
-
-impl fmt::Display for ProcessingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProcessingError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
-            ProcessingError::InvalidCategory(c) => write!(f, "Invalid category: {}", c),
-            ProcessingError::EmptyDataset => write!(f, "Dataset is empty"),
-        }
-    }
-}
-
-impl Error for ProcessingError {}
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    file_path: String,
+    delimiter: char,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
         DataProcessor {
-            records: Vec::new(),
+            file_path: file_path.to_string(),
+            delimiter,
         }
     }
 
-    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
-        if record.value < 0.0 || record.value > 1000.0 {
-            return Err(ProcessingError::InvalidValue(record.value));
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut records = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+                records.push(fields);
+            }
         }
 
-        if record.category.is_empty() || record.category.len() > 50 {
-            return Err(ProcessingError::InvalidCategory(record.category));
-        }
-
-        self.records.push(record);
-        Ok(())
+        Ok(records)
     }
 
-    pub fn calculate_average(&self) -> Result<f64, ProcessingError> {
-        if self.records.is_empty() {
-            return Err(ProcessingError::EmptyDataset);
-        }
-
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Ok(sum / self.records.len() as f64)
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
-    }
-
-    pub fn transform_values<F>(&mut self, transform_fn: F)
+    pub fn filter_records<F>(&self, predicate: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
     where
-        F: Fn(f64) -> f64,
+        F: Fn(&[String]) -> bool,
     {
-        for record in &mut self.records {
-            record.value = transform_fn(record.value);
-        }
+        let records = self.process()?;
+        let filtered: Vec<Vec<String>> = records
+            .into_iter()
+            .filter(|record| predicate(record))
+            .collect();
+        
+        Ok(filtered)
     }
 
-    pub fn get_statistics(&self) -> (f64, f64, f64) {
-        if self.records.is_empty() {
-            return (0.0, 0.0, 0.0);
-        }
-
-        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
-        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let avg = values.iter().sum::<f64>() / values.len() as f64;
-
-        (min, max, avg)
+    pub fn count_records(&self) -> Result<usize, Box<dyn Error>> {
+        let records = self.process()?;
+        Ok(records.len())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_add_valid_record() {
-        let mut processor = DataProcessor::new();
-        let record = DataRecord {
-            id: 1,
-            value: 100.0,
-            category: "test".to_string(),
-        };
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
 
-        assert!(processor.add_record(record).is_ok());
-        assert_eq!(processor.records.len(), 1);
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let records = processor.process().unwrap();
+        
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["name", "age", "city"]);
+        assert_eq!(records[1], vec!["Alice", "30", "New York"]);
     }
 
     #[test]
-    fn test_add_invalid_value() {
-        let mut processor = DataProcessor::new();
-        let record = DataRecord {
-            id: 1,
-            value: -10.0,
-            category: "test".to_string(),
-        };
+    fn test_filter_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
 
-        assert!(processor.add_record(record).is_err());
-    }
-
-    #[test]
-    fn test_calculate_average() {
-        let mut processor = DataProcessor::new();
-        processor
-            .add_record(DataRecord {
-                id: 1,
-                value: 50.0,
-                category: "A".to_string(),
-            })
-            .unwrap();
-        processor
-            .add_record(DataRecord {
-                id: 2,
-                value: 100.0,
-                category: "B".to_string(),
-            })
-            .unwrap();
-
-        assert_eq!(processor.calculate_average().unwrap(), 75.0);
-    }
-
-    #[test]
-    fn test_filter_by_category() {
-        let mut processor = DataProcessor::new();
-        processor
-            .add_record(DataRecord {
-                id: 1,
-                value: 10.0,
-                category: "cat1".to_string(),
-            })
-            .unwrap();
-        processor
-            .add_record(DataRecord {
-                id: 2,
-                value: 20.0,
-                category: "cat2".to_string(),
-            })
-            .unwrap();
-        processor
-            .add_record(DataRecord {
-                id: 3,
-                value: 30.0,
-                category: "cat1".to_string(),
-            })
-            .unwrap();
-
-        let filtered = processor.filter_by_category("cat1");
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|r| r.category == "cat1"));
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let filtered = processor.filter_records(|record| {
+            record.len() > 1 && record[1].parse::<i32>().unwrap_or(0) > 30
+        }).unwrap();
+        
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0], vec!["Charlie", "35", "Paris"]);
     }
 }
