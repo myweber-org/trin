@@ -233,3 +233,147 @@ mod tests {
         assert_eq!(processor.cache_stats(), (1, 3));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: &str) -> Self {
+        let valid = value >= 0.0 && !category.is_empty();
+        DataRecord {
+            id,
+            value,
+            category: category.to_string(),
+            valid,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn transform(&self) -> f64 {
+        if self.valid {
+            self.value * 2.5
+        } else {
+            0.0
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+
+            let id = parts[0].parse::<u32>().unwrap_or(0);
+            let value = parts[1].parse::<f64>().unwrap_or(0.0);
+            let category = parts[2].trim();
+
+            let record = DataRecord::new(id, value, category);
+            self.records.push(record);
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    pub fn filter_valid(&self) -> Vec<&DataRecord> {
+        self.records.iter().filter(|r| r.is_valid()).collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.filter_valid()
+            .iter()
+            .map(|r| r.transform())
+            .sum()
+    }
+
+    pub fn get_statistics(&self) -> (usize, usize, f64) {
+        let valid_count = self.filter_valid().len();
+        let total_count = self.records.len();
+        let total_value = self.calculate_total();
+        
+        (valid_count, total_count, total_value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, 42.5, "category_a");
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "category_a");
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(2, -5.0, "category_b");
+        assert!(!record.is_valid());
+    }
+
+    #[test]
+    fn test_transform() {
+        let valid_record = DataRecord::new(3, 10.0, "test");
+        assert_eq!(valid_record.transform(), 25.0);
+        
+        let invalid_record = DataRecord::new(4, -10.0, "test");
+        assert_eq!(invalid_record.transform(), 0.0);
+    }
+
+    #[test]
+    fn test_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(1, 10.0, "a");
+        let record2 = DataRecord::new(2, -5.0, "b");
+        
+        processor.records.push(record1);
+        processor.records.push(record2);
+        
+        let valid_records = processor.filter_valid();
+        assert_eq!(valid_records.len(), 1);
+        
+        let stats = processor.get_statistics();
+        assert_eq!(stats.0, 1);
+        assert_eq!(stats.1, 2);
+        assert_eq!(stats.2, 25.0);
+    }
+}
