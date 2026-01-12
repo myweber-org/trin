@@ -185,3 +185,68 @@ mod tests {
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use std::error::Error;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new() -> Result<Self, Box<dyn Error>> {
+        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
+        let cipher = Aes256Gcm::new(&key);
+        Ok(Self { cipher })
+    }
+
+    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let nonce = Nonce::generate(&mut OsRng);
+        let ciphertext = self.cipher.encrypt(&nonce, plaintext)?;
+        
+        let mut result = Vec::with_capacity(nonce.len() + ciphertext.len());
+        result.extend_from_slice(nonce.as_slice());
+        result.extend_from_slice(&ciphertext);
+        
+        Ok(result)
+    }
+
+    pub fn decrypt_data(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        if ciphertext.len() < 12 {
+            return Err("Invalid ciphertext length".into());
+        }
+        
+        let nonce = Nonce::from_slice(&ciphertext[..12]);
+        let ciphertext_data = &ciphertext[12..];
+        
+        let plaintext = self.cipher.decrypt(nonce, ciphertext_data)?;
+        Ok(plaintext)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let encryptor = FileEncryptor::new().unwrap();
+        let test_data = b"Secret file content that needs protection";
+        
+        let encrypted = encryptor.encrypt_data(test_data).unwrap();
+        let decrypted = encryptor.decrypt_data(&encrypted).unwrap();
+        
+        assert_eq!(test_data.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_invalid_ciphertext() {
+        let encryptor = FileEncryptor::new().unwrap();
+        let invalid_data = b"too short";
+        
+        let result = encryptor.decrypt_data(invalid_data);
+        assert!(result.is_err());
+    }
+}
