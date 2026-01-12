@@ -1,180 +1,156 @@
 
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::fmt;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone)]
+pub struct ProcessingError {
+    message: String,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Processing error: {}", self.message)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            message: msg.to_string(),
+        }
+    }
+}
+
 pub struct DataRecord {
     pub id: u32,
     pub value: f64,
-    pub category: String,
-    pub valid: bool,
+    pub timestamp: i64,
 }
 
-pub struct DataProcessor {
-    records: Vec<DataRecord>,
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<Self, ProcessingError> {
+        if id == 0 {
+            return Err(ProcessingError::new("ID cannot be zero"));
+        }
+        if !value.is_finite() {
+            return Err(ProcessingError::new("Value must be finite"));
+        }
+        if timestamp < 0 {
+            return Err(ProcessingError::new("Timestamp cannot be negative"));
+        }
+
+        Ok(DataRecord {
+            id,
+            value,
+            timestamp,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.value < 0.0 || self.value > 1000.0 {
+            return Err(ProcessingError::new("Value out of valid range (0-1000)"));
+        }
+        Ok(())
+    }
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
-        }
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<f64>, ProcessingError> {
+    if records.is_empty() {
+        return Err(ProcessingError::new("No records to process"));
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut count = 0;
-
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_num == 0 {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 4 {
-                continue;
-            }
-
-            let id = match parts[0].parse::<u32>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-
-            let value = match parts[1].parse::<f64>() {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-
-            let category = parts[2].to_string();
-            let valid = parts[3].parse::<bool>().unwrap_or(false);
-
-            let record = DataRecord {
-                id,
-                value,
-                category,
-                valid,
-            };
-
-            self.records.push(record);
-            count += 1;
-        }
-
-        Ok(count)
+    let mut results = Vec::with_capacity(records.len());
+    for record in records {
+        record.validate()?;
+        let processed_value = transform_value(record.value)?;
+        results.push(processed_value);
     }
 
-    pub fn filter_valid(&self) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.valid)
-            .collect()
+    Ok(results)
+}
+
+fn transform_value(value: f64) -> Result<f64, ProcessingError> {
+    if value <= 0.0 {
+        return Err(ProcessingError::new("Value must be positive for transformation"));
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        let valid_records: Vec<&DataRecord> = self.filter_valid();
-        
-        if valid_records.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
-        Some(sum / valid_records.len() as f64)
+    let transformed = (value * 2.5).ln() / (value + 1.0).sqrt();
+    if transformed.is_nan() || transformed.is_infinite() {
+        return Err(ProcessingError::new("Transformation produced invalid result"));
     }
 
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&DataRecord>> {
-        let mut groups = std::collections::HashMap::new();
-        
-        for record in &self.records {
-            groups
-                .entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
-        }
-        
-        groups
+    Ok(transformed)
+}
+
+pub fn calculate_statistics(values: &[f64]) -> Result<(f64, f64, f64), ProcessingError> {
+    if values.is_empty() {
+        return Err(ProcessingError::new("Cannot calculate statistics for empty dataset"));
     }
 
-    pub fn count_records(&self) -> usize {
-        self.records.len()
-    }
+    let sum: f64 = values.iter().sum();
+    let mean = sum / values.len() as f64;
+
+    let variance: f64 = values
+        .iter()
+        .map(|&x| (x - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64;
+
+    let std_dev = variance.sqrt();
+
+    Ok((mean, variance, std_dev))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor_creation() {
-        let processor = DataProcessor::new();
-        assert_eq!(processor.count_records(), 0);
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 50.5, 1234567890).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 50.5);
+        assert_eq!(record.timestamp, 1234567890);
     }
 
     #[test]
-    fn test_load_csv() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,10.5,CategoryA,true").unwrap();
-        writeln!(temp_file, "2,20.3,CategoryB,false").unwrap();
-        writeln!(temp_file, "3,15.7,CategoryA,true").unwrap();
-        
-        let result = processor.load_from_csv(temp_file.path());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
-        assert_eq!(processor.count_records(), 3);
+    fn test_invalid_record_creation() {
+        assert!(DataRecord::new(0, 50.5, 1234567890).is_err());
+        assert!(DataRecord::new(1, f64::INFINITY, 1234567890).is_err());
+        assert!(DataRecord::new(1, 50.5, -1).is_err());
     }
 
     #[test]
-    fn test_filter_valid() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,10.5,CategoryA,true").unwrap();
-        writeln!(temp_file, "2,20.3,CategoryB,false").unwrap();
-        writeln!(temp_file, "3,15.7,CategoryA,true").unwrap();
-        
-        processor.load_from_csv(temp_file.path()).unwrap();
-        let valid_records = processor.filter_valid();
-        assert_eq!(valid_records.len(), 2);
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 500.0, 1234567890).unwrap();
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(1, 1500.0, 1234567890).unwrap();
+        assert!(invalid_record.validate().is_err());
     }
 
     #[test]
-    fn test_calculate_average() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,10.0,CategoryA,true").unwrap();
-        writeln!(temp_file, "2,20.0,CategoryB,true").unwrap();
-        writeln!(temp_file, "3,30.0,CategoryA,true").unwrap();
-        
-        processor.load_from_csv(temp_file.path()).unwrap();
-        let average = processor.calculate_average();
-        assert_eq!(average, Some(20.0));
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 100.0, 1234567890).unwrap(),
+            DataRecord::new(2, 200.0, 1234567891).unwrap(),
+        ];
+
+        let results = process_records(&records).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_finite());
+        assert!(results[1].is_finite());
     }
 
     #[test]
-    fn test_group_by_category() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,10.5,CategoryA,true").unwrap();
-        writeln!(temp_file, "2,20.3,CategoryB,false").unwrap();
-        writeln!(temp_file, "3,15.7,CategoryA,true").unwrap();
-        
-        processor.load_from_csv(temp_file.path()).unwrap();
-        let groups = processor.group_by_category();
-        
-        assert_eq!(groups.get("CategoryA").unwrap().len(), 2);
-        assert_eq!(groups.get("CategoryB").unwrap().len(), 1);
+    fn test_calculate_statistics() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = calculate_statistics(&values).unwrap();
+
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
     }
 }
