@@ -1,4 +1,3 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -6,9 +5,9 @@ use std::path::Path;
 
 pub struct DataRecord {
     pub id: u32,
+    pub name: String,
     pub value: f64,
-    pub category: String,
-    pub valid: bool,
+    pub timestamp: String,
 }
 
 pub struct DataProcessor {
@@ -22,85 +21,73 @@ impl DataProcessor {
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
-        let path = Path::new(file_path);
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        
         let mut count = 0;
+
         for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
             
-            // Skip header
             if line_num == 0 {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split(',').collect();
             if parts.len() != 4 {
                 continue;
             }
-            
+
             let id = match parts[0].parse::<u32>() {
                 Ok(val) => val,
                 Err(_) => continue,
             };
+
+            let name = parts[1].to_string();
             
-            let value = match parts[1].parse::<f64>() {
+            let value = match parts[2].parse::<f64>() {
                 Ok(val) => val,
                 Err(_) => continue,
             };
-            
-            let category = parts[2].to_string();
-            let valid = match parts[3].to_lowercase().as_str() {
-                "true" | "1" | "yes" => true,
-                _ => false,
-            };
-            
-            self.records.push(DataRecord {
+
+            let timestamp = parts[3].to_string();
+
+            let record = DataRecord {
                 id,
+                name,
                 value,
-                category,
-                valid,
-            });
-            
+                timestamp,
+            };
+
+            self.records.push(record);
             count += 1;
         }
-        
+
         Ok(count)
     }
 
-    pub fn filter_valid(&self) -> Vec<&DataRecord> {
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<&DataRecord> {
         self.records
             .iter()
-            .filter(|record| record.valid)
+            .filter(|record| record.value > threshold)
             .collect()
     }
 
     pub fn calculate_average(&self) -> Option<f64> {
-        let valid_records: Vec<&DataRecord> = self.filter_valid();
-        
-        if valid_records.is_empty() {
+        if self.records.is_empty() {
             return None;
         }
-        
-        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
-        Some(sum / valid_records.len() as f64)
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
     }
 
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&DataRecord>> {
-        let mut groups = std::collections::HashMap::new();
-        
-        for record in &self.records {
-            if record.valid {
-                groups
-                    .entry(record.category.clone())
-                    .or_insert_with(Vec::new)
-                    .push(record);
-            }
-        }
-        
-        groups
+    pub fn find_by_id(&self, target_id: u32) -> Option<&DataRecord> {
+        self.records.iter().find(|record| record.id == target_id)
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
     }
 }
 
@@ -114,31 +101,24 @@ mod tests {
     fn test_data_processor() {
         let mut processor = DataProcessor::new();
         
-        // Create test CSV
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,10.5,category_a,true").unwrap();
-        writeln!(temp_file, "2,20.3,category_b,false").unwrap();
-        writeln!(temp_file, "3,15.7,category_a,true").unwrap();
-        
-        let file_path = temp_file.path().to_str().unwrap();
-        
-        // Test loading
-        let count = processor.load_from_csv(file_path).unwrap();
+        writeln!(temp_file, "id,name,value,timestamp").unwrap();
+        writeln!(temp_file, "1,test1,10.5,2023-01-01").unwrap();
+        writeln!(temp_file, "2,test2,20.3,2023-01-02").unwrap();
+        writeln!(temp_file, "3,test3,5.2,2023-01-03").unwrap();
+
+        let count = processor.load_from_csv(temp_file.path()).unwrap();
         assert_eq!(count, 3);
-        
-        // Test filtering
-        let valid_records = processor.filter_valid();
-        assert_eq!(valid_records.len(), 2);
-        
-        // Test average calculation
+        assert_eq!(processor.record_count(), 3);
+
         let avg = processor.calculate_average().unwrap();
-        assert!((avg - 13.1).abs() < 0.0001);
-        
-        // Test grouping
-        let groups = processor.group_by_category();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups.get("category_a").unwrap().len(), 2);
-        assert_eq!(groups.get("category_b").unwrap().len(), 0);
+        assert!((avg - 12.0).abs() < 0.01);
+
+        let filtered = processor.filter_by_threshold(10.0);
+        assert_eq!(filtered.len(), 2);
+
+        let found = processor.find_by_id(2);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "test2");
     }
 }
