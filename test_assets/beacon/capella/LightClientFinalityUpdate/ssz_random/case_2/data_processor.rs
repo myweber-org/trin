@@ -95,3 +95,129 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub field: String,
+    pub message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error for field '{}': {}", self.field, self.message)
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct DataProcessor {
+    validators: HashMap<String, Box<dyn Fn(&str) -> Result<(), ValidationError>>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validators: HashMap::new(),
+            transformers: HashMap::new(),
+        }
+    }
+
+    pub fn add_validator<F>(&mut self, field: &str, validator: F)
+    where
+        F: Fn(&str) -> Result<(), ValidationError> + 'static,
+    {
+        self.validators.insert(field.to_string(), Box::new(validator));
+    }
+
+    pub fn add_transformer<F>(&mut self, field: &str, transformer: F)
+    where
+        F: Fn(String) -> String + 'static,
+    {
+        self.transformers.insert(field.to_string(), Box::new(transformer));
+    }
+
+    pub fn process_data(&self, data: &mut HashMap<String, String>) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+
+        for (field, value) in data.iter() {
+            if let Some(validator) = self.validators.get(field) {
+                if let Err(err) = validator(value) {
+                    errors.push(err);
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        for (field, value) in data.iter_mut() {
+            if let Some(transformer) = self.transformers.get(field) {
+                *value = transformer(value.clone());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn create_email_validator() -> impl Fn(&str) -> Result<(), ValidationError> {
+    move |email: &str| {
+        if email.contains('@') && email.contains('.') {
+            Ok(())
+        } else {
+            Err(ValidationError {
+                field: "email".to_string(),
+                message: "Invalid email format".to_string(),
+            })
+        }
+    }
+}
+
+pub fn create_name_transformer() -> impl Fn(String) -> String {
+    move |name: String| {
+        let mut chars = name.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_email_validation() {
+        let validator = create_email_validator();
+        assert!(validator("test@example.com").is_ok());
+        assert!(validator("invalid-email").is_err());
+    }
+
+    #[test]
+    fn test_name_transformation() {
+        let transformer = create_name_transformer();
+        assert_eq!(transformer("john".to_string()), "John");
+        assert_eq!(transformer("JANE".to_string()), "JANE");
+    }
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        processor.add_validator("email", create_email_validator());
+        processor.add_transformer("name", create_name_transformer());
+
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), "test@example.com".to_string());
+        data.insert("name".to_string(), "john doe".to_string());
+
+        let result = processor.process_data(&mut data);
+        assert!(result.is_ok());
+        assert_eq!(data.get("name").unwrap(), "John doe");
+    }
+}
