@@ -1,95 +1,104 @@
 
 use std::error::Error;
-use std::fmt;
-
-#[derive(Debug)]
-pub enum DataError {
-    InvalidFormat,
-    OutOfRange,
-    ConversionFailed,
-}
-
-impl fmt::Display for DataError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidFormat => write!(f, "Invalid data format"),
-            DataError::OutOfRange => write!(f, "Value out of acceptable range"),
-            DataError::ConversionFailed => write!(f, "Data conversion failed"),
-        }
-    }
-}
-
-impl Error for DataError {}
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    threshold: f64,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new(threshold: f64) -> Result<Self, DataError> {
-        if threshold <= 0.0 {
-            return Err(DataError::OutOfRange);
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
         }
-        Ok(Self { threshold })
     }
 
-    pub fn validate_input(&self, value: f64) -> Result<f64, DataError> {
-        if value.is_nan() || value.is_infinite() {
-            return Err(DataError::InvalidFormat);
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
         }
-        if value < 0.0 || value > self.threshold {
-            return Err(DataError::OutOfRange);
+
+        for line_result in lines {
+            let line = line_result?;
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !record.is_empty() {
+                records.push(record);
+            }
         }
-        Ok(value)
+
+        Ok(records)
     }
 
-    pub fn transform_data(&self, input: f64) -> Result<f64, DataError> {
-        let validated = self.validate_input(input)?;
-        let transformed = validated.log10() * 100.0;
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Vec<usize> {
+        let mut invalid_indices = Vec::new();
         
-        if transformed.is_nan() || transformed.is_infinite() {
-            Err(DataError::ConversionFailed)
-        } else {
-            Ok(transformed)
+        for (index, record) in records.iter().enumerate() {
+            if record.iter().any(|field| field.is_empty()) {
+                invalid_indices.push(index);
+            }
         }
+        
+        invalid_indices
     }
 
-    pub fn process_batch(&self, data: &[f64]) -> Vec<Result<f64, DataError>> {
-        data.iter()
-            .map(|&value| self.transform_data(value))
-            .collect()
+    pub fn calculate_column_average(&self, records: &[Vec<String>], column_index: usize) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            Some(sum / count as f64)
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_valid_processing() {
-        let processor = DataProcessor::new(1000.0).unwrap();
-        let result = processor.transform_data(100.0);
-        assert!(result.is_ok());
-        assert!((result.unwrap() - 200.0).abs() < 0.001);
-    }
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000").unwrap();
+        writeln!(temp_file, "Bob,25,45000").unwrap();
+        writeln!(temp_file, "Charlie,35,").unwrap();
 
-    #[test]
-    fn test_invalid_input() {
-        let processor = DataProcessor::new(100.0).unwrap();
-        assert!(processor.transform_data(-10.0).is_err());
-        assert!(processor.transform_data(150.0).is_err());
-    }
-
-    #[test]
-    fn test_batch_processing() {
-        let processor = DataProcessor::new(500.0).unwrap();
-        let data = vec![10.0, 100.0, 500.0, -5.0];
-        let results = processor.process_batch(&data);
+        let processor = DataProcessor::new(',', true);
+        let records = processor.process_csv(temp_file.path()).unwrap();
         
-        assert_eq!(results.len(), 4);
-        assert!(results[0].is_ok());
-        assert!(results[1].is_ok());
-        assert!(results[2].is_ok());
-        assert!(results[3].is_err());
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["Alice", "30", "50000"]);
+        
+        let invalid = processor.validate_records(&records);
+        assert_eq!(invalid, vec![2]);
+        
+        let avg_age = processor.calculate_column_average(&records, 1);
+        assert_eq!(avg_age, Some(30.0));
     }
 }
