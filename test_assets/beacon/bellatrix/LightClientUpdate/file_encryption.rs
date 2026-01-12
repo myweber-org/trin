@@ -3,6 +3,13 @@ use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce
 };
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHasher, SaltString
+    },
+    Argon2
+};
 use std::error::Error;
 
 pub struct FileEncryptor {
@@ -10,14 +17,20 @@ pub struct FileEncryptor {
 }
 
 impl FileEncryptor {
-    pub fn new() -> Self {
-        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
-        Self {
-            cipher: Aes256Gcm::new(&key),
-        }
+    pub fn new(password: &str) -> Result<Self, Box<dyn Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
+        
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes.as_bytes()[..32]);
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(Self { cipher })
     }
-
-    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         let nonce = Nonce::generate(&mut OsRng);
         let ciphertext = self.cipher.encrypt(&nonce, plaintext)?;
         
@@ -27,27 +40,26 @@ impl FileEncryptor {
         
         Ok(result)
     }
-
-    pub fn decrypt_data(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    
+    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         if ciphertext.len() < 12 {
             return Err("Invalid ciphertext length".into());
         }
         
-        let nonce = Nonce::from_slice(&ciphertext[0..12]);
-        let ciphertext = &ciphertext[12..];
+        let (nonce_bytes, encrypted_data) = ciphertext.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
         
-        let plaintext = self.cipher.decrypt(nonce, ciphertext)?;
+        let plaintext = self.cipher.decrypt(nonce, encrypted_data)?;
         Ok(plaintext)
     }
 }
 
-pub fn process_file_encryption(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let encryptor = FileEncryptor::new();
-    let data = std::fs::read(input_path)?;
+pub fn process_file_data(data: &[u8], password: &str, encrypt: bool) -> Result<Vec<u8>, Box<dyn Error>> {
+    let encryptor = FileEncryptor::new(password)?;
     
-    let encrypted = encryptor.encrypt_data(&data)?;
-    std::fs::write(output_path, encrypted)?;
-    
-    println!("File encrypted successfully");
-    Ok(())
+    if encrypt {
+        encryptor.encrypt(data)
+    } else {
+        encryptor.decrypt(data)
+    }
 }
