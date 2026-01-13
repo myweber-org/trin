@@ -98,3 +98,86 @@ mod tests {
         assert_eq!(filtered.len(), 5);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validators: HashMap::new(),
+            transformers: HashMap::new(),
+        }
+    }
+
+    pub fn register_validator(&mut self, name: &str, validator: Box<dyn Fn(&str) -> bool>) {
+        self.validators.insert(name.to_string(), validator);
+    }
+
+    pub fn register_transformer(&mut self, name: &str, transformer: Box<dyn Fn(String) -> String>) {
+        self.transformers.insert(name.to_string(), transformer);
+    }
+
+    pub fn validate(&self, name: &str, data: &str) -> bool {
+        self.validators
+            .get(name)
+            .map(|validator| validator(data))
+            .unwrap_or(false)
+    }
+
+    pub fn transform(&self, name: &str, data: String) -> Option<String> {
+        self.transformers
+            .get(name)
+            .map(|transformer| transformer(data))
+    }
+
+    pub fn process_pipeline(&self, data: &str, validators: &[&str], transformers: &[&str]) -> Option<String> {
+        for validator_name in validators {
+            if !self.validate(validator_name, data) {
+                return None;
+            }
+        }
+
+        let mut result = data.to_string();
+        for transformer_name in transformers {
+            if let Some(transformed) = self.transform(transformer_name, result) {
+                result = transformed;
+            } else {
+                return None;
+            }
+        }
+
+        Some(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+
+        processor.register_validator("non_empty", Box::new(|s| !s.is_empty()));
+        processor.register_validator("is_numeric", Box::new(|s| s.chars().all(|c| c.is_digit(10))));
+
+        processor.register_transformer("uppercase", Box::new(|s| s.to_uppercase()));
+        processor.register_transformer("reverse", Box::new(|s| s.chars().rev().collect()));
+
+        assert!(processor.validate("non_empty", "test"));
+        assert!(!processor.validate("non_empty", ""));
+
+        assert_eq!(processor.transform("uppercase", "hello".to_string()), Some("HELLO".to_string()));
+        assert_eq!(processor.transform("reverse", "rust".to_string()), Some("tsur".to_string()));
+
+        let result = processor.process_pipeline("123", &["non_empty", "is_numeric"], &["uppercase"]);
+        assert_eq!(result, Some("123".to_string()));
+
+        let invalid_result = processor.process_pipeline("", &["non_empty"], &["uppercase"]);
+        assert_eq!(invalid_result, None);
+    }
+}
