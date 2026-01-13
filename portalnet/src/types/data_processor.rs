@@ -96,3 +96,96 @@ mod tests {
         assert_eq!(column, vec!["b".to_string(), "d".to_string()]);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    id: u64,
+    timestamp: i64,
+    values: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            timestamp,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.id == 0 {
+            return Err("Invalid record ID".into());
+        }
+        if self.timestamp < 0 {
+            return Err("Invalid timestamp".into());
+        }
+        if self.values.is_empty() {
+            return Err("Empty values array".into());
+        }
+        Ok(())
+    }
+
+    pub fn normalize_values(&mut self) {
+        if let Some(max) = self.values.iter().copied().reduce(f64::max) {
+            if max != 0.0 {
+                for value in &mut self.values {
+                    *value /= max;
+                }
+            }
+        }
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed = Vec::new();
+    
+    for record in records {
+        record.validate()?;
+        let mut processed_record = DataRecord::new(
+            record.id,
+            record.timestamp,
+            record.values.clone(),
+        );
+        processed_record.normalize_values();
+        processed.push(processed_record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+    let sum: f64 = records.iter()
+        .flat_map(|r| &r.values)
+        .copied()
+        .sum();
+    let avg = sum / total_values as f64;
+    
+    let variance: f64 = records.iter()
+        .flat_map(|r| &r.values)
+        .map(|v| (v - avg).powi(2))
+        .sum::<f64>() / total_values as f64;
+    
+    stats.insert("record_count".to_string(), records.len() as f64);
+    stats.insert("value_count".to_string(), total_values as f64);
+    stats.insert("average".to_string(), avg);
+    stats.insert("variance".to_string(), variance);
+    
+    stats
+}
