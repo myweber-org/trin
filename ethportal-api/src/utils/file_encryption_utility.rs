@@ -216,3 +216,144 @@ pub fn validate_password_strength(password: &str) -> bool {
         && password.chars().any(|c| c.is_ascii_digit())
         && password.chars().any(|c| !c.is_ascii_alphanumeric())
 }
+use aes::Aes256;
+use block_modes::{BlockMode, Cbc};
+use block_modes::block_padding::Pkcs7;
+use pbkdf2::{pbkdf2_hmac, Params};
+use sha2::Sha256;
+use rand::{RngCore, rngs::OsRng};
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+type Aes256Cbc = Cbc<Aes256, Pkcs7>;
+
+const SALT_LENGTH: usize = 16;
+const IV_LENGTH: usize = 16;
+const KEY_ITERATIONS: u32 = 100_000;
+const KEY_LENGTH: usize = 32;
+
+pub struct EncryptionResult {
+    pub iv: Vec<u8>,
+    pub salt: Vec<u8>,
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> [u8; KEY_LENGTH] {
+    let mut key = [0u8; KEY_LENGTH];
+    let params = Params {
+        rounds: KEY_ITERATIONS,
+        output_length: KEY_LENGTH,
+    };
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, params.rounds, &mut key)
+        .expect("PBKDF2 should not fail");
+    key
+}
+
+pub fn encrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str,
+) -> Result<EncryptionResult, Box<dyn std::error::Error>> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    input_file.read_to_end(&mut plaintext)?;
+
+    let mut salt = [0u8; SALT_LENGTH];
+    let mut iv = [0u8; IV_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut iv);
+
+    let key = derive_key(password, &salt);
+    let cipher = Aes256Cbc::new_from_slices(&key, &iv)?;
+
+    let ciphertext = cipher.encrypt_vec(&plaintext);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&ciphertext)?;
+
+    Ok(EncryptionResult {
+        iv: iv.to_vec(),
+        salt: salt.to_vec(),
+    })
+}
+
+pub fn decrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str,
+    iv: &[u8],
+    salt: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut ciphertext = Vec::new();
+    input_file.read_to_end(&mut ciphertext)?;
+
+    let key = derive_key(password, salt);
+    let cipher = Aes256Cbc::new_from_slices(&key, iv)?;
+
+    let plaintext = cipher.decrypt_vec(&ciphertext)?;
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&plaintext)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let plaintext = b"Secret data that needs protection";
+        let password = "strong_password_123";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), plaintext).unwrap();
+
+        let result = encrypt_file(input_file.path(), encrypted_file.path(), password)
+            .expect("Encryption failed");
+
+        decrypt_file(
+            encrypted_file.path(),
+            decrypted_file.path(),
+            password,
+            &result.iv,
+            &result.salt,
+        )
+        .expect("Decryption failed");
+
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted_data);
+    }
+
+    #[test]
+    fn test_wrong_password_fails() {
+        let plaintext = b"Test data";
+        let password = "correct_password";
+        let wrong_password = "wrong_password";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), plaintext).unwrap();
+
+        let result = encrypt_file(input_file.path(), encrypted_file.path(), password)
+            .expect("Encryption failed");
+
+        let decrypt_result = decrypt_file(
+            encrypted_file.path(),
+            decrypted_file.path(),
+            wrong_password,
+            &result.iv,
+            &result.salt,
+        );
+
+        assert!(decrypt_result.is_err());
+    }
+}
