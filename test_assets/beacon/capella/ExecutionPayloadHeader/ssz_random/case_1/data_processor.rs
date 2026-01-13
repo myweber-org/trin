@@ -217,3 +217,78 @@ mod tests {
         assert_eq!(new_processor.records.len(), 1);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Self {
+        DataRecord { id, value, category }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if self.category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub fn process_csv_file(file_path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let path = Path::new(file_path);
+    let file = File::open(path)?;
+    let mut rdr = csv::Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: DataRecord = result?;
+        record.validate()?;
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_average(records: &[DataRecord]) -> f64 {
+    if records.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    sum / records.len() as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 10.5, "A".to_string());
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, -5.0, "".to_string());
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let records = vec![
+            DataRecord::new(1, 10.0, "A".to_string()),
+            DataRecord::new(2, 20.0, "B".to_string()),
+            DataRecord::new(3, 30.0, "C".to_string()),
+        ];
+        assert_eq!(calculate_average(&records), 20.0);
+    }
+}
