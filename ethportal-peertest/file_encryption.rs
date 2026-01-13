@@ -1,48 +1,44 @@
 
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
-};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::path::Path;
 
-const NONCE_SIZE: usize = 12;
-
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
     
-    let data = fs::read(input_path)?;
-    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
-    
-    let encrypted_data = cipher.encrypt(nonce, data.as_ref())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    let mut output = fs::File::create(output_path)?;
-    output.write_all(&key)?;
-    output.write_all(&encrypted_data)?;
-    
+    fs::write(output_path, encrypted_data)?;
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let content = fs::read(input_path)?;
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+fn main() -> io::Result<()> {
+    let key = b"secret_key";
+    let original_file = "test_data.txt";
+    let encrypted_file = "encrypted.bin";
+    let decrypted_file = "decrypted.txt";
     
-    if content.len() < 32 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
-    }
+    fs::write(original_file, "Sensitive information that needs protection.")?;
     
-    let (key_bytes, encrypted_data) = content.split_at(32);
-    let key = key_bytes.try_into()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid key length"))?;
+    println!("Encrypting file...");
+    xor_encrypt_file(original_file, encrypted_file, key)?;
     
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
+    println!("Decrypting file...");
+    xor_decrypt_file(encrypted_file, decrypted_file, key)?;
     
-    let decrypted_data = cipher.decrypt(nonce, encrypted_data)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let decrypted_content = fs::read_to_string(decrypted_file)?;
+    println!("Decrypted content: {}", decrypted_content);
     
-    fs::write(output_path, decrypted_data)?;
+    fs::remove_file(original_file)?;
+    fs::remove_file(encrypted_file)?;
+    fs::remove_file(decrypted_file)?;
     
     Ok(())
 }
@@ -50,29 +46,25 @@ pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-
+    use std::fs;
+    
     #[test]
-    fn test_encryption_roundtrip() {
-        let original_content = b"Secret data that needs protection";
+    fn test_xor_encryption_roundtrip() {
+        let test_data = b"Test data for encryption";
+        let key = b"test_key";
+        let original_file = "test_original.tmp";
+        let encrypted_file = "test_encrypted.tmp";
+        let decrypted_file = "test_decrypted.tmp";
         
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
+        fs::write(original_file, test_data).unwrap();
+        xor_encrypt_file(original_file, encrypted_file, key).unwrap();
+        xor_decrypt_file(encrypted_file, decrypted_file, key).unwrap();
         
-        fs::write(input_file.path(), original_content).unwrap();
+        let decrypted_data = fs::read(decrypted_file).unwrap();
+        assert_eq!(test_data.to_vec(), decrypted_data);
         
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap()
-        ).unwrap();
-        
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap()
-        ).unwrap();
-        
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.as_slice(), decrypted_content);
+        fs::remove_file(original_file).unwrap_or_default();
+        fs::remove_file(encrypted_file).unwrap_or_default();
+        fs::remove_file(decrypted_file).unwrap_or_default();
     }
 }
