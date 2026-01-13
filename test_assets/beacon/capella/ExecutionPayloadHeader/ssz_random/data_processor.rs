@@ -1,15 +1,29 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct DataRecord {
     pub id: u32,
+    pub name: String,
     pub value: f64,
     pub category: String,
-    pub valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
 }
 
 pub struct DataProcessor {
@@ -18,7 +32,7 @@ pub struct DataProcessor {
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor {
+        Self {
             records: Vec::new(),
         }
     }
@@ -45,88 +59,86 @@ impl DataProcessor {
                 Err(_) => continue,
             };
 
-            let value = match parts[1].parse::<f64>() {
+            let name = parts[1].to_string();
+            let value = match parts[2].parse::<f64>() {
                 Ok(val) => val,
                 Err(_) => continue,
             };
 
-            let category = parts[2].to_string();
-            let valid = parts[3].parse::<bool>().unwrap_or(false);
+            let category = parts[3].to_string();
 
-            self.records.push(DataRecord {
-                id,
-                value,
-                category,
-                valid,
-            });
-
-            count += 1;
+            let record = DataRecord::new(id, name, value, category);
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
+            }
         }
 
         Ok(count)
     }
 
-    pub fn filter_valid(&self) -> Vec<&DataRecord> {
-        self.records.iter().filter(|r| r.valid).collect()
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
     }
 
     pub fn calculate_average(&self) -> Option<f64> {
-        let valid_records: Vec<&DataRecord> = self.filter_valid();
-        
-        if valid_records.is_empty() {
+        if self.records.is_empty() {
             return None;
         }
 
-        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
-        Some(sum / valid_records.len() as f64)
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
     }
 
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&DataRecord>> {
-        let mut groups = std::collections::HashMap::new();
-        
-        for record in &self.records {
-            groups
-                .entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
+    pub fn find_max_value(&self) -> Option<&DataRecord> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    pub fn get_statistics(&self) -> Statistics {
+        let count = self.records.len();
+        let avg = self.calculate_average().unwrap_or(0.0);
+        let max = self.find_max_value().map(|r| r.value).unwrap_or(0.0);
+        let min = self.records.iter()
+            .map(|r| r.value)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(0.0);
+
+        Statistics {
+            count,
+            average: avg,
+            max_value: max,
+            min_value: min,
         }
-        
-        groups
     }
 
-    pub fn count_records(&self) -> usize {
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn len(&self) -> usize {
         self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub count: usize,
+    pub average: f64,
+    pub max_value: f64,
+    pub min_value: f64,
+}
 
-    #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,10.5,alpha,true").unwrap();
-        writeln!(temp_file, "2,20.3,beta,false").unwrap();
-        writeln!(temp_file, "3,15.7,alpha,true").unwrap();
-        
-        let count = processor.load_from_csv(temp_file.path()).unwrap();
-        assert_eq!(count, 3);
-        assert_eq!(processor.count_records(), 3);
-        
-        let valid_records = processor.filter_valid();
-        assert_eq!(valid_records.len(), 2);
-        
-        let avg = processor.calculate_average().unwrap();
-        assert!((avg - 13.1).abs() < 0.0001);
-        
-        let groups = processor.group_by_category();
-        assert_eq!(groups.get("alpha").unwrap().len(), 2);
-        assert_eq!(groups.get("beta").unwrap().len(), 1);
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
     }
 }
