@@ -255,3 +255,75 @@ mod tests {
         assert_eq!(groups.get("category_b").unwrap().len(), 1);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        let mut records = Vec::new();
+        for result in rdr.records() {
+            let record = result?;
+            let validated_record: Vec<String> = record
+                .iter()
+                .map(|field| field.trim().to_string())
+                .collect();
+            
+            if !validated_record.is_empty() && validated_record.iter().any(|f| !f.is_empty()) {
+                records.push(validated_record);
+            }
+        }
+        
+        Ok(records)
+    }
+
+    pub fn filter_records(&self, records: Vec<Vec<String>>, column_index: usize, filter_value: &str) -> Vec<Vec<String>> {
+        records
+            .into_iter()
+            .filter(|record| {
+                record.get(column_index)
+                    .map(|value| value.contains(filter_value))
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Alice,25,London").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor.process().unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0][0], "John");
+        
+        let filtered = processor.filter_records(result, 2, "York");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0][0], "John");
+    }
+}
