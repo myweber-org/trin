@@ -1,53 +1,63 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
+use std::collections::HashSet;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+pub struct DataCleaner {
+    records: Vec<String>,
 }
 
-fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(Path::new(input_path))?;
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
-
-    let output_file = File::create(Path::new(output_path))?;
-    let mut wtr = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    for result in rdr.deserialize() {
-        let mut record: Record = result?;
-        
-        record.name = record.name.trim().to_string();
-        record.category = record.category.to_uppercase();
-        
-        if record.value < 0.0 {
-            record.value = 0.0;
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
         }
-        
-        wtr.serialize(&record)?;
     }
 
-    wtr.flush()?;
-    Ok(())
+    pub fn add_record(&mut self, record: &str) {
+        self.records.push(record.trim().to_string());
+    }
+
+    pub fn deduplicate(&mut self) {
+        let mut seen = HashSet::new();
+        self.records.retain(|r| seen.insert(r.clone()));
+    }
+
+    pub fn normalize_case(&mut self) {
+        for record in &mut self.records {
+            *record = record.to_lowercase();
+        }
+    }
+
+    pub fn sort_records(&mut self) {
+        self.records.sort();
+    }
+
+    pub fn get_records(&self) -> &Vec<String> {
+        &self.records
+    }
+
+    pub fn clean(&mut self) {
+        self.deduplicate();
+        self.normalize_case();
+        self.sort_records();
+    }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let input = "raw_data.csv";
-    let output = "cleaned_data.csv";
-    
-    match clean_csv_data(input, output) {
-        Ok(_) => println!("Data cleaning completed successfully"),
-        Err(e) => eprintln!("Error during data cleaning: {}", e),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_cleaning() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("  Apple  ");
+        cleaner.add_record("banana");
+        cleaner.add_record("Apple");
+        cleaner.add_record("Banana");
+        cleaner.add_record("apple");
+
+        cleaner.clean();
+        let result = cleaner.get_records();
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"apple".to_string()));
+        assert!(result.contains(&"banana".to_string()));
     }
-    
-    Ok(())
 }
