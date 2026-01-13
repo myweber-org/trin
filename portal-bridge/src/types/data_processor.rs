@@ -1,43 +1,89 @@
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
+use std::collections::HashMap;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
 }
 
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
+}
 
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        if record.value >= 0.0 {
-            records.push(record);
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    Ok(records)
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
-    let count = records.len();
-    if count == 0 {
-        return (0.0, 0.0, 0);
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
     }
 
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count as f64;
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count as f64;
-    let std_dev = variance.sqrt();
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
 
-    (mean, std_dev, count)
+        self.validate_data(data)?;
+        
+        let processed_data = self.transform_data(data);
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
+        
+        Ok(processed_data)
+    }
+
+    fn validate_data(&self, data: &[f64]) -> Result<(), String> {
+        for value in data {
+            if value.is_nan() || value.is_infinite() {
+                return Err("Invalid numeric value detected".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn transform_data(&self, data: &[f64]) -> Vec<f64> {
+        let mean = self.calculate_mean(data);
+        let std_dev = self.calculate_std_dev(data, mean);
+        
+        data.iter()
+            .map(|&x| (x - mean) / std_dev)
+            .collect()
+    }
+
+    fn calculate_mean(&self, data: &[f64]) -> f64 {
+        let sum: f64 = data.iter().sum();
+        sum / data.len() as f64
+    }
+
+    fn calculate_std_dev(&self, data: &[f64], mean: f64) -> f64 {
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        
+        variance.sqrt()
+    }
+
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+impl ValidationRule {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+            required,
+        }
+    }
 }
