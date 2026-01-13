@@ -1,90 +1,146 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
-
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_data(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<ProcessedRecord>, String> {
+        let mut results = Vec::new();
         
-        for result in rdr.deserialize() {
-            let record: DataRecord = result?;
-            self.records.push(record);
+        for (index, data) in dataset.iter().enumerate() {
+            match self.validate_record(data) {
+                Ok(_) => {
+                    let processed = self.transform_record(data);
+                    self.cache.insert(format!("record_{}", index), processed.values.clone());
+                    results.push(processed);
+                }
+                Err(e) => return Err(format!("Validation failed at record {}: {}", index, e)),
+            }
         }
         
-        Ok(self.records.len())
+        Ok(results)
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<(), String> {
+        for rule in &self.validation_rules {
+            if let Some(&value) = record.get(&rule.field_name) {
+                if value < rule.min_value || value > rule.max_value {
+                    return Err(format!("Field '{}' value {} out of range [{}, {}]", 
+                        rule.field_name, value, rule.min_value, rule.max_value));
+                }
+            } else if rule.required {
+                return Err(format!("Required field '{}' not found", rule.field_name));
+            }
+        }
+        Ok(())
+    }
+
+    fn transform_record(&self, record: &HashMap<String, f64>) -> ProcessedRecord {
+        let mut values = Vec::new();
+        let mut stats = RecordStats::default();
+        
+        for (key, &value) in record {
+            values.push(value);
+            
+            if value > stats.max_value {
+                stats.max_value = value;
+                stats.max_field = key.clone();
+            }
+            
+            if value < stats.min_value {
+                stats.min_value = value;
+                stats.min_field = key.clone();
+            }
+            
+            stats.sum += value;
+            stats.count += 1;
         }
         
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+        if stats.count > 0 {
+            stats.average = stats.sum / stats.count as f64;
+        }
+        
+        ProcessedRecord {
+            values,
+            stats,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        }
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
     }
 
-    pub fn validate_records(&self) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.value.is_finite() && !r.category.is_empty())
-            .collect()
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
+pub struct ProcessedRecord {
+    values: Vec<f64>,
+    stats: RecordStats,
+    timestamp: u64,
+}
 
-    #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,10.5,alpha").unwrap();
-        writeln!(temp_file, "2,20.3,beta").unwrap();
-        writeln!(temp_file, "3,15.7,alpha").unwrap();
-        
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(processor.records.len(), 3);
-        
-        let avg = processor.calculate_average();
-        assert!(avg.is_some());
-        assert!((avg.unwrap() - 15.5).abs() < 0.01);
-        
-        let alpha_records = processor.filter_by_category("alpha");
-        assert_eq!(alpha_records.len(), 2);
-        
-        let valid_records = processor.validate_records();
-        assert_eq!(valid_records.len(), 3);
+#[derive(Default)]
+pub struct RecordStats {
+    min_value: f64,
+    max_value: f64,
+    min_field: String,
+    max_field: String,
+    sum: f64,
+    count: usize,
+    average: f64,
+}
+
+impl ProcessedRecord {
+    pub fn get_stats(&self) -> &RecordStats {
+        &self.stats
+    }
+    
+    pub fn get_values(&self) -> &[f64] {
+        &self.values
+    }
+    
+    pub fn get_timestamp(&self) -> u64 {
+        self.timestamp
+    }
+}
+
+impl RecordStats {
+    pub fn display_summary(&self) -> String {
+        format!(
+            "Count: {}, Min: {} ({}), Max: {} ({}), Avg: {:.2}",
+            self.count,
+            self.min_value,
+            self.min_field,
+            self.max_value,
+            self.max_field,
+            self.average
+        )
     }
 }
