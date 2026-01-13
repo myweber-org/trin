@@ -151,4 +151,92 @@ impl ValidationRule {
         self.required = true;
         self
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            let fields: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+            
+            if fields.len() < 2 {
+                return Err("Invalid CSV format: insufficient columns".into());
+            }
+            
+            records.push(fields);
+        }
+
+        if records.is_empty() {
+            return Err("Empty file provided".into());
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_numeric_column(&self, data: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, Box<dyn Error>> {
+        let mut numeric_values = Vec::new();
+        
+        for (row_num, record) in data.iter().enumerate() {
+            if column_index >= record.len() {
+                return Err(format!("Column index {} out of bounds at row {}", column_index, row_num).into());
+            }
+            
+            match record[column_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Non-numeric value found at row {} column {}", row_num, column_index).into()),
+            }
+        }
+        
+        Ok(numeric_values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_process_valid_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor.process().unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_validate_numeric_column() {
+        let data = vec![
+            vec!["test".to_string(), "42.5".to_string()],
+            vec!["test2".to_string(), "18.0".to_string()],
+        ];
+        
+        let processor = DataProcessor::new("dummy.csv");
+        let result = processor.validate_numeric_column(&data, 1).unwrap();
+        
+        assert_eq!(result, vec![42.5, 18.0]);
+    }
 }
