@@ -1,116 +1,99 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug, PartialEq)]
-pub struct DataRecord {
-    id: u32,
-    value: f64,
-    category: String,
-    valid: bool,
-}
-
-impl DataRecord {
-    pub fn new(id: u32, value: f64, category: String) -> Self {
-        let valid = value >= 0.0 && !category.is_empty();
-        DataRecord {
-            id,
-            value,
-            category,
-            valid,
-        }
-    }
-
-    pub fn is_valid(&self) -> bool {
-        self.valid
-    }
-
-    pub fn get_value(&self) -> f64 {
-        self.value
-    }
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
-    total_value: f64,
-    valid_count: usize,
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
-            total_value: 0.0,
-            valid_count: 0,
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
 
-        for (index, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if index == 0 {
-                continue;
+    pub fn process_dataset(&mut self, dataset_name: &str, data: Vec<f64>) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for rule in &self.validation_rules {
+            if rule.required && data.iter().any(|&x| x.is_nan()) {
+                return Err(format!("Field {} contains invalid values", rule.field_name));
             }
 
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
+            if let Some(&value) = data.iter().find(|&&x| x < rule.min_value || x > rule.max_value) {
+                return Err(format!("Value {} out of range for field {}", value, rule.field_name));
             }
-
-            let id = match parts[0].parse::<u32>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-
-            let value = match parts[1].parse::<f64>() {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-
-            let category = parts[2].to_string();
-            let record = DataRecord::new(id, value, category);
-
-            self.add_record(record);
         }
 
-        Ok(())
-    }
-
-    pub fn add_record(&mut self, record: DataRecord) {
-        if record.is_valid() {
-            self.total_value += record.get_value();
-            self.valid_count += 1;
-        }
-        self.records.push(record);
-    }
-
-    pub fn get_average_value(&self) -> Option<f64> {
-        if self.valid_count > 0 {
-            Some(self.total_value / self.valid_count as f64)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_valid_records(&self) -> Vec<&DataRecord> {
-        self.records.iter().filter(|r| r.is_valid()).collect()
-    }
-
-    pub fn count_records(&self) -> usize {
-        self.records.len()
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
+        let processed_data: Vec<f64> = data
             .iter()
-            .filter(|r| r.category == category && r.is_valid())
-            .collect()
+            .map(|&x| {
+                let transformed = (x * 100.0).round() / 100.0;
+                if transformed.is_finite() {
+                    transformed
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
+        Ok(processed_data)
+    }
+
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
+    }
+
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<DatasetStats> {
+        self.cache.get(dataset_name).map(|data| {
+            let count = data.len();
+            let sum: f64 = data.iter().sum();
+            let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+            let variance: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / count as f64;
+            
+            DatasetStats {
+                count,
+                sum,
+                mean,
+                variance,
+                std_dev: variance.sqrt(),
+            }
+        })
+    }
+}
+
+pub struct DatasetStats {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+impl ValidationRule {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+            required,
+        }
     }
 }
 
@@ -119,29 +102,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_record_creation() {
-        let record = DataRecord::new(1, 42.5, "test".to_string());
-        assert_eq!(record.id, 1);
-        assert_eq!(record.value, 42.5);
-        assert_eq!(record.category, "test");
-        assert!(record.is_valid());
-    }
-
-    #[test]
-    fn test_invalid_record() {
-        let record = DataRecord::new(2, -10.0, "".to_string());
-        assert!(!record.is_valid());
-    }
-
-    #[test]
-    fn test_processor_average() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
-        processor.add_record(DataRecord::new(1, 10.0, "A".to_string()));
-        processor.add_record(DataRecord::new(2, 20.0, "B".to_string()));
-        processor.add_record(DataRecord::new(3, -5.0, "C".to_string()));
+        processor.add_validation_rule(ValidationRule::new("temperature", -50.0, 100.0, true));
+        
+        let data = vec![20.5, 25.3, 18.7, 22.1];
+        let result = processor.process_dataset("weather", data);
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.get_cached_data("weather").unwrap().len(), 4);
+    }
 
-        assert_eq!(processor.get_average_value(), Some(15.0));
-        assert_eq!(processor.count_records(), 3);
-        assert_eq!(processor.get_valid_records().len(), 2);
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("pressure", 0.0, 10.0, true));
+        
+        let data = vec![5.5, 12.3, 8.7];
+        let result = processor.process_dataset("sensors", data);
+        
+        assert!(result.is_err());
     }
 }
