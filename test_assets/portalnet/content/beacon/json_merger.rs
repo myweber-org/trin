@@ -1,0 +1,59 @@
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: serde_json::Value = serde_json::from_str(&content)?;
+
+        if let serde_json::Value::Object(map) = json_value {
+            for (key, value) in map {
+                if merged_map.contains_key(&key) {
+                    eprintln!("Warning: Key '{}' already exists, overwriting.", key);
+                }
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Top-level JSON must be an object".into());
+        }
+    }
+
+    Ok(serde_json::Value::Object(merged_map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_merge_json_files() {
+        let file1 = "test1.json";
+        let file2 = "test2.json";
+
+        fs::write(file1, r#"{"a": 1, "b": 2}"#).unwrap();
+        fs::write(file2, r#"{"c": 3, "d": 4}"#).unwrap();
+
+        let result = merge_json_files(&[file1, file2]).unwrap();
+        let expected = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4
+        });
+
+        assert_eq!(result, expected);
+
+        fs::remove_file(file1).unwrap();
+        fs::remove_file(file2).unwrap();
+    }
+}
