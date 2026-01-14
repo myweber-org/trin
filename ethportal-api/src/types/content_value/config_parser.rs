@@ -1,88 +1,79 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub database_url: String,
-    pub port: u16,
-    pub debug_mode: bool,
-    pub api_keys: Vec<String>,
-    pub timeout_seconds: u64,
+    pub settings: HashMap<String, String>,
+    pub defaults: HashMap<String, String>,
 }
 
 impl Config {
-    pub fn from_file(path: &str) -> Result<Self, String> {
+    pub fn new() -> Self {
+        Config {
+            settings: HashMap::new(),
+            defaults: HashMap::from([
+                ("timeout".to_string(), "30".to_string()),
+                ("retries".to_string(), "3".to_string()),
+                ("log_level".to_string(), "info".to_string()),
+            ]),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
 
-        let mut config_map = HashMap::new();
+        let mut config = Config::new();
+        
         for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let parts: Vec<&str> = line.splitn(2, '=').collect();
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
             if parts.len() == 2 {
-                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+                let key = parts[0].trim().to_string();
+                let value = parts[1].trim().to_string();
+                
+                if config.validate_setting(&key, &value) {
+                    config.settings.insert(key, value);
+                } else {
+                    return Err(format!("Invalid value for setting: {}", key));
+                }
             }
         }
 
-        let database_url = config_map
-            .get("DATABASE_URL")
-            .ok_or("Missing DATABASE_URL")?
-            .to_string();
-
-        let port = config_map
-            .get("PORT")
-            .map(|s| s.parse::<u16>())
-            .unwrap_or(Ok(8080))
-            .map_err(|e| format!("Invalid PORT: {}", e))?;
-
-        let debug_mode = config_map
-            .get("DEBUG")
-            .map(|s| s.parse::<bool>())
-            .unwrap_or(Ok(false))
-            .map_err(|e| format!("Invalid DEBUG flag: {}", e))?;
-
-        let api_keys = config_map
-            .get("API_KEYS")
-            .map(|s| s.split(',').map(|key| key.trim().to_string()).collect())
-            .unwrap_or_else(Vec::new);
-
-        let timeout_seconds = config_map
-            .get("TIMEOUT_SECONDS")
-            .map(|s| s.parse::<u64>())
-            .unwrap_or(Ok(30))
-            .map_err(|e| format!("Invalid TIMEOUT_SECONDS: {}", e))?;
-
-        Ok(Config {
-            database_url,
-            port,
-            debug_mode,
-            api_keys,
-            timeout_seconds,
-        })
+        Ok(config)
     }
 
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+            .or_else(|| self.defaults.get(key))
+    }
 
-        if self.database_url.is_empty() {
-            errors.push("DATABASE_URL cannot be empty".to_string());
+    pub fn get_with_fallback(&self, key: &str, fallback: &str) -> String {
+        self.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(fallback)
+            .to_string()
+    }
+
+    fn validate_setting(&self, key: &str, value: &str) -> bool {
+        match key {
+            "timeout" => value.parse::<u32>().is_ok(),
+            "retries" => value.parse::<u8>().is_ok(),
+            "log_level" => ["error", "warn", "info", "debug"].contains(&value),
+            _ => true,
         }
+    }
 
-        if self.port == 0 {
-            errors.push("PORT must be greater than 0".to_string());
-        }
-
-        if self.timeout_seconds == 0 {
-            errors.push("TIMEOUT_SECONDS must be greater than 0".to_string());
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
+    pub fn merge(&mut self, other: Config) {
+        for (key, value) in other.settings {
+            if self.validate_setting(&key, &value) {
+                self.settings.insert(key, value);
+            }
         }
     }
 }
@@ -94,42 +85,38 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_valid_config() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "DATABASE_URL=postgres://localhost/db").unwrap();
-        writeln!(temp_file, "PORT=3000").unwrap();
-        writeln!(temp_file, "DEBUG=true").unwrap();
-        writeln!(temp_file, "API_KEYS=key1,key2,key3").unwrap();
-        writeln!(temp_file, "TIMEOUT_SECONDS=60").unwrap();
-
-        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.database_url, "postgres://localhost/db");
-        assert_eq!(config.port, 3000);
-        assert_eq!(config.debug_mode, true);
-        assert_eq!(config.api_keys, vec!["key1", "key2", "key3"]);
-        assert_eq!(config.timeout_seconds, 60);
-        assert!(config.validate().is_ok());
+    fn test_config_creation() {
+        let config = Config::new();
+        assert_eq!(config.get("timeout"), Some(&"30".to_string()));
+        assert_eq!(config.get("nonexistent"), None);
     }
 
     #[test]
-    fn test_config_with_defaults() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "DATABASE_URL=postgres://localhost/test").unwrap();
+    fn test_config_from_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "timeout=60").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "log_level=debug").unwrap();
 
-        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.port, 8080);
-        assert_eq!(config.debug_mode, false);
-        assert!(config.api_keys.is_empty());
-        assert_eq!(config.timeout_seconds, 30);
-        assert!(config.validate().is_ok());
+        let config = Config::load_from_file(file.path()).unwrap();
+        assert_eq!(config.get("timeout"), Some(&"60".to_string()));
+        assert_eq!(config.get("log_level"), Some(&"debug".to_string()));
+        assert_eq!(config.get("retries"), Some(&"3".to_string()));
     }
 
     #[test]
     fn test_invalid_config() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "PORT=not_a_number").unwrap();
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "timeout=invalid").unwrap();
 
-        let result = Config::from_file(temp_file.path().to_str().unwrap());
+        let result = Config::load_from_file(file.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_with_fallback() {
+        let config = Config::new();
+        assert_eq!(config.get_with_fallback("timeout", "10"), "30");
+        assert_eq!(config.get_with_fallback("custom", "default"), "default");
     }
 }
