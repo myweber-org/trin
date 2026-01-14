@@ -155,3 +155,108 @@ mod tests {
         assert_eq!(obj.get("active").unwrap(), true);
     }
 }
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("No input files provided".to_string());
+    }
+
+    let mut merged = Map::new();
+    let mut conflict_log = Vec::new();
+
+    for (idx, path) in paths.iter().enumerate() {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+        
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+        
+        if let Value::Object(obj) = json {
+            merge_object(&mut merged, obj, idx, &mut conflict_log);
+        } else {
+            return Err(format!("Expected JSON object in {}", path.as_ref().display()));
+        }
+    }
+
+    if !conflict_log.is_empty() {
+        let log_path = output_path.as_ref().with_extension("conflicts.log");
+        fs::write(&log_path, conflict_log.join("\n"))
+            .map_err(|e| format!("Failed to write conflict log: {}", e))?;
+        println!("Conflicts detected, see {}", log_path.display());
+    }
+
+    let output_json = Value::Object(merged);
+    let pretty_json = serde_json::to_string_pretty(&output_json)
+        .map_err(|e| format!("Failed to serialize merged JSON: {}", e))?;
+    
+    fs::write(&output_path, pretty_json)
+        .map_err(|e| format!("Failed to write output file: {}", e))?;
+    
+    Ok(())
+}
+
+fn merge_object(base: &mut Map<String, Value>, 
+                new: Map<String, Value>, 
+                file_index: usize,
+                conflicts: &mut Vec<String>) {
+    for (key, new_value) in new {
+        match base.get_mut(&key) {
+            Some(existing_value) => {
+                handle_conflict(key, existing_value, new_value, file_index, conflicts);
+            }
+            None => {
+                base.insert(key, new_value);
+            }
+        }
+    }
+}
+
+fn handle_conflict(key: String, 
+                   existing: &mut Value, 
+                   new: Value, 
+                   file_index: usize,
+                   conflicts: &mut Vec<String>) {
+    match (existing, new) {
+        (Value::Object(ref mut existing_obj), Value::Object(new_obj)) => {
+            merge_object(existing_obj, new_obj, file_index, conflicts);
+        }
+        (Value::Array(ref mut existing_arr), Value::Array(new_arr)) => {
+            merge_array(existing_arr, new_arr, file_index, &key, conflicts);
+        }
+        (existing_val, new_val) if existing_val == &new_val => {
+            // Values are identical, no conflict
+        }
+        _ => {
+            conflicts.push(format!(
+                "Conflict at key '{}': existing value {:?} conflicts with new value {:?} from file {}",
+                key, existing, new, file_index
+            ));
+        }
+    }
+}
+
+fn merge_array(existing: &mut Vec<Value>, 
+               new: Vec<Value>, 
+               file_index: usize,
+               key: &str,
+               conflicts: &mut Vec<String>) {
+    let existing_set: HashSet<_> = existing.iter().collect();
+    let new_set: HashSet<_> = new.iter().collect();
+    
+    let unique_new: Vec<_> = new.into_iter()
+        .filter(|v| !existing_set.contains(v))
+        .collect();
+    
+    if !unique_new.is_empty() {
+        existing.extend(unique_new);
+    } else if new_set != existing_set {
+        conflicts.push(format!(
+            "Array conflict at key '{}': duplicate entries with different ordering in file {}",
+            key, file_index
+        ));
+    }
+}
