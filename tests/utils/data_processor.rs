@@ -1,108 +1,104 @@
-
 use std::error::Error;
-use std::fmt;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub timestamp: u64,
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
 }
 
-#[derive(Debug)]
-pub enum ValidationError {
-    InvalidId,
-    InvalidValue,
-    InvalidTimestamp,
-}
-
-impl fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
-            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
-            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be in the past"),
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
         }
     }
-}
 
-impl Error for ValidationError {}
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
 
-pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
-    if record.id == 0 {
-        return Err(ValidationError::InvalidId);
-    }
-    
-    if record.value < 0.0 || record.value > 1000.0 {
-        return Err(ValidationError::InvalidValue);
-    }
-    
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    
-    if record.timestamp > current_time {
-        return Err(ValidationError::InvalidTimestamp);
-    }
-    
-    Ok(())
-}
+        if self.has_header {
+            lines.next();
+        }
 
-pub fn transform_record(record: &DataRecord, multiplier: f64) -> DataRecord {
-    DataRecord {
-        id: record.id,
-        value: record.value * multiplier,
-        timestamp: record.timestamp,
-    }
-}
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() {
+                records.push(fields);
+            }
+        }
 
-pub fn process_records(records: &[DataRecord]) -> Vec<Result<DataRecord, ValidationError>> {
-    records
-        .iter()
-        .map(|record| {
-            validate_record(record)?;
-            Ok(transform_record(record, 1.5))
-        })
-        .collect()
+        Ok(records)
+    }
+
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
+    }
+
+    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<(f64, f64, f64)> {
+        let mut values = Vec::new();
+        
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    values.push(value);
+                }
+            }
+        }
+
+        if values.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+
+        Some((mean, variance, std_dev))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
     #[test]
-    fn test_valid_record() {
-        let record = DataRecord {
-            id: 1,
-            value: 100.0,
-            timestamp: 1000,
-        };
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.0").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        writeln!(temp_file, "Charlie,35,55000.0").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let records = processor.process_file(temp_file.path()).unwrap();
         
-        assert!(validate_record(&record).is_ok());
-    }
-    
-    #[test]
-    fn test_invalid_id() {
-        let record = DataRecord {
-            id: 0,
-            value: 100.0,
-            timestamp: 1000,
-        };
+        assert_eq!(records.len(), 3);
+        assert!(processor.validate_record(&records[0]));
         
-        assert!(matches!(validate_record(&record), Err(ValidationError::InvalidId)));
-    }
-    
-    #[test]
-    fn test_transform_record() {
-        let record = DataRecord {
-            id: 1,
-            value: 100.0,
-            timestamp: 1000,
-        };
+        let stats = processor.calculate_statistics(&records, 1);
+        assert!(stats.is_some());
         
-        let transformed = transform_record(&record, 2.0);
-        assert_eq!(transformed.value, 200.0);
-        assert_eq!(transformed.id, record.id);
+        if let Some((mean, _, _)) = stats {
+            assert!((mean - 30.0).abs() < 0.001);
+        }
     }
 }
