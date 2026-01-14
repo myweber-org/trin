@@ -1,75 +1,119 @@
-use csv::Reader;
-use serde::Deserialize;
+
+use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::path::Path;
+use std::fmt;
 
-#[derive(Debug, Deserialize)]
-pub struct Record {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
     pub id: u32,
-    pub name: String,
     pub value: f64,
-    pub category: String,
+    pub timestamp: i64,
 }
 
-pub struct DataProcessor {
-    records: Vec<Record>,
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidTimestamp,
+    ValidationFailed(String),
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid numeric value"),
+            ProcessingError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
         }
     }
+}
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let mut reader = Reader::from_path(path)?;
-        for result in reader.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
-        }
-        Ok(())
-    }
+impl Error for ProcessingError {}
 
-    pub fn validate_records(&self) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
-            .collect()
+pub fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+    if record.value.is_nan() || record.value.is_infinite() {
+        return Err(ProcessingError::InvalidValue);
     }
+    
+    if record.timestamp < 0 {
+        return Err(ProcessingError::InvalidTimestamp);
+    }
+    
+    Ok(())
+}
 
-    pub fn calculate_total(&self) -> f64 {
-        self.records.iter().map(|r| r.value).sum()
+pub fn transform_record(record: &DataRecord, multiplier: f64) -> Result<DataRecord, ProcessingError> {
+    validate_record(record)?;
+    
+    let transformed_value = record.value * multiplier;
+    
+    if transformed_value > 1000.0 {
+        return Err(ProcessingError::ValidationFailed(
+            "Transformed value exceeds maximum limit".to_string()
+        ));
     }
+    
+    Ok(DataRecord {
+        id: record.id,
+        value: transformed_value,
+        timestamp: record.timestamp,
+    })
+}
 
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
-        let mut map = std::collections::HashMap::new();
-        for record in &self.records {
-            map.entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
-        }
-        map
-    }
+pub fn process_records(records: &[DataRecord], multiplier: f64) -> Vec<Result<DataRecord, ProcessingError>> {
+    records
+        .iter()
+        .map(|record| transform_record(record, multiplier))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "id,name,value,category").unwrap();
-        writeln!(file, "1,ItemA,10.5,Category1").unwrap();
-        writeln!(file, "2,ItemB,15.0,Category2").unwrap();
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1672531200,
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
 
-        let mut processor = DataProcessor::new();
-        processor.load_from_csv(file.path()).unwrap();
+    #[test]
+    fn test_invalid_value() {
+        let record = DataRecord {
+            id: 2,
+            value: f64::NAN,
+            timestamp: 1672531200,
+        };
+        
+        assert!(validate_record(&record).is_err());
+    }
 
-        assert_eq!(processor.records.len(), 2);
-        assert_eq!(processor.calculate_total(), 25.5);
+    #[test]
+    fn test_transform_within_limit() {
+        let record = DataRecord {
+            id: 3,
+            value: 50.0,
+            timestamp: 1672531200,
+        };
+        
+        let result = transform_record(&record, 2.0);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().value, 100.0);
+    }
+
+    #[test]
+    fn test_transform_exceeds_limit() {
+        let record = DataRecord {
+            id: 4,
+            value: 600.0,
+            timestamp: 1672531200,
+        };
+        
+        let result = transform_record(&record, 2.0);
+        assert!(result.is_err());
     }
 }
