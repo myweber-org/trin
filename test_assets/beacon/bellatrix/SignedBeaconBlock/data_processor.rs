@@ -117,4 +117,92 @@ mod tests {
         let invalid_record = vec!["".to_string(), "value".to_string()];
         assert!(!processor.validate_record(&invalid_record));
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut rdr = Reader::from_path(path)?;
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
+        let mut grouped = std::collections::HashMap::new();
+        for record in &self.records {
+            grouped
+                .entry(record.category.clone())
+                .or_insert_with(Vec::new)
+                .push(record);
+        }
+        grouped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
+        writeln!(temp_file, "2,ItemB,20.0,Category2").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(processor.records.len(), 2);
+        
+        let avg = processor.calculate_average();
+        assert_eq!(avg, Some(15.25));
+        
+        let valid = processor.validate_records();
+        assert_eq!(valid.len(), 2);
+        
+        let grouped = processor.group_by_category();
+        assert_eq!(grouped.len(), 2);
+    }
 }
