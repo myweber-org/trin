@@ -226,3 +226,121 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(rules: ValidationRules) -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: rules,
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if !self.validation_rules.required_keys.contains(&key) {
+            return Err(format!("Key '{}' is not in required keys list", key));
+        }
+
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} is out of allowed range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
+        }
+
+        self.data.insert(key, values);
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = sum / count as f64;
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count as f64;
+            let std_dev = variance.sqrt();
+
+            Statistics {
+                count,
+                sum,
+                mean,
+                variance,
+                std_dev,
+            }
+        })
+    }
+
+    pub fn normalize_data(&mut self, key: &str) -> Result<(), String> {
+        if let Some(values) = self.data.get_mut(key) {
+            let stats = self.calculate_statistics(key).unwrap();
+            
+            for value in values.iter_mut() {
+                *value = (*value - stats.mean) / stats.std_dev;
+            }
+            Ok(())
+        } else {
+            Err(format!("Key '{}' not found in dataset", key))
+        }
+    }
+
+    pub fn get_processed_data(&self) -> &HashMap<String, Vec<f64>> {
+        &self.data
+    }
+}
+
+pub struct Statistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+impl ValidationRules {
+    pub fn new(min: f64, max: f64, required: Vec<String>) -> Self {
+        ValidationRules {
+            min_value: min,
+            max_value: max,
+            required_keys: required,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let rules = ValidationRules::new(
+            0.0,
+            100.0,
+            vec!["temperature".to_string(), "humidity".to_string()]
+        );
+        
+        let mut processor = DataProcessor::new(rules);
+        
+        assert!(processor.add_dataset("temperature".to_string(), vec![20.5, 22.3, 18.7]).is_ok());
+        assert!(processor.add_dataset("humidity".to_string(), vec![45.2, 48.9, 50.1]).is_ok());
+        assert!(processor.add_dataset("pressure".to_string(), vec![1013.2]).is_err());
+        
+        let stats = processor.calculate_statistics("temperature").unwrap();
+        assert_eq!(stats.count, 3);
+        
+        assert!(processor.normalize_data("temperature").is_ok());
+        assert!(processor.normalize_data("pressure").is_err());
+    }
+}
