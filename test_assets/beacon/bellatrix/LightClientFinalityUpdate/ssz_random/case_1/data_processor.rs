@@ -1,87 +1,98 @@
-use csv::Reader;
-use serde::Deserialize;
+
 use std::error::Error;
 use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    records: Vec<Record>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            records: Vec::new(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
         let file = File::open(file_path)?;
-        let mut rdr = Reader::from_reader(file);
+        let reader = BufReader::new(file);
         
-        for result in rdr.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            lines.next();
         }
-        
-        Ok(())
-    }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
-            .collect()
-    }
+        for (line_num, line) in lines {
+            let line = line?;
+            let fields: Vec<String> = line.split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
 
-    pub fn calculate_average(&self) -> f64 {
-        if self.records.is_empty() {
-            return 0.0;
+            if fields.iter().any(|f| f.is_empty()) {
+                return Err(format!("Empty field detected at line {}", line_num + 1).into());
+            }
+
+            records.push(fields);
         }
-        
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        sum / self.records.len() as f64
+
+        Ok(records)
     }
 
-    pub fn find_max_value(&self) -> Option<&Record> {
-        self.records.iter().max_by(|a, b| {
-            a.value.partial_cmp(&b.value).unwrap()
-        })
-    }
+    pub fn validate_numeric_fields(&self, records: &[Vec<String>], column_index: usize) -> Result<Vec<f64>, Box<dyn Error>> {
+        let mut numeric_values = Vec::new();
 
-    pub fn count_records(&self) -> usize {
-        self.records.len()
+        for (row_num, record) in records.iter().enumerate() {
+            if column_index >= record.len() {
+                return Err(format!("Column index {} out of bounds at row {}", column_index, row_num).into());
+            }
+
+            match record[column_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Invalid numeric value at row {}: {}", row_num, record[column_index]).into()),
+            }
+        }
+
+        Ok(numeric_values)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
-        let csv_data = "id,name,value,category\n1,ItemA,10.5,Alpha\n2,ItemB,20.3,Beta\n3,ItemC,15.7,Alpha\n";
-        
+    fn test_process_csv() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", csv_data).unwrap();
-        
-        let mut processor = DataProcessor::new();
-        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(processor.count_records(), 3);
-        assert_eq!(processor.filter_by_category("Alpha").len(), 2);
-        assert!((processor.calculate_average() - 15.5).abs() < 0.1);
-        
-        let max_record = processor.find_max_value().unwrap();
-        assert_eq!(max_record.name, "ItemB");
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+        assert_eq!(result[1], vec!["Bob", "25", "London"]);
+    }
+
+    #[test]
+    fn test_validate_numeric() {
+        let records = vec![
+            vec!["10.5".to_string(), "text".to_string()],
+            vec!["20.3".to_string(), "more".to_string()],
+        ];
+
+        let processor = DataProcessor::new(',', false);
+        let numeric = processor.validate_numeric_fields(&records, 0).unwrap();
+
+        assert_eq!(numeric, vec![10.5, 20.3]);
     }
 }
