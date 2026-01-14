@@ -173,3 +173,102 @@ mod tests {
         Ok(())
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+
+pub struct DataProcessor {
+    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validators: HashMap::new(),
+            transformers: HashMap::new(),
+        }
+    }
+
+    pub fn register_validator(&mut self, name: &str, validator: Box<dyn Fn(&str) -> bool>) {
+        self.validators.insert(name.to_string(), validator);
+    }
+
+    pub fn register_transformer(&mut self, name: &str, transformer: Box<dyn Fn(String) -> String>) {
+        self.transformers.insert(name.to_string(), transformer);
+    }
+
+    pub fn process_data(&self, data: &str, validator_name: &str, transformer_name: &str) -> Result<String, Box<dyn Error>> {
+        let validator = self.validators.get(validator_name)
+            .ok_or_else(|| format!("Validator '{}' not found", validator_name))?;
+
+        if !validator(data) {
+            return Err(format!("Validation failed for data: {}", data).into());
+        }
+
+        let transformer = self.transformers.get(transformer_name)
+            .ok_or_else(|| format!("Transformer '{}' not found", transformer_name))?;
+
+        Ok(transformer(data.to_string()))
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.register_validator("is_numeric", Box::new(|s| s.chars().all(|c| c.is_ascii_digit())));
+
+    processor.register_validator("is_alpha", Box::new(|s| s.chars().all(|c| c.is_ascii_alphabetic())));
+
+    processor.register_transformer("uppercase", Box::new(|s| s.to_uppercase()));
+
+    processor.register_transformer("reverse", Box::new(|s| s.chars().rev().collect()));
+
+    processor.register_transformer("add_prefix", Box::new(|s| format!("processed_{}", s)));
+
+    processor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_numeric_validation() {
+        let processor = create_default_processor();
+        assert!(processor.process_data("12345", "is_numeric", "uppercase").is_ok());
+        assert!(processor.process_data("abc123", "is_numeric", "uppercase").is_err());
+    }
+
+    #[test]
+    fn test_alpha_validation() {
+        let processor = create_default_processor();
+        assert!(processor.process_data("hello", "is_alpha", "uppercase").is_ok());
+        assert!(processor.process_data("hello123", "is_alpha", "uppercase").is_err());
+    }
+
+    #[test]
+    fn test_transformations() {
+        let processor = create_default_processor();
+        
+        let result = processor.process_data("test", "is_alpha", "uppercase").unwrap();
+        assert_eq!(result, "TEST");
+
+        let result = processor.process_data("hello", "is_alpha", "reverse").unwrap();
+        assert_eq!(result, "olleh");
+
+        let result = processor.process_data("data", "is_alpha", "add_prefix").unwrap();
+        assert_eq!(result, "processed_data");
+    }
+
+    #[test]
+    fn test_invalid_validator() {
+        let processor = create_default_processor();
+        assert!(processor.process_data("test", "non_existent", "uppercase").is_err());
+    }
+
+    #[test]
+    fn test_invalid_transformer() {
+        let processor = create_default_processor();
+        assert!(processor.process_data("test", "is_alpha", "non_existent").is_err());
+    }
+}
