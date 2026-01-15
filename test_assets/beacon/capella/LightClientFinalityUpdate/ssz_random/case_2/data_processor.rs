@@ -221,3 +221,152 @@ mod tests {
         assert_eq!(data.get("name").unwrap(), "John doe");
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    EmptyValues,
+    ValueOutOfRange(f64),
+    MissingMetadata(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Record ID must be greater than 0"),
+            DataError::EmptyValues => write!(f, "Record must contain at least one value"),
+            DataError::ValueOutOfRange(val) => write!(f, "Value {} is out of acceptable range", val),
+            DataError::MissingMetadata(key) => write!(f, "Required metadata '{}' is missing", key),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>, metadata: HashMap<String, String>) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if values.is_empty() {
+            return Err(DataError::EmptyValues);
+        }
+        
+        for &value in &values {
+            if !value.is_finite() {
+                return Err(DataError::ValueOutOfRange(value));
+            }
+        }
+        
+        Ok(Self { id, values, metadata })
+    }
+    
+    pub fn validate_metadata(&self, required_keys: &[&str]) -> Result<(), DataError> {
+        for &key in required_keys {
+            if !self.metadata.contains_key(key) {
+                return Err(DataError::MissingMetadata(key.to_string()));
+            }
+        }
+        Ok(())
+    }
+    
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let count = self.values.len() as f64;
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+    
+    pub fn normalize_values(&mut self) {
+        let (mean, _, std_dev) = self.calculate_statistics();
+        
+        if std_dev > 0.0 {
+            for value in &mut self.values {
+                *value = (*value - mean) / std_dev;
+            }
+        }
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], required_metadata: &[&str]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        record.validate_metadata(required_metadata)?;
+        let mut processed_record = record.clone();
+        processed_record.normalize_values();
+        processed.push(processed_record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn aggregate_records(records: &[DataRecord]) -> HashMap<u32, (f64, f64)> {
+    let mut aggregates = HashMap::new();
+    
+    for record in records {
+        let (mean, _, std_dev) = record.calculate_statistics();
+        aggregates.insert(record.id, (mean, std_dev));
+    }
+    
+    aggregates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "sensor_a".to_string());
+        metadata.insert("timestamp".to_string(), "2024-01-15T10:30:00Z".to_string());
+        
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let record = DataRecord::new(1, values, metadata).unwrap();
+        
+        assert_eq!(record.id, 1);
+        assert_eq!(record.values.len(), 5);
+        assert_eq!(record.metadata.get("source").unwrap(), "sensor_a");
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let metadata = HashMap::new();
+        let values = vec![1.0, 2.0];
+        
+        let result = DataRecord::new(0, values, metadata);
+        assert!(matches!(result, Err(DataError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let metadata = HashMap::new();
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let record = DataRecord::new(1, values, metadata).unwrap();
+        
+        let (mean, variance, std_dev) = record.calculate_statistics();
+        
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
+    }
+}
