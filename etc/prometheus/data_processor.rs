@@ -1,93 +1,116 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct DataRecord {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
 }
 
-impl DataRecord {
-    fn is_valid(&self) -> bool {
-        !self.name.trim().is_empty() &&
-        self.value >= 0.0 &&
-        !self.category.trim().is_empty()
-    }
-}
-
-pub fn process_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let path = Path::new(input_path);
-    if !path.exists() {
-        return Err("Input file does not exist".into());
-    }
-
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(input_path)?;
-
-    let mut valid_records = Vec::new();
-    let mut invalid_count = 0;
-
-    for result in reader.deserialize() {
-        let record: DataRecord = result?;
-        
-        if record.is_valid() {
-            valid_records.push(record);
-        } else {
-            invalid_count += 1;
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
         }
     }
 
-    if valid_records.is_empty() {
-        return Err("No valid records found in input file".into());
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Dataset contains invalid numeric values".to_string());
+        }
+
+        self.data.insert(key, values);
+        Ok(())
     }
 
-    let mut writer = WriterBuilder::new()
-        .has_headers(true)
-        .from_path(output_path)?;
-
-    for record in valid_records {
-        writer.serialize(&record)?;
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = sum / count as f64;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count as f64;
+            
+            let std_dev = variance.sqrt();
+            
+            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            
+            Statistics {
+                count,
+                mean,
+                std_dev,
+                min,
+                max,
+            }
+        })
     }
 
-    writer.flush()?;
+    pub fn normalize_data(&self, key: &str) -> Option<Vec<f64>> {
+        self.calculate_statistics(key).map(|stats| {
+            self.data[key].iter()
+                .map(|&x| (x - stats.min) / (stats.max - stats.min))
+                .collect()
+        })
+    }
 
-    println!("Processing complete:");
-    println!("  Valid records: {}", valid_records.len());
-    println!("  Invalid records: {}", invalid_count);
-    println!("  Output written to: {}", output_path);
+    pub fn get_keys(&self) -> Vec<String> {
+        self.data.keys().cloned().collect()
+    }
+}
 
-    Ok(())
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
-    fn test_valid_record() {
-        let record = DataRecord {
-            id: 1,
-            name: "Test".to_string(),
-            value: 10.5,
-            category: "A".to_string(),
-        };
-        assert!(record.is_valid());
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let result = processor.add_dataset(
+            "temperatures".to_string(),
+            vec![20.5, 22.1, 19.8, 23.4, 21.0]
+        );
+        
+        assert!(result.is_ok());
+        
+        let stats = processor.calculate_statistics("temperatures").unwrap();
+        assert_eq!(stats.count, 5);
+        assert!((stats.mean - 21.36).abs() < 0.01);
+        
+        let normalized = processor.normalize_data("temperatures").unwrap();
+        assert_eq!(normalized.len(), 5);
+        assert!((normalized[0] - 0.194).abs() < 0.01);
     }
 
     #[test]
-    fn test_invalid_record() {
-        let record = DataRecord {
-            id: 2,
-            name: "".to_string(),
-            value: -5.0,
-            category: "".to_string(),
-        };
-        assert!(!record.is_valid());
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        
+        let result = processor.add_dataset(
+            "invalid".to_string(),
+            vec![]
+        );
+        
+        assert!(result.is_err());
+        
+        let result = processor.add_dataset(
+            "nan_data".to_string(),
+            vec![1.0, f64::NAN, 2.0]
+        );
+        
+        assert!(result.is_err());
     }
 }
