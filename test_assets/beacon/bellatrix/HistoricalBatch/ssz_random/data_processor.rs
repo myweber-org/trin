@@ -98,3 +98,164 @@ mod tests {
         assert_eq!(result, Ok(2));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid timestamp: {0}")]
+    InvalidTimestamp(i64),
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    ValueOutOfRange(f64),
+    #[error("Duplicate record ID: {0}")]
+    DuplicateId(u64),
+}
+
+pub struct DataProcessor {
+    validation_enabled: bool,
+    max_value_limit: Option<f64>,
+    seen_ids: std::collections::HashSet<u64>,
+}
+
+impl DataProcessor {
+    pub fn new(validation_enabled: bool, max_value_limit: Option<f64>) -> Self {
+        Self {
+            validation_enabled,
+            max_value_limit,
+            seen_ids: std::collections::HashSet::new(),
+        }
+    }
+
+    pub fn process_record(&mut self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        if self.validation_enabled {
+            self.validate_record(record)?;
+        }
+        
+        let transformed = self.transform_record(record);
+        Ok(transformed)
+    }
+
+    fn validate_record(&mut self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.timestamp < 0 {
+            return Err(ProcessingError::InvalidTimestamp(record.timestamp));
+        }
+
+        if record.values.is_empty() {
+            return Err(ProcessingError::MissingField("values".to_string()));
+        }
+
+        if self.seen_ids.contains(&record.id) {
+            return Err(ProcessingError::DuplicateId(record.id));
+        }
+
+        if let Some(limit) = self.max_value_limit {
+            for &value in record.values.values() {
+                if value > limit {
+                    return Err(ProcessingError::ValueOutOfRange(value));
+                }
+            }
+        }
+
+        self.seen_ids.insert(record.id);
+        Ok(())
+    }
+
+    fn transform_record(&self, record: &DataRecord) -> DataRecord {
+        let mut transformed_values = HashMap::new();
+        
+        for (key, value) in &record.values {
+            let transformed_key = key.to_lowercase().replace(' ', "_");
+            let transformed_value = if *value < 0.0 {
+                0.0
+            } else {
+                *value
+            };
+            transformed_values.insert(transformed_key, transformed_value);
+        }
+
+        let mut transformed_tags = record.tags.clone();
+        transformed_tags.sort();
+        transformed_tags.dedup();
+
+        DataRecord {
+            id: record.id,
+            timestamp: record.timestamp,
+            values: transformed_values,
+            tags: transformed_tags,
+        }
+    }
+
+    pub fn reset_processor(&mut self) {
+        self.seen_ids.clear();
+    }
+
+    pub fn get_processed_count(&self) -> usize {
+        self.seen_ids.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_processing() {
+        let mut processor = DataProcessor::new(true, Some(100.0));
+        
+        let mut values = HashMap::new();
+        values.insert("Temperature".to_string(), 25.5);
+        values.insert("Pressure".to_string(), 101.3);
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values,
+            tags: vec!["sensor".to_string(), "room1".to_string()],
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_ok());
+        assert_eq!(processor.get_processed_count(), 1);
+    }
+
+    #[test]
+    fn test_invalid_timestamp() {
+        let mut processor = DataProcessor::new(true, None);
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: -1,
+            values: HashMap::from([("test".to_string(), 1.0)]),
+            tags: vec![],
+        };
+
+        let result = processor.process_record(&record);
+        assert!(matches!(result, Err(ProcessingError::InvalidTimestamp(-1))));
+    }
+
+    #[test]
+    fn test_value_limit_exceeded() {
+        let mut processor = DataProcessor::new(true, Some(50.0));
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: HashMap::from([("reading".to_string(), 75.0)]),
+            tags: vec![],
+        };
+
+        let result = processor.process_record(&record);
+        assert!(matches!(result, Err(ProcessingError::ValueOutOfRange(75.0))));
+    }
+}
