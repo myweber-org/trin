@@ -1,0 +1,110 @@
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvFilter {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvFilter {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvFilter {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn filter_rows<P>(
+        &self,
+        file_path: P,
+        predicate: impl Fn(&[String]) -> bool,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        let mut filtered = Vec::new();
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if predicate(&fields) {
+                filtered.push(fields);
+            }
+        }
+
+        Ok(filtered)
+    }
+
+    pub fn count_matching_rows<P>(
+        &self,
+        file_path: P,
+        predicate: impl Fn(&[String]) -> bool,
+    ) -> Result<usize, Box<dyn Error>>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let filtered = self.filter_rows(file_path, predicate)?;
+        Ok(filtered.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_rows() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "name,age,city")?;
+        writeln!(temp_file, "Alice,30,London")?;
+        writeln!(temp_file, "Bob,25,Paris")?;
+        writeln!(temp_file, "Charlie,35,London")?;
+
+        let filter = CsvFilter::new(',', true);
+        let result = filter.filter_rows(temp_file.path(), |fields| {
+            fields.get(2).map(|city| city == "London").unwrap_or(false)
+        })?;
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0][0], "Alice");
+        assert_eq!(result[1][0], "Charlie");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_count_matching_rows() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "product,price,stock")?;
+        writeln!(temp_file, "Widget,19.99,100")?;
+        writeln!(temp_file, "Gadget,29.99,0")?;
+        writeln!(temp_file, "Thingy,9.99,50")?;
+
+        let filter = CsvFilter::new(',', true);
+        let count = filter.count_matching_rows(temp_file.path(), |fields| {
+            fields
+                .get(2)
+                .and_then(|s| s.parse::<i32>().ok())
+                .map(|stock| stock > 0)
+                .unwrap_or(false)
+        })?;
+
+        assert_eq!(count, 2);
+
+        Ok(())
+    }
+}
