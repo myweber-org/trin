@@ -1,85 +1,91 @@
 
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use pbkdf2::pbkdf2_hmac;
-use rand::RngCore;
-use sha2::Sha256;
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        SaltString
+    },
+    Argon2, PasswordHasher, PasswordVerifier
+};
 use std::fs;
 use std::io::{Read, Write};
+use std::path::Path;
 
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+const NONCE_SIZE: usize = 12;
+const SALT_SIZE: usize = 16;
 
-const SALT_LENGTH: usize = 16;
-const IV_LENGTH: usize = 16;
-const KEY_LENGTH: usize = 32;
-const PBKDF2_ITERATIONS: u32 = 100_000;
+pub struct FileEncryptor {
+    key: [u8; 32],
+}
 
-pub struct FileCrypto;
-
-impl FileCrypto {
-    pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
-        let mut input_file = fs::File::open(input_path)
-            .map_err(|e| format!("Failed to open input file: {}", e))?;
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
         
-        let mut plaintext = Vec::new();
-        input_file.read_to_end(&mut plaintext)
-            .map_err(|e| format!("Failed to read input file: {}", e))?;
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&password_hash.hash.unwrap().as_bytes()[..32]);
+        
+        Ok(Self { key })
+    }
 
-        let mut salt = [0u8; SALT_LENGTH];
-        let mut iv = [0u8; IV_LENGTH];
-        rand::thread_rng().fill_bytes(&mut salt);
-        rand::thread_rng().fill_bytes(&mut iv);
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let mut file_data = Vec::new();
+        fs::File::open(input_path)?.read_to_end(&mut file_data)?;
 
-        let mut key = [0u8; KEY_LENGTH];
-        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ITERATIONS, &mut key);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::from_slice(&rand::random::<[u8; NONCE_SIZE]>());
 
-        let cipher = Aes256CbcEnc::new(&key.into(), &iv.into());
-        let ciphertext = cipher.encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+        let encrypted_data = cipher.encrypt(nonce, file_data.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
 
-        let mut output_file = fs::File::create(output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-        output_file.write_all(&salt)
-            .map_err(|e| format!("Failed to write salt: {}", e))?;
-        output_file.write_all(&iv)
-            .map_err(|e| format!("Failed to write IV: {}", e))?;
-        output_file.write_all(&ciphertext)
-            .map_err(|e| format!("Failed to write ciphertext: {}", e))?;
+        let mut output = fs::File::create(output_path)?;
+        output.write_all(nonce)?;
+        output.write_all(&encrypted_data)?;
 
         Ok(())
     }
 
-    pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
-        let mut input_file = fs::File::open(input_path)
-            .map_err(|e| format!("Failed to open input file: {}", e))?;
-        
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut encrypted_data = Vec::new();
-        input_file.read_to_end(&mut encrypted_data)
-            .map_err(|e| format!("Failed to read input file: {}", e))?;
+        fs::File::open(input_path)?.read_to_end(&mut encrypted_data)?;
 
-        if encrypted_data.len() < SALT_LENGTH + IV_LENGTH {
-            return Err("File too short to contain salt and IV".to_string());
+        if encrypted_data.len() < NONCE_SIZE {
+            return Err("Invalid encrypted file format".into());
         }
 
-        let salt = &encrypted_data[0..SALT_LENGTH];
-        let iv = &encrypted_data[SALT_LENGTH..SALT_LENGTH + IV_LENGTH];
-        let ciphertext = &encrypted_data[SALT_LENGTH + IV_LENGTH..];
+        let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+        let nonce = Nonce::from_slice(nonce_bytes);
 
-        let mut key = [0u8; KEY_LENGTH];
-        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
-
-        let cipher = Aes256CbcDec::new(&key.into(), iv.into());
-        let plaintext = cipher.decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let decrypted_data = cipher.decrypt(nonce, ciphertext)
             .map_err(|e| format!("Decryption failed: {}", e))?;
 
-        let mut output_file = fs::File::create(output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-        
-        output_file.write_all(&plaintext)
-            .map_err(|e| format!("Failed to write plaintext: {}", e))?;
+        fs::File::create(output_path)?.write_all(&decrypted_data)?;
 
         Ok(())
     }
+
+    pub fn verify_password(&self, password: &str) -> bool {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        
+        match argon2.hash_password(password.as_bytes(), &salt) {
+            Ok(password_hash) => {
+                let derived_key = password_hash.hash.unwrap().as_bytes();
+                derived_key[..32] == self.key
+            }
+            Err(_) => false
+        }
+    }
+}
+
+pub fn generate_random_key() -> [u8; 32] {
+    rand::random::<[u8; 32]>()
 }
 
 #[cfg(test)]
@@ -89,29 +95,32 @@ mod tests {
 
     #[test]
     fn test_encryption_decryption() {
-        let plaintext = b"Secret data that needs protection";
+        let password = "secure_password_123";
+        let encryptor = FileEncryptor::new(password).unwrap();
         
-        let input_file = NamedTempFile::new().unwrap();
+        let original_content = b"Secret data that needs protection";
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_content).unwrap();
+        
         let encrypted_file = NamedTempFile::new().unwrap();
         let decrypted_file = NamedTempFile::new().unwrap();
         
-        fs::write(input_file.path(), plaintext).unwrap();
+        encryptor.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
         
-        let password = "strong_password_123";
+        let mut decrypted_content = Vec::new();
+        fs::File::open(decrypted_file.path()).unwrap()
+            .read_to_end(&mut decrypted_content).unwrap();
         
-        FileCrypto::encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            password
-        ).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
+
+    #[test]
+    fn test_password_verification() {
+        let password = "test_password";
+        let encryptor = FileEncryptor::new(password).unwrap();
         
-        FileCrypto::decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            password
-        ).unwrap();
-        
-        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(plaintext.to_vec(), decrypted_data);
+        assert!(encryptor.verify_password(password));
+        assert!(!encryptor.verify_password("wrong_password"));
     }
 }
