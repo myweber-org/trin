@@ -97,4 +97,66 @@ mod tests {
         
         assert_eq!(numeric, vec![Some(10.0), None, Some(40.0)]);
     }
+}use std::collections::HashSet;
+use std::hash::Hash;
+
+pub fn deduplicate<T: Eq + Hash + Clone>(items: Vec<T>) -> Vec<T> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    
+    for item in items {
+        if seen.insert(item.clone()) {
+            result.push(item);
+        }
+    }
+    result
+}
+
+pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
+    strings
+        .into_iter()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+pub fn merge_and_clean<T: Eq + Hash + Clone>(list1: Vec<T>, list2: Vec<T>) -> Vec<T> {
+    let mut combined = list1;
+    combined.extend(list2);
+    deduplicate(combined)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let input = vec![1, 2, 2, 3, 4, 4, 5];
+        let result = deduplicate(input);
+        assert_eq!(result, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let input = vec![
+            "  Hello  ".to_string(),
+            "WORLD".to_string(),
+            "".to_string(),
+            "  test  ".to_string(),
+        ];
+        let result = normalize_strings(input);
+        assert_eq!(result, vec!["hello", "world", "test"]);
+    }
+
+    #[test]
+    fn test_merge_and_clean() {
+        let list1 = vec!["a", "b", "c"];
+        let list2 = vec!["b", "c", "d"];
+        let result = merge_and_clean(
+            list1.into_iter().map(String::from).collect(),
+            list2.into_iter().map(String::from).collect(),
+        );
+        assert_eq!(result, vec!["a", "b", "c", "d"]);
+    }
 }
