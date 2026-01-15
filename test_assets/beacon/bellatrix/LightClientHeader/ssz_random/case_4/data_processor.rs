@@ -391,3 +391,120 @@ mod tests {
         assert_eq!(std_dev, 2.0_f64.sqrt());
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidFormat,
+    OutOfRange,
+    MissingField,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidFormat => write!(f, "Data format is invalid"),
+            DataError::OutOfRange => write!(f, "Value is out of acceptable range"),
+            DataError::MissingField => write!(f, "Required field is missing"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataPoint {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataPoint {
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::MissingField);
+        }
+        
+        if !self.value.is_finite() || self.value < 0.0 || self.value > 1000.0 {
+            return Err(DataError::OutOfRange);
+        }
+        
+        if self.timestamp <= 0 {
+            return Err(DataError::InvalidFormat);
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), DataError> {
+        self.validate()?;
+        
+        if !multiplier.is_finite() || multiplier <= 0.0 {
+            return Err(DataError::InvalidFormat);
+        }
+        
+        self.value *= multiplier;
+        
+        if self.value > 1000.0 {
+            return Err(DataError::OutOfRange);
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn process_data_points(points: &mut [DataPoint], multiplier: f64) -> Result<Vec<DataPoint>, DataError> {
+    let mut results = Vec::with_capacity(points.len());
+    
+    for point in points {
+        let mut processed_point = DataPoint {
+            id: point.id,
+            value: point.value,
+            timestamp: point.timestamp,
+        };
+        
+        processed_point.transform(multiplier)?;
+        results.push(processed_point);
+    }
+    
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_data_point() {
+        let point = DataPoint {
+            id: 1,
+            value: 50.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(point.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let point = DataPoint {
+            id: 0,
+            value: 50.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(matches!(point.validate(), Err(DataError::MissingField)));
+    }
+    
+    #[test]
+    fn test_transform_valid() {
+        let mut point = DataPoint {
+            id: 1,
+            value: 50.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(point.transform(2.0).is_ok());
+        assert_eq!(point.value, 100.0);
+    }
+}
