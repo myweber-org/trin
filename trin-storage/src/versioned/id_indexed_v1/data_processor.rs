@@ -1,92 +1,55 @@
-
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-    pub valid: bool,
-}
-
-impl DataRecord {
-    pub fn new(id: u32, value: f64, category: &str) -> Self {
-        let valid = value >= 0.0 && value <= 1000.0;
-        DataRecord {
-            id,
-            value,
-            category: category.to_string(),
-            valid,
-        }
-    }
-}
-
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
-    total_value: f64,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            records: Vec::new(),
-            total_value: 0.0,
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let mut count = 0;
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
 
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
             
-            if line_num == 0 {
-                continue;
+            if !fields.is_empty() {
+                records.push(fields);
             }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-
-            let id = parts[0].parse::<u32>().unwrap_or(0);
-            let value = parts[1].parse::<f64>().unwrap_or(0.0);
-            let category = parts[2].trim();
-
-            let record = DataRecord::new(id, value, category);
-            self.total_value += record.value;
-            self.records.push(record);
-            count += 1;
         }
 
-        Ok(count)
+        Ok(records)
     }
 
-    pub fn get_valid_records(&self) -> Vec<&DataRecord> {
-        self.records.iter().filter(|r| r.valid).collect()
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
     }
 
-    pub fn get_average_value(&self) -> f64 {
-        if self.records.is_empty() {
-            0.0
-        } else {
-            self.total_value / self.records.len() as f64
-        }
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
+    pub fn filter_valid_records(&self, records: Vec<Vec<String>>) -> Vec<Vec<String>> {
+        records
+            .into_iter()
+            .filter(|record| self.validate_record(record))
             .collect()
-    }
-
-    pub fn count_records(&self) -> usize {
-        self.records.len()
     }
 }
 
@@ -97,36 +60,26 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        
+    fn test_process_file_with_header() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,100.5,type_a").unwrap();
-        writeln!(temp_file, "2,200.0,type_b").unwrap();
-        writeln!(temp_file, "3,300.75,type_a").unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Alice,25,London").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
         
-        let result = processor.load_from_csv(temp_file.path());
-        assert!(result.is_ok());
-        assert_eq!(processor.count_records(), 3);
-        assert_eq!(processor.get_valid_records().len(), 3);
-        
-        let type_a_records = processor.filter_by_category("type_a");
-        assert_eq!(type_a_records.len(), 2);
-        
-        let avg = processor.get_average_value();
-        assert!(avg > 200.0 && avg < 201.0);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["John", "30", "New York"]);
     }
 
     #[test]
-    fn test_invalid_record() {
-        let record = DataRecord::new(1, -10.0, "invalid");
-        assert!(!record.valid);
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        let valid_record = vec!["data".to_string(), "value".to_string()];
+        let invalid_record = vec!["".to_string(), "value".to_string()];
         
-        let record2 = DataRecord::new(2, 1500.0, "invalid");
-        assert!(!record2.valid);
-        
-        let record3 = DataRecord::new(3, 500.0, "valid");
-        assert!(record3.valid);
+        assert!(processor.validate_record(&valid_record));
+        assert!(!processor.validate_record(&invalid_record));
     }
 }
