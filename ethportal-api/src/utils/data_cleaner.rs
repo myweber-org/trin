@@ -1,54 +1,58 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
+use std::collections::HashSet;
 
-fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
+pub fn clean_string_data(input: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
 
-    let output_file = File::create(output_path)?;
-    let mut wtr = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    let mut cleaned_count = 0;
-    let mut error_count = 0;
-
-    for result in rdr.deserialize() {
-        match result {
-            Ok(mut record) => {
-                let rec: Record = record;
-                let cleaned_record = Record {
-                    name: rec.name.trim().to_string(),
-                    value: rec.value.max(0.0),
-                    ..rec
-                };
-                wtr.serialize(&cleaned_record)?;
-                cleaned_count += 1;
-            }
-            Err(e) => {
-                eprintln!("Skipping invalid record: {}", e);
-                error_count += 1;
-            }
+    for item in input {
+        let normalized = item.trim().to_lowercase();
+        if !normalized.is_empty() && seen.insert(normalized.clone()) {
+            result.push(normalized);
         }
     }
 
-    wtr.flush()?;
-    println!("Cleaned {} records, skipped {} errors", cleaned_count, error_count);
-    Ok(())
+    result.sort();
+    result
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    clean_csv_data("input.csv", "output.csv")
+pub fn remove_numeric_duplicates(input: Vec<f64>) -> Vec<f64> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+
+    for &num in &input {
+        if seen.insert((num * 1000.0).round() as i64) {
+            result.push(num);
+        }
+    }
+
+    result.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_string_data() {
+        let input = vec![
+            "  Apple  ".to_string(),
+            "apple".to_string(),
+            "BANANA".to_string(),
+            "banana ".to_string(),
+            "".to_string(),
+            "  Cherry  ".to_string(),
+        ];
+        
+        let result = clean_string_data(input);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn test_remove_numeric_duplicates() {
+        let input = vec![3.141, 3.1415, 2.718, 3.141, 2.718];
+        let result = remove_numeric_duplicates(input);
+        assert_eq!(result, vec![2.718, 3.141, 3.1415]);
+    }
 }
