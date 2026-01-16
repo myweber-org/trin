@@ -70,4 +70,37 @@ mod tests {
         let cleaned = cleaner.clean_vector(data);
         assert_eq!(cleaned, vec!["hello".to_string(), "test".to_string()]);
     }
+}use std::collections::HashSet;
+
+pub fn clean_and_sort_data<T: Ord + Clone>(data: &[T]) -> Vec<T> {
+    let unique_items: HashSet<_> = data.iter().cloned().collect();
+    let mut result: Vec<T> = unique_items.into_iter().collect();
+    result.sort();
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_and_sort_numbers() {
+        let input = vec![5, 2, 8, 2, 5, 1, 9];
+        let expected = vec![1, 2, 5, 8, 9];
+        assert_eq!(clean_and_sort_data(&input), expected);
+    }
+
+    #[test]
+    fn test_clean_and_sort_strings() {
+        let input = vec!["banana", "apple", "cherry", "apple", "banana"];
+        let expected = vec!["apple", "banana", "cherry"];
+        assert_eq!(clean_and_sort_data(&input), expected);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let input: Vec<i32> = vec![];
+        let expected: Vec<i32> = vec![];
+        assert_eq!(clean_and_sort_data(&input), expected);
+    }
 }
