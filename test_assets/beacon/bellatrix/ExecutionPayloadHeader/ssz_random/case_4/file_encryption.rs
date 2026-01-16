@@ -1,70 +1,104 @@
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use hex;
-use rand::Rng;
+
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::path::Path;
 
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+const DEFAULT_KEY: u8 = 0x55;
 
-pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
-    let mut file = fs::File::open(input_path).map_err(|e| e.to_string())?;
-    let mut plaintext = Vec::new();
-    file.read_to_end(&mut plaintext).map_err(|e| e.to_string())?;
-
-    let salt: [u8; 16] = rand::thread_rng().gen();
-    let key_iv = derive_key_iv(password.as_bytes(), &salt);
-
-    let ciphertext = Aes256CbcEnc::new(&key_iv.0.into(), &key_iv.1.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
-
-    let mut output = fs::File::create(output_path).map_err(|e| e.to_string())?;
-    output.write_all(&salt).map_err(|e| e.to_string())?;
-    output.write_all(&ciphertext).map_err(|e| e.to_string())?;
-
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), String> {
-    let mut file = fs::File::open(input_path).map_err(|e| e.to_string())?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data).map_err(|e| e.to_string())?;
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
 
-    if data.len() < 16 {
-        return Err("Invalid encrypted file".to_string());
+pub fn process_file_interactive() -> io::Result<()> {
+    println!("Enter input file path:");
+    let mut input_path = String::new();
+    io::stdin().read_line(&mut input_path)?;
+    let input_path = input_path.trim();
+    
+    println!("Enter output file path:");
+    let mut output_path = String::new();
+    io::stdin().read_line(&mut output_path)?;
+    let output_path = output_path.trim();
+    
+    println!("Enter operation (encrypt/decrypt):");
+    let mut operation = String::new();
+    io::stdin().read_line(&mut operation)?;
+    let operation = operation.trim().to_lowercase();
+    
+    println!("Enter encryption key (0-255, press Enter for default):");
+    let mut key_input = String::new();
+    io::stdin().read_line(&mut key_input)?;
+    let key_input = key_input.trim();
+    
+    let key = if key_input.is_empty() {
+        None
+    } else {
+        match key_input.parse::<u8>() {
+            Ok(k) => Some(k),
+            Err(_) => {
+                eprintln!("Invalid key, using default");
+                None
+            }
+        }
+    };
+    
+    if !Path::new(input_path).exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Input file '{}' not found", input_path)
+        ));
     }
-
-    let (salt, ciphertext) = data.split_at(16);
-    let key_iv = derive_key_iv(password.as_bytes(), salt);
-
-    let plaintext = Aes256CbcDec::new(&key_iv.0.into(), &key_iv.1.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
-        .map_err(|e| e.to_string())?;
-
-    let mut output = fs::File::create(output_path).map_err(|e| e.to_string())?;
-    output.write_all(&plaintext).map_err(|e| e.to_string())?;
-
-    Ok(())
+    
+    match operation.as_str() {
+        "encrypt" => encrypt_file(input_path, output_path, key),
+        "decrypt" => decrypt_file(input_path, output_path, key),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Operation must be 'encrypt' or 'decrypt'"
+        ))
+    }
 }
 
-fn derive_key_iv(password: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 16]) {
-    let mut key = [0u8; 32];
-    let mut iv = [0u8; 16];
-    let mut combined = [0u8; 48];
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(password);
-    hasher.update(salt);
-    let hash = hasher.finalize();
-
-    combined.copy_from_slice(&hash.as_bytes()[..48]);
-    key.copy_from_slice(&combined[..32]);
-    iv.copy_from_slice(&combined[32..48]);
-
-    (key, iv)
-}
-
-pub fn generate_random_key() -> String {
-    let key: [u8; 32] = rand::thread_rng().gen();
-    hex::encode(key)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let original_text = b"Hello, Rust!";
+        let mut input_file = NamedTempFile::new().unwrap();
+        let mut output_file = NamedTempFile::new().unwrap();
+        let mut final_file = NamedTempFile::new().unwrap();
+        
+        input_file.write_all(original_text).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        decrypt_file(
+            output_file.path().to_str().unwrap(),
+            final_file.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        let decrypted_data = fs::read(final_file.path()).unwrap();
+        assert_eq!(original_text.to_vec(), decrypted_data);
+    }
 }
