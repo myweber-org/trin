@@ -377,3 +377,140 @@ mod tests {
         assert_eq!(stats.2, 25.0);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    InvalidInput(String),
+    #[error("Processing timeout")]
+    Timeout,
+    #[error("Serialization error")]
+    Serialization,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidInput("ID cannot be zero".to_string()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::InvalidInput("Timestamp cannot be negative".to_string()));
+        }
+        
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(DataError::InvalidInput("Value key cannot be empty".to_string()));
+            }
+            if !value.is_finite() {
+                return Err(DataError::InvalidInput(format!("Value {} is not finite", key)));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn normalize_values(&mut self) {
+        let sum: f64 = self.values.values().sum();
+        if sum != 0.0 {
+            for value in self.values.values_mut() {
+                *value /= sum;
+            }
+        }
+    }
+    
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+}
+
+pub struct DataProcessor {
+    max_records: usize,
+    processed_count: usize,
+}
+
+impl DataProcessor {
+    pub fn new(max_records: usize) -> Self {
+        DataProcessor {
+            max_records,
+            processed_count: 0,
+        }
+    }
+    
+    pub fn process_batch(&mut self, records: &mut [DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+        if self.processed_count + records.len() > self.max_records {
+            return Err(DataError::InvalidInput("Exceeds maximum record limit".to_string()));
+        }
+        
+        let mut processed = Vec::with_capacity(records.len());
+        
+        for record in records.iter_mut() {
+            record.validate()?;
+            record.normalize_values();
+            record.add_tag("processed".to_string());
+            processed.push(record.clone());
+        }
+        
+        self.processed_count += records.len();
+        Ok(processed)
+    }
+    
+    pub fn get_stats(&self) -> HashMap<String, usize> {
+        let mut stats = HashMap::new();
+        stats.insert("processed_count".to_string(), self.processed_count);
+        stats.insert("remaining_capacity".to_string(), self.max_records - self.processed_count);
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([("temp".to_string(), 25.5)]),
+            tags: vec![],
+        };
+        
+        assert!(record.validate().is_ok());
+        
+        record.id = 0;
+        assert!(record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_value_normalization() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([
+                ("a".to_string(), 1.0),
+                ("b".to_string(), 2.0),
+                ("c".to_string(), 3.0),
+            ]),
+            tags: vec![],
+        };
+        
+        record.normalize_values();
+        
+        let sum: f64 = record.values.values().sum();
+        assert!((sum - 1.0).abs() < f64::EPSILON);
+    }
+}
