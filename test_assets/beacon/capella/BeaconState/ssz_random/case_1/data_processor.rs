@@ -1,81 +1,97 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    data: Vec<f64>,
+    frequency_map: HashMap<String, u32>,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new() -> Self {
         DataProcessor {
-            delimiter,
-            has_header,
+            data: Vec::new(),
+            frequency_map: HashMap::new(),
         }
     }
 
-    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
-
-        if self.has_header {
-            lines.next();
-        }
-
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line.split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
+        
+        for line in reader.lines().skip(1) {
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
             
-            if !fields.is_empty() {
-                records.push(fields);
-            }
-        }
-
-        Ok(records)
-    }
-
-    pub fn validate_records(&self, records: &[Vec<String>]) -> Vec<usize> {
-        let mut invalid_indices = Vec::new();
-        
-        for (index, record) in records.iter().enumerate() {
-            if record.iter().any(|field| field.is_empty()) {
-                invalid_indices.push(index);
+            if parts.len() >= 2 {
+                if let Ok(value) = parts[1].parse::<f64>() {
+                    self.data.push(value);
+                }
+                
+                let category = parts[0].to_string();
+                *self.frequency_map.entry(category).or_insert(0) += 1;
             }
         }
         
-        invalid_indices
+        Ok(())
     }
 
-    pub fn calculate_column_averages(&self, records: &[Vec<String>]) -> Option<Vec<f64>> {
-        if records.is_empty() {
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
             return None;
         }
+        
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
 
-        let column_count = records[0].len();
-        let mut sums = vec![0.0; column_count];
-        let mut counts = vec![0; column_count];
-
-        for record in records {
-            for (i, field) in record.iter().enumerate() {
-                if let Ok(value) = field.parse::<f64>() {
-                    sums[i] += value;
-                    counts[i] += 1;
-                }
-            }
+    pub fn calculate_standard_deviation(&self) -> Option<f64> {
+        if self.data.len() < 2 {
+            return None;
         }
+        
+        let mean = self.calculate_mean()?;
+        let variance: f64 = self.data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / (self.data.len() - 1) as f64;
+        
+        Some(variance.sqrt())
+    }
 
-        let averages: Vec<f64> = sums.iter()
-            .zip(counts.iter())
-            .map(|(&sum, &count)| if count > 0 { sum / count as f64 } else { 0.0 })
-            .collect();
+    pub fn get_category_frequency(&self, category: &str) -> u32 {
+        *self.frequency_map.get(category).unwrap_or(&0)
+    }
 
-        Some(averages)
+    pub fn get_top_categories(&self, limit: usize) -> Vec<(String, u32)> {
+        let mut categories: Vec<_> = self.frequency_map.iter().collect();
+        categories.sort_by(|a, b| b.1.cmp(a.1));
+        
+        categories.iter()
+            .take(limit)
+            .map(|(&ref k, &v)| (k.clone(), v))
+            .collect()
+    }
+
+    pub fn filter_data(&self, threshold: f64) -> Vec<f64> {
+        self.data.iter()
+            .filter(|&&x| x >= threshold)
+            .cloned()
+            .collect()
+    }
+
+    pub fn data_summary(&self) -> String {
+        let mean = self.calculate_mean().unwrap_or(0.0);
+        let std_dev = self.calculate_standard_deviation().unwrap_or(0.0);
+        let total_categories = self.frequency_map.len();
+        
+        format!(
+            "Data points: {}, Mean: {:.2}, Std Dev: {:.2}, Categories: {}",
+            self.data.len(),
+            mean,
+            std_dev,
+            total_categories
+        )
     }
 }
 
@@ -86,23 +102,24 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_processing() {
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,salary").unwrap();
-        writeln!(temp_file, "Alice,30,50000.5").unwrap();
-        writeln!(temp_file, "Bob,25,45000.0").unwrap();
-        writeln!(temp_file, "Charlie,35,").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let records = processor.process_csv(temp_file.path()).unwrap();
+        writeln!(temp_file, "category,value").unwrap();
+        writeln!(temp_file, "A,10.5").unwrap();
+        writeln!(temp_file, "B,20.3").unwrap();
+        writeln!(temp_file, "A,15.7").unwrap();
+        writeln!(temp_file, "C,8.9").unwrap();
         
-        assert_eq!(records.len(), 3);
-        assert_eq!(records[0], vec!["Alice", "30", "50000.5"]);
+        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
         
-        let invalid = processor.validate_records(&records);
-        assert_eq!(invalid, vec![2]);
+        assert_eq!(processor.data.len(), 4);
+        assert_eq!(processor.calculate_mean().unwrap(), 13.85);
+        assert_eq!(processor.get_category_frequency("A"), 2);
+        assert_eq!(processor.get_category_frequency("B"), 1);
         
-        let averages = processor.calculate_column_averages(&records[0..2]).unwrap();
-        assert_eq!(averages, vec![0.0, 27.5, 47500.25]);
+        let filtered = processor.filter_data(10.0);
+        assert_eq!(filtered.len(), 3);
     }
 }
