@@ -47,4 +47,74 @@ pub fn decrypt_file(input_path: &str, output_path: &str, key_hex: &str) -> io::R
 
     println!("Decryption successful.");
     Ok(())
+}use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use hex;
+use rand::Rng;
+use std::fs;
+use std::io::{Read, Write};
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const KEY_SIZE: usize = 32;
+const IV_SIZE: usize = 16;
+
+pub fn generate_key() -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    (0..KEY_SIZE).map(|_| rng.gen()).collect()
+}
+
+pub fn generate_iv() -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    (0..IV_SIZE).map(|_| rng.gen()).collect()
+}
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8], iv: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)?;
+
+    let ciphertext = Aes256CbcEnc::new(key.into(), iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8], iv: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(input_path)?;
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext)?;
+
+    let plaintext = Aes256CbcDec::new(key.into(), iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)?;
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&plaintext)?;
+
+    Ok(())
+}
+
+pub fn save_key_iv(key: &[u8], iv: &[u8], path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let hex_key = hex::encode(key);
+    let hex_iv = hex::encode(iv);
+    let content = format!("KEY: {}\nIV: {}", hex_key, hex_iv);
+    
+    fs::write(path, content)?;
+    Ok(())
+}
+
+pub fn load_key_iv(path: &str) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
+    let content = fs::read_to_string(path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    
+    let key_line = lines[0].strip_prefix("KEY: ").ok_or("Invalid key format")?;
+    let iv_line = lines[1].strip_prefix("IV: ").ok_or("Invalid IV format")?;
+    
+    let key = hex::decode(key_line)?;
+    let iv = hex::decode(iv_line)?;
+    
+    Ok((key, iv))
 }
