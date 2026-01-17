@@ -1,113 +1,84 @@
-
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 
-#[derive(Debug, Clone)]
 pub struct Config {
-    pub database_url: String,
-    pub server_port: u16,
-    pub log_level: String,
-    pub cache_ttl: u64,
+    values: HashMap<String, String>,
 }
 
 impl Config {
-    pub fn new() -> Result<Self, String> {
-        let mut config = HashMap::new();
-        
-        // Load from file if exists
-        if let Ok(content) = fs::read_to_string("config.toml") {
-            let file_config: HashMap<String, String> = toml::from_str(&content)
-                .map_err(|e| format!("Failed to parse config file: {}", e))?;
-            config.extend(file_config);
-        }
-        
-        // Override with environment variables
-        for (key, value) in env::vars() {
-            if key.starts_with("APP_") {
-                let config_key = key.trim_start_matches("APP_").to_lowercase();
-                config.insert(config_key, value);
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut values = HashMap::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                values.insert(key, processed_value);
             }
         }
-        
-        // Build config with defaults
-        let database_url = config
-            .get("database_url")
-            .cloned()
-            .unwrap_or_else(|| "postgres://localhost:5432/app".to_string());
-            
-        let server_port = config
-            .get("server_port")
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(8080);
-            
-        let log_level = config
-            .get("log_level")
-            .cloned()
-            .unwrap_or_else(|| "info".to_string());
-            
-        let cache_ttl = config
-            .get("cache_ttl")
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(300);
-        
-        Ok(Self {
-            database_url,
-            server_port,
-            log_level,
-            cache_ttl,
-        })
+
+        Ok(Config { values })
     }
-    
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
-        
-        if self.database_url.is_empty() {
-            errors.push("Database URL cannot be empty".to_string());
-        }
-        
-        if self.server_port == 0 {
-            errors.push("Server port must be greater than 0".to_string());
-        }
-        
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
-            errors.push(format!(
-                "Invalid log level '{}'. Must be one of: {:?}",
-                self.log_level, valid_log_levels
-            ));
-        }
-        
-        if errors.is_empty() {
-            Ok(())
+
+    fn process_value(value: &str) -> String {
+        if value.starts_with("${") && value.ends_with('}') {
+            let env_var = &value[2..value.len() - 1];
+            env::var(env_var).unwrap_or_else(|_| value.to_string())
         } else {
-            Err(errors)
+            value.to_string()
         }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
     #[test]
-    fn test_default_config() {
-        let config = Config::new().unwrap();
-        assert_eq!(config.server_port, 8080);
-        assert_eq!(config.log_level, "info");
-        assert_eq!(config.cache_ttl, 300);
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
     }
-    
+
     #[test]
-    fn test_config_validation() {
-        let mut config = Config {
-            database_url: "".to_string(),
-            server_port: 0,
-            log_level: "invalid".to_string(),
-            cache_ttl: 300,
-        };
+    fn test_env_substitution() {
+        env::set_var("DB_PASSWORD", "secret123");
         
-        let errors = config.validate().unwrap_err();
-        assert_eq!(errors.len(), 3);
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DB_HOST=localhost").unwrap();
+        writeln!(file, "DB_PASS=${DB_PASSWORD}").unwrap();
+        writeln!(file, "NO_ENV=${NONEXISTENT}").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("DB_PASS"), Some(&"secret123".to_string()));
+        assert_eq!(config.get("NO_ENV"), Some(&"${NONEXISTENT}".to_string()));
     }
 }
