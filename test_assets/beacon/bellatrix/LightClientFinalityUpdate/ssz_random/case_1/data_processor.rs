@@ -1,94 +1,142 @@
 
+use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
-use std::path::Path;
+use std::fmt;
 
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    message: String,
 }
 
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
+    }
+}
+
+impl Error for ValidationError {}
+
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    data: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            data: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-
-        for result in rdr.deserialize() {
-            let record: DataRecord = result?;
-            self.records.push(record);
+    pub fn add_dataset(&mut self, key: &str, values: Vec<f64>) -> Result<(), ValidationError> {
+        if values.is_empty() {
+            return Err(ValidationError {
+                message: "Dataset cannot be empty".to_string(),
+            });
         }
 
+        for &value in &values {
+            if !value.is_finite() {
+                return Err(ValidationError {
+                    message: "Dataset contains non-finite values".to_string(),
+                });
+            }
+        }
+
+        self.data.insert(key.to_string(), values);
         Ok(())
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let count = values.len() as f64;
+            let sum: f64 = values.iter().sum();
+            let mean = sum / count;
+
+            let variance: f64 = values
+                .iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>()
+                / count;
+
+            Statistics {
+                count: values.len(),
+                mean,
+                variance,
+                std_dev: variance.sqrt(),
+            }
+        })
+    }
+
+    pub fn normalize_data(&self, key: &str) -> Option<Vec<f64>> {
+        self.data.get(key).map(|values| {
+            let stats = self.calculate_statistics(key).unwrap();
+            values
+                .iter()
+                .map(|&x| (x - stats.mean) / stats.std_dev)
+                .collect()
+        })
+    }
+
+    pub fn merge_datasets(&self, keys: &[&str]) -> Option<Vec<f64>> {
+        let mut merged = Vec::new();
+        for key in keys {
+            if let Some(values) = self.data.get(*key) {
+                merged.extend(values.clone());
+            } else {
+                return None;
+            }
         }
-
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+        Some(merged)
     }
+}
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
-    }
-
-    pub fn validate_records(&self) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.value.is_finite() && !r.category.is_empty())
-            .collect()
-    }
-
-    pub fn record_count(&self) -> usize {
-        self.records.len()
-    }
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_add_valid_dataset() {
         let mut processor = DataProcessor::new();
-        
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,10.5,alpha").unwrap();
-        writeln!(temp_file, "2,20.3,beta").unwrap();
-        writeln!(temp_file, "3,15.7,alpha").unwrap();
-
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        let result = processor.add_dataset("test", vec![1.0, 2.0, 3.0]);
         assert!(result.is_ok());
-        assert_eq!(processor.record_count(), 3);
-        
-        let avg = processor.calculate_average();
-        assert!(avg.is_some());
-        assert!((avg.unwrap() - 15.5).abs() < 0.1);
-        
-        let alpha_records = processor.filter_by_category("alpha");
-        assert_eq!(alpha_records.len(), 2);
-        
-        let valid_records = processor.validate_records();
-        assert_eq!(valid_records.len(), 3);
+    }
+
+    #[test]
+    fn test_add_empty_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("empty", vec![]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut processor = DataProcessor::new();
+        processor
+            .add_dataset("numbers", vec![1.0, 2.0, 3.0, 4.0, 5.0])
+            .unwrap();
+
+        let stats = processor.calculate_statistics("numbers").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.variance, 2.0);
+    }
+
+    #[test]
+    fn test_normalize_data() {
+        let mut processor = DataProcessor::new();
+        processor
+            .add_dataset("values", vec![1.0, 2.0, 3.0])
+            .unwrap();
+
+        let normalized = processor.normalize_data("values").unwrap();
+        assert_eq!(normalized.len(), 3);
     }
 }
