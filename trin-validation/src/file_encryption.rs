@@ -125,3 +125,109 @@ pub fn generate_random_key() -> [u8; 32] {
     OsRng.fill_bytes(&mut key);
     key
 }
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> Result<(), String> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> Result<(), String> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&self, source_path: &Path, dest_path: &Path) -> Result<(), String> {
+        let mut source_file = File::open(source_path)
+            .map_err(|e| format!("Failed to open source file: {}", e))?;
+
+        let mut dest_file = File::create(dest_path)
+            .map_err(|e| format!("Failed to create destination file: {}", e))?;
+
+        let mut buffer = [0u8; 4096];
+        let key_len = self.key.len();
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)
+                .map_err(|e| format!("Failed to read from source file: {}", e))?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            for i in 0..bytes_read {
+                buffer[i] ^= self.key[key_index];
+                key_index = (key_index + 1) % key_len;
+            }
+
+            dest_file.write_all(&buffer[..bytes_read])
+                .map_err(|e| format!("Failed to write to destination file: {}", e))?;
+        }
+
+        Ok(())
+    }
+}
+
+pub fn encrypt_directory(dir_path: &Path, key: &str, extension: &str) -> Result<(), String> {
+    let cipher = XorCipher::new(key);
+
+    for entry in fs::read_dir(dir_path)
+        .map_err(|e| format!("Failed to read directory: {}", e))? 
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext == extension {
+                    let encrypted_path = path.with_extension(format!("{}.enc", extension));
+                    cipher.encrypt_file(&path, &encrypted_path)?;
+                    println!("Encrypted: {:?} -> {:?}", path, encrypted_path);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher() {
+        let key = "secret_key";
+        let cipher = XorCipher::new(key);
+
+        let mut source_file = NamedTempFile::new().unwrap();
+        let test_data = b"Hello, World! This is a test message.";
+        source_file.write_all(test_data).unwrap();
+
+        let encrypted_file = NamedTempFile::new().unwrap();
+        cipher.encrypt_file(source_file.path(), encrypted_file.path()).unwrap();
+
+        let decrypted_file = NamedTempFile::new().unwrap();
+        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+
+        let mut decrypted_data = Vec::new();
+        let mut decrypted_reader = File::open(decrypted_file.path()).unwrap();
+        decrypted_reader.read_to_end(&mut decrypted_data).unwrap();
+
+        assert_eq!(test_data, decrypted_data.as_slice());
+    }
+}
