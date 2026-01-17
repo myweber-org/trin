@@ -145,3 +145,141 @@ mod tests {
         assert_eq!(record.name, "TEST");
     }
 }
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+    pub category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, value: f64, timestamp: i64, category: &str) -> Self {
+        Self {
+            id,
+            value,
+            timestamp,
+            category: category.to_string(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".into());
+        }
+        
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err("Value must be a finite number".into());
+        }
+        
+        if self.timestamp < 0 {
+            return Err("Timestamp cannot be negative".into());
+        }
+        
+        if self.category.is_empty() {
+            return Err("Category cannot be empty".into());
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        record.validate()?;
+        
+        let processed_record = DataRecord {
+            value: record.value * 1.1,
+            ..record
+        };
+        
+        processed.push(processed_record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn filter_by_category(records: Vec<DataRecord>, category: &str) -> Vec<DataRecord> {
+    records
+        .into_iter()
+        .filter(|r| r.category == category)
+        .collect()
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = records
+        .iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 42.5, 1234567890, "test");
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, 42.5, 1234567890, "test");
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 10.0, 1234567890, "A"),
+            DataRecord::new(2, 20.0, 1234567891, "B"),
+        ];
+        
+        let processed = process_records(records).unwrap();
+        assert_eq!(processed[0].value, 11.0);
+        assert_eq!(processed[1].value, 22.0);
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let records = vec![
+            DataRecord::new(1, 10.0, 1234567890, "A"),
+            DataRecord::new(2, 20.0, 1234567891, "B"),
+            DataRecord::new(3, 30.0, 1234567892, "A"),
+        ];
+        
+        let filtered = filter_by_category(records, "A");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(filtered[1].id, 3);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            DataRecord::new(1, 10.0, 1234567890, "A"),
+            DataRecord::new(2, 20.0, 1234567891, "B"),
+            DataRecord::new(3, 30.0, 1234567892, "C"),
+        ];
+        
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
+}
