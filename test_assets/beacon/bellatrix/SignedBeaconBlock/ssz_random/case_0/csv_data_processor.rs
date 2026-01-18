@@ -1,127 +1,145 @@
+
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+#[derive(Debug, Clone)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+impl CsvRecord {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.trim().is_empty()
+            && self.value >= 0.0
+            && !self.category.trim().is_empty()
+            && self.id > 0
+    }
+
+    pub fn transform_value(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+    }
+}
+
 pub struct CsvProcessor {
-    headers: Vec<String>,
-    records: Vec<Vec<String>>,
+    records: Vec<CsvRecord>,
 }
 
 impl CsvProcessor {
-    pub fn new(file_path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
-        let mut lines = reader.lines();
+        let mut count = 0;
 
-        let headers = if let Some(first_line) = lines.next() {
-            first_line?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect()
-        } else {
-            return Err("Empty CSV file".into());
-        };
-
-        let mut records = Vec::new();
-        for line in lines {
+        for (index, line) in reader.lines().enumerate() {
             let line = line?;
-            let fields: Vec<String> = line.split(',')
-                .map(|s| s.trim().to_string())
-                .collect();
-            if fields.len() == headers.len() {
-                records.push(fields);
+            
+            if index == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 4 {
+                let id = parts[0].parse::<u32>().unwrap_or(0);
+                let name = parts[1].to_string();
+                let value = parts[2].parse::<f64>().unwrap_or(0.0);
+                let category = parts[3].to_string();
+
+                let record = CsvRecord::new(id, name, value, category);
+                if record.is_valid() {
+                    self.records.push(record);
+                    count += 1;
+                }
             }
         }
 
-        Ok(CsvProcessor { headers, records })
+        Ok(count)
     }
 
-    pub fn filter_by_column(&self, column_name: &str, value: &str) -> Vec<Vec<String>> {
-        let column_index = self.headers.iter()
-            .position(|h| h == column_name);
+    pub fn filter_by_category(&self, category: &str) -> Vec<&CsvRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
 
-        match column_index {
-            Some(idx) => self.records.iter()
-                .filter(|record| record.get(idx).map_or(false, |v| v == value))
-                .cloned()
-                .collect(),
-            None => Vec::new(),
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn get_average_value(&self) -> f64 {
+        if self.records.is_empty() {
+            0.0
+        } else {
+            self.calculate_total_value() / self.records.len() as f64
         }
     }
 
-    pub fn get_column_stats(&self, column_name: &str) -> Option<(usize, String, String)> {
-        let column_index = self.headers.iter()
-            .position(|h| h == column_name)?;
-
-        let values: Vec<&str> = self.records.iter()
-            .filter_map(|record| record.get(column_index).map(|s| s.as_str()))
-            .collect();
-
-        if values.is_empty() {
-            return None;
+    pub fn apply_value_transformation(&mut self, multiplier: f64) {
+        for record in &mut self.records {
+            record.transform_value(multiplier);
         }
-
-        let count = values.len();
-        let min_value = values.iter().min()?.to_string();
-        let max_value = values.iter().max()?.to_string();
-
-        Some((count, min_value, max_value))
     }
 
-    pub fn record_count(&self) -> usize {
-        self.records.len()
+    pub fn get_records(&self) -> &[CsvRecord] {
+        &self.records
     }
 
-    pub fn headers(&self) -> &[String] {
-        &self.headers
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
-    fn create_test_csv() -> NamedTempFile {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,age,department").unwrap();
-        writeln!(temp_file, "1,Alice,30,Engineering").unwrap();
-        writeln!(temp_file, "2,Bob,25,Marketing").unwrap();
-        writeln!(temp_file, "3,Charlie,35,Engineering").unwrap();
-        writeln!(temp_file, "4,Diana,28,Sales").unwrap();
-        temp_file
+    #[test]
+    fn test_record_validation() {
+        let valid_record = CsvRecord::new(1, "Test".to_string(), 10.5, "A".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = CsvRecord::new(0, "".to_string(), -5.0, "".to_string());
+        assert!(!invalid_record.is_valid());
     }
 
     #[test]
-    fn test_csv_loading() {
-        let temp_file = create_test_csv();
-        let processor = CsvProcessor::new(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(processor.headers(), &["id", "name", "age", "department"]);
-        assert_eq!(processor.record_count(), 4);
+    fn test_value_transformation() {
+        let mut record = CsvRecord::new(1, "Test".to_string(), 10.0, "A".to_string());
+        record.transform_value(2.0);
+        assert_eq!(record.value, 20.0);
     }
 
     #[test]
-    fn test_filter_by_column() {
-        let temp_file = create_test_csv();
-        let processor = CsvProcessor::new(temp_file.path().to_str().unwrap()).unwrap();
+    fn test_processor_calculations() {
+        let mut processor = CsvProcessor::new();
         
-        let engineering_records = processor.filter_by_column("department", "Engineering");
-        assert_eq!(engineering_records.len(), 2);
-        
-        let sales_records = processor.filter_by_column("department", "Sales");
-        assert_eq!(sales_records.len(), 1);
-    }
+        processor.records.push(CsvRecord::new(1, "Item1".to_string(), 10.0, "A".to_string()));
+        processor.records.push(CsvRecord::new(2, "Item2".to_string(), 20.0, "B".to_string()));
+        processor.records.push(CsvRecord::new(3, "Item3".to_string(), 30.0, "A".to_string()));
 
-    #[test]
-    fn test_column_stats() {
-        let temp_file = create_test_csv();
-        let processor = CsvProcessor::new(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(processor.calculate_total_value(), 60.0);
+        assert_eq!(processor.get_average_value(), 20.0);
         
-        let age_stats = processor.get_column_stats("age").unwrap();
-        assert_eq!(age_stats.0, 4);
-        assert_eq!(age_stats.1, "25");
-        assert_eq!(age_stats.2, "35");
+        let category_a_records = processor.filter_by_category("A");
+        assert_eq!(category_a_records.len(), 2);
     }
 }
