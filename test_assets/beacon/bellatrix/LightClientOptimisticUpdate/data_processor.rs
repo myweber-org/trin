@@ -216,3 +216,154 @@ mod tests {
         assert_eq!(updated.value, 100.0);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ValidationError {
+    details: String,
+}
+
+impl ValidationError {
+    fn new(msg: &str) -> ValidationError {
+        ValidationError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ValidationError {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<DataRecord, ValidationError> {
+        if id == 0 {
+            return Err(ValidationError::new("ID cannot be zero"));
+        }
+        if value < 0.0 || value > 1000.0 {
+            return Err(ValidationError::new("Value must be between 0 and 1000"));
+        }
+        if timestamp < 0 {
+            return Err(ValidationError::new("Timestamp cannot be negative"));
+        }
+
+        Ok(DataRecord {
+            id,
+            value,
+            timestamp,
+        })
+    }
+
+    pub fn normalize(&self, max_value: f64) -> f64 {
+        if max_value <= 0.0 {
+            return 0.0;
+        }
+        self.value / max_value
+    }
+
+    pub fn is_anomaly(&self, threshold: f64) -> bool {
+        self.value > threshold
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> (f64, f64, usize) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len();
+    let average = sum / count as f64;
+
+    let max_value = records
+        .iter()
+        .map(|r| r.value)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    (average, max_value, count)
+}
+
+pub fn filter_records(records: &[DataRecord], min_value: f64) -> Vec<&DataRecord> {
+    records
+        .iter()
+        .filter(|r| r.value >= min_value)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 500.0, 1625097600);
+        assert!(record.is_ok());
+        let record = record.unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 500.0);
+        assert_eq!(record.timestamp, 1625097600);
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, 500.0, 1625097600);
+        assert!(record.is_err());
+    }
+
+    #[test]
+    fn test_normalize() {
+        let record = DataRecord::new(1, 250.0, 1625097600).unwrap();
+        let normalized = record.normalize(500.0);
+        assert_eq!(normalized, 0.5);
+    }
+
+    #[test]
+    fn test_anomaly_detection() {
+        let record = DataRecord::new(1, 750.0, 1625097600).unwrap();
+        assert!(record.is_anomaly(700.0));
+        assert!(!record.is_anomaly(800.0));
+    }
+
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 100.0, 1625097600).unwrap(),
+            DataRecord::new(2, 200.0, 1625097601).unwrap(),
+            DataRecord::new(3, 300.0, 1625097602).unwrap(),
+        ];
+
+        let (avg, max, count) = process_records(&records);
+        assert_eq!(avg, 200.0);
+        assert_eq!(max, 300.0);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let records = vec![
+            DataRecord::new(1, 50.0, 1625097600).unwrap(),
+            DataRecord::new(2, 150.0, 1625097601).unwrap(),
+            DataRecord::new(3, 250.0, 1625097602).unwrap(),
+        ];
+
+        let filtered = filter_records(&records, 100.0);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 2);
+        assert_eq!(filtered[1].id, 3);
+    }
+}
