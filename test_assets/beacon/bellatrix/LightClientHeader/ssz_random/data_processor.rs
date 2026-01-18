@@ -178,3 +178,151 @@ mod tests {
         assert_eq!(filtered[1].id, 3);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, key: &str, value: f64) {
+        self.values.insert(key.to_string(), value);
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        self.tags.push(tag.to_string());
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationFailed("ID cannot be zero".to_string()));
+        }
+
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationFailed(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+
+        if self.values.is_empty() {
+            return Err(DataError::ValidationFailed(
+                "Record must contain at least one value".to_string(),
+            ));
+        }
+
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(DataError::ValidationFailed(
+                    "Value key cannot be empty".to_string(),
+                ));
+            }
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::ValidationFailed(format!(
+                    "Invalid value for key '{}'",
+                    key
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&mut self) {
+        let sum: f64 = self.values.values().sum();
+        if sum != 0.0 {
+            for value in self.values.values_mut() {
+                *value /= sum;
+            }
+        }
+    }
+
+    pub fn contains_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
+    }
+
+    pub fn get_average_value(&self) -> f64 {
+        if self.values.is_empty() {
+            return 0.0;
+        }
+        self.values.values().sum::<f64>() / self.values.len() as f64
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for record in records {
+        record.validate()?;
+        let mut processed_record = record.clone();
+        processed_record.normalize_values();
+        processed.push(processed_record);
+    }
+
+    Ok(processed)
+}
+
+pub fn filter_records_by_tag(records: &[DataRecord], tag: &str) -> Vec<DataRecord> {
+    records
+        .iter()
+        .filter(|r| r.contains_tag(tag))
+        .cloned()
+        .collect()
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+
+    if records.is_empty() {
+        return stats;
+    }
+
+    let count = records.len() as f64;
+    let mut value_sums: HashMap<String, f64> = HashMap::new();
+    let mut value_counts: HashMap<String, usize> = HashMap::new();
+
+    for record in records {
+        for (key, value) in &record.values {
+            *value_sums.entry(key.clone()).or_insert(0.0) += value;
+            *value_counts.entry(key.clone()).or_insert(0) += 1;
+        }
+    }
+
+    for (key, sum) in value_sums {
+        if let Some(count) = value_counts.get(&key) {
+            stats.insert(format!("{}_average", key), sum / *count as f64);
+        }
+    }
+
+    stats.insert("total_records".to_string(), count);
+    stats.insert(
+        "average_values_per_record".to_string(),
+        value_counts.values().sum::<usize>() as f64 / count,
+    );
+
+    stats
+}
