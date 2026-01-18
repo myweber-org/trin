@@ -295,3 +295,108 @@ mod tests {
         assert_eq!(processor.get_record_count(), 1);
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, value: f64, timestamp: i64) -> Self {
+        Self {
+            id,
+            value,
+            timestamp,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationFailed("ID cannot be zero".to_string()));
+        }
+        
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(DataError::ValidationFailed("Value must be a finite number".to_string()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationFailed("Timestamp cannot be negative".to_string()));
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        record.validate()?;
+        
+        let transformed = transform_record(record)?;
+        processed.push(transformed);
+    }
+    
+    Ok(processed)
+}
+
+fn transform_record(record: &DataRecord) -> Result<DataRecord, DataError> {
+    if record.value.abs() < f64::EPSILON {
+        return Err(DataError::TransformationError(
+            "Cannot transform zero value".to_string()
+        ));
+    }
+    
+    let transformed_value = record.value.ln().abs();
+    
+    Ok(DataRecord::new(
+        record.id,
+        transformed_value,
+        record.timestamp,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord::new(1, 42.0, 1234567890);
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, f64::NAN, -1);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 2.71828, 1000),
+            DataRecord::new(2, 7.38906, 2000),
+        ];
+        
+        let result = process_records(&records);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+    }
+}
