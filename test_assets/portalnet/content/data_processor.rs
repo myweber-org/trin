@@ -151,3 +151,131 @@ mod tests {
         assert_eq!(groups.get("A").unwrap().len(), 1);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: u64,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidValue,
+    MissingField,
+    ParseError(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidValue => write!(f, "Invalid data value"),
+            DataError::MissingField => write!(f, "Missing required field"),
+            DataError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor { threshold }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.value.is_nan() || record.value.is_infinite() {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if record.value < 0.0 || record.value > self.threshold {
+            return Err(DataError::InvalidValue);
+        }
+        
+        Ok(())
+    }
+
+    pub fn transform_value(&self, record: &DataRecord) -> f64 {
+        (record.value * 100.0).round() / 100.0
+    }
+
+    pub fn process_records(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, DataError>> {
+        records
+            .into_iter()
+            .map(|mut record| {
+                self.validate_record(&record)?;
+                record.value = self.transform_value(&record);
+                Ok(record)
+            })
+            .collect()
+    }
+}
+
+pub fn calculate_average(records: &[DataRecord]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_valid_record() {
+        let processor = DataProcessor::new(1000.0);
+        let record = DataRecord {
+            id: 1,
+            value: 500.0,
+            timestamp: 1234567890,
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_record() {
+        let processor = DataProcessor::new(100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 1234567890,
+        };
+        
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_value() {
+        let processor = DataProcessor::new(1000.0);
+        let record = DataRecord {
+            id: 1,
+            value: 123.456789,
+            timestamp: 1234567890,
+        };
+        
+        let transformed = processor.transform_value(&record);
+        assert_eq!(transformed, 123.46);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let records = vec![
+            DataRecord { id: 1, value: 10.0, timestamp: 1 },
+            DataRecord { id: 2, value: 20.0, timestamp: 2 },
+            DataRecord { id: 3, value: 30.0, timestamp: 3 },
+        ];
+        
+        let avg = calculate_average(&records);
+        assert_eq!(avg, Some(20.0));
+    }
+}
