@@ -1,66 +1,65 @@
 
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
 }
 
-impl DataRecord {
-    pub fn new(id: u64, values: Vec<f64>) -> Self {
-        Self {
-            id,
-            values,
-            metadata: HashMap::new(),
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
         }
     }
 
-    pub fn is_valid(&self) -> bool {
-        !self.values.is_empty() && self.id > 0
-    }
-
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.values.is_empty() {
-            return None;
+    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data array provided".to_string());
         }
-        let sum: f64 = self.values.iter().sum();
-        Some(sum / self.values.len() as f64)
+
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Invalid numeric values detected".to_string());
+        }
+
+        let processed: Vec<f64> = values
+            .iter()
+            .map(|&x| {
+                if x < 0.0 {
+                    x.abs()
+                } else {
+                    x * 1.5
+                }
+            })
+            .collect();
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
     }
 
-    pub fn add_metadata(&mut self, key: String, value: String) {
-        self.metadata.insert(key, value);
-    }
-}
-
-pub fn normalize_values(values: &[f64]) -> Vec<f64> {
-    if values.is_empty() {
-        return Vec::new();
-    }
-
-    let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-    
-    if (max - min).abs() < f64::EPSILON {
-        return vec![0.0; values.len()];
-    }
-
-    values.iter()
-        .map(|&v| (v - min) / (max - min))
-        .collect()
-}
-
-pub fn process_records(records: Vec<DataRecord>) -> Vec<DataRecord> {
-    records.into_iter()
-        .filter(|record| record.is_valid())
-        .map(|mut record| {
-            if let Some(mean) = record.calculate_mean() {
-                record.add_metadata("mean_value".to_string(), mean.to_string());
-            }
-            record
+    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
+        self.cache.get(key).map(|values| {
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = values
+                .iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+            
+            (mean, variance, std_dev)
         })
-        .collect()
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn get_cached_keys(&self) -> Vec<String> {
+        self.cache.keys().cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -68,27 +67,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        assert!(valid_record.is_valid());
-
-        let invalid_record = DataRecord::new(0, vec![]);
-        assert!(!invalid_record.is_valid());
+    fn test_process_valid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, -4.0];
+        
+        let result = processor.process_numeric_data("test", &data);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed, vec![1.5, 3.0, 4.5, 4.0]);
     }
 
     #[test]
-    fn test_mean_calculation() {
-        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(record.calculate_mean(), Some(2.5));
-
-        let empty_record = DataRecord::new(2, vec![]);
-        assert_eq!(empty_record.calculate_mean(), None);
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        let data = vec![2.0, 4.0, 6.0];
+        
+        processor.process_numeric_data("stats", &data).unwrap();
+        let stats = processor.calculate_statistics("stats").unwrap();
+        
+        assert!((stats.0 - 6.0).abs() < 0.001);
+        assert!((stats.1 - 6.0).abs() < 0.001);
+        assert!((stats.2 - 2.449).abs() < 0.001);
     }
 
     #[test]
-    fn test_normalization() {
-        let values = vec![1.0, 2.0, 3.0, 4.0];
-        let normalized = normalize_values(&values);
-        assert_eq!(normalized, vec![0.0, 0.3333333333333333, 0.6666666666666666, 1.0]);
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, f64::NAN, 3.0];
+        
+        let result = processor.process_numeric_data("invalid", &data);
+        assert!(result.is_err());
     }
 }
