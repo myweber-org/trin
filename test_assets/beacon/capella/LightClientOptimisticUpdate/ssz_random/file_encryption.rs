@@ -1,110 +1,83 @@
-
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce
-};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
-const NONCE_SIZE: usize = 12;
+const DEFAULT_KEY: &[u8] = b"secret-encryption-key-2024";
 
-pub struct FileEncryptor {
-    cipher: Aes256Gcm,
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    let data = fs::read(input_path)?;
+    let encrypted_data = xor_cipher(&data, encryption_key);
+    fs::write(output_path, encrypted_data)
 }
 
-impl FileEncryptor {
-    pub fn new(key: &[u8; 32]) -> Self {
-        let key = Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(key);
-        FileEncryptor { cipher }
-    }
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
 
-    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
-        let mut file_content = Vec::new();
-        let mut file = fs::File::open(input_path)
-            .map_err(|e| format!("Failed to open input file: {}", e))?;
-        
-        file.read_to_end(&mut file_content)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
+fn xor_cipher(data: &[u8], key: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
+}
 
-        let nonce = Nonce::from_slice(&generate_nonce());
-        
-        let encrypted_data = self.cipher
-            .encrypt(nonce, file_content.as_ref())
-            .map_err(|e| format!("Encryption failed: {}", e))?;
+pub fn process_files() -> io::Result<()> {
+    let test_data = b"Hello, this is a secret message!";
+    let test_path = "test_data.bin";
+    let encrypted_path = "encrypted.bin";
+    let decrypted_path = "decrypted.bin";
 
-        let mut output_file = fs::File::create(output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
+    fs::write(test_path, test_data)?;
+    println!("Original: {:?}", String::from_utf8_lossy(test_data));
 
-        output_file.write_all(nonce.as_slice())
-            .map_err(|e| format!("Failed to write nonce: {}", e))?;
-        output_file.write_all(&encrypted_data)
-            .map_err(|e| format!("Failed to write encrypted data: {}", e))?;
+    encrypt_file(test_path, encrypted_path, None)?;
+    let encrypted = fs::read(encrypted_path)?;
+    println!("Encrypted: {:?}", encrypted);
 
-        Ok(())
-    }
+    decrypt_file(encrypted_path, decrypted_path, None)?;
+    let decrypted = fs::read(decrypted_path)?;
+    println!("Decrypted: {:?}", String::from_utf8_lossy(&decrypted));
 
-    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
-        let mut encrypted_data = Vec::new();
-        let mut file = fs::File::open(input_path)
-            .map_err(|e| format!("Failed to open encrypted file: {}", e))?;
-        
-        file.read_to_end(&mut encrypted_data)
-            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+    cleanup_files(&[test_path, encrypted_path, decrypted_path])
+}
 
-        if encrypted_data.len() < NONCE_SIZE {
-            return Err("File too short to contain nonce".to_string());
+fn cleanup_files(files: &[&str]) -> io::Result<()> {
+    for file in files {
+        if Path::new(file).exists() {
+            fs::remove_file(file)?;
         }
-
-        let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
-        let nonce = Nonce::from_slice(nonce_bytes);
-
-        let decrypted_data = self.cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Decryption failed: {}", e))?;
-
-        let mut output_file = fs::File::create(output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-        output_file.write_all(&decrypted_data)
-            .map_err(|e| format!("Failed to write decrypted data: {}", e))?;
-
-        Ok(())
     }
-}
-
-fn generate_nonce() -> [u8; NONCE_SIZE] {
-    let mut nonce = [0u8; NONCE_SIZE];
-    OsRng.fill_bytes(&mut nonce);
-    nonce
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_decryption() {
-        let key = [0x42; 32];
-        let encryptor = FileEncryptor::new(&key);
+    fn test_xor_cipher_symmetry() {
+        let data = b"Test data for encryption";
+        let key = b"mykey";
+        let encrypted = xor_cipher(data, key);
+        let decrypted = xor_cipher(&encrypted, key);
+        assert_eq!(data, decrypted.as_slice());
+    }
 
-        let original_content = b"Secret data that needs protection";
-        
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let original = b"File content to protect";
+        let test_file = "test_original.tmp";
+        let encrypted_file = "test_encrypted.tmp";
+        let decrypted_file = "test_decrypted.tmp";
 
-        fs::write(input_file.path(), original_content).unwrap();
+        fs::write(test_file, original)?;
+        encrypt_file(test_file, encrypted_file, Some(b"custom-key"))?;
+        decrypt_file(encrypted_file, decrypted_file, Some(b"custom-key"))?;
 
-        encryptor.encrypt_file(input_file.path(), encrypted_file.path())
-            .expect("Encryption should succeed");
-        
-        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path())
-            .expect("Decryption should succeed");
+        let result = fs::read(decrypted_file)?;
+        assert_eq!(original, result.as_slice());
 
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
+        cleanup_files(&[test_file, encrypted_file, decrypted_file])
     }
 }
