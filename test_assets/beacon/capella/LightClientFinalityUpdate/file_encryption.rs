@@ -79,4 +79,86 @@ mod tests {
         fs::remove_file(encrypted_path).unwrap();
         fs::remove_file(decrypted_path).unwrap();
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use base64::{Engine as _, engine::general_purpose};
+
+const CHUNK_SIZE: usize = 8192;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
+    
+    let mut buffer = vec![0u8; CHUNK_SIZE];
+    let key_len = key.len();
+    
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        for i in 0..bytes_read {
+            buffer[i] ^= key[i % key_len];
+        }
+        
+        let encoded = general_purpose::STANDARD.encode(&buffer[..bytes_read]);
+        output_file.write_all(encoded.as_bytes())?;
+        output_file.write_all(b"\n")?;
+    }
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_content = fs::read_to_string(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
+    let key_len = key.len();
+    
+    for line in input_content.lines() {
+        let decoded = general_purpose::STANDARD.decode(line)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        
+        let mut decrypted_chunk = decoded;
+        for i in 0..decrypted_chunk.len() {
+            decrypted_chunk[i] ^= key[i % key_len];
+        }
+        
+        output_file.write_all(&decrypted_chunk)?;
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_roundtrip() {
+        let original_content = b"Secret data that needs protection!";
+        let key = b"my-encryption-key";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_content).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
 }
