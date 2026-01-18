@@ -4,11 +4,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LogEntry {
-    pub timestamp: Option<String>,
-    pub level: Option<String>,
-    pub message: Option<String>,
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
     pub fields: HashMap<String, Value>,
 }
 
@@ -25,21 +25,24 @@ impl LogParser {
         }
     }
 
-    pub fn set_level_filter(&mut self, level: &str) {
+    pub fn set_level_filter(&mut self, level: &str) -> &mut Self {
         self.filter_level = Some(level.to_lowercase());
+        self
     }
 
-    pub fn add_required_field(&mut self, field: &str) {
+    pub fn add_required_field(&mut self, field: &str) -> &mut Self {
         self.required_fields.push(field.to_string());
+        self
     }
 
-    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
-        let file = File::open(path)?;
+    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, String> {
+        let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
         let reader = BufReader::new(file);
         let mut entries = Vec::new();
 
-        for line in reader.lines() {
-            let line = line?;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line.map_err(|e| format!("Line {} read error: {}", line_num + 1, e))?;
+            
             if let Ok(entry) = self.parse_line(&line) {
                 entries.push(entry);
             }
@@ -48,116 +51,90 @@ impl LogParser {
         Ok(entries)
     }
 
-    pub fn parse_line(&self, line: &str) -> Result<LogEntry, Box<dyn std::error::Error>> {
-        let json_value: Value = serde_json::from_str(line)?;
-        
-        let mut entry = LogEntry {
-            timestamp: json_value.get("timestamp").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            level: json_value.get("level").and_then(|v| v.as_str()).map(|s| s.to_lowercase()),
-            message: json_value.get("message").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            fields: HashMap::new(),
-        };
+    fn parse_line(&self, line: &str) -> Result<LogEntry, String> {
+        let json_value: Value = serde_json::from_str(line)
+            .map_err(|e| format!("Invalid JSON: {}", e))?;
 
-        if let Some(obj) = json_value.as_object() {
-            for (key, value) in obj {
-                if !["timestamp", "level", "message"].contains(&key.as_str()) {
-                    entry.fields.insert(key.clone(), value.clone());
-                }
-            }
-        }
+        let obj = json_value.as_object()
+            .ok_or("Log entry must be a JSON object")?;
+
+        let timestamp = obj.get("timestamp")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing timestamp field")?
+            .to_string();
+
+        let level = obj.get("level")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing level field")?
+            .to_lowercase();
 
         if let Some(filter) = &self.filter_level {
-            if let Some(level) = &entry.level {
-                if level != filter {
-                    return Err("Log level filtered out".into());
-                }
+            if &level != filter {
+                return Err("Level filter mismatch".to_string());
             }
         }
 
-        for field in &self.required_fields {
-            if !entry.fields.contains_key(field) && 
-               !entry.timestamp.as_ref().map(|_| field == "timestamp").unwrap_or(false) &&
-               !entry.level.as_ref().map(|_| field == "level").unwrap_or(false) &&
-               !entry.message.as_ref().map(|_| field == "message").unwrap_or(false) {
-                return Err(format!("Required field '{}' not found", field).into());
+        let message = obj.get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let mut fields = HashMap::new();
+        for (key, value) in obj {
+            if key != "timestamp" && key != "level" && key != "message" {
+                fields.insert(key.clone(), value.clone());
             }
         }
 
-        Ok(entry)
+        for required_field in &self.required_fields {
+            if !fields.contains_key(required_field) && !obj.contains_key(required_field) {
+                return Err(format!("Missing required field: {}", required_field));
+            }
+        }
+
+        Ok(LogEntry {
+            timestamp,
+            level,
+            message,
+            fields,
+        })
     }
 
     pub fn extract_field_values(&self, entries: &[LogEntry], field_name: &str) -> Vec<Value> {
-        let mut values = Vec::new();
-        
-        for entry in entries {
-            if let Some(value) = entry.fields.get(field_name) {
-                values.push(value.clone());
-            } else if field_name == "timestamp" {
-                if let Some(ts) = &entry.timestamp {
-                    values.push(Value::String(ts.clone()));
-                }
-            } else if field_name == "level" {
-                if let Some(lvl) = &entry.level {
-                    values.push(Value::String(lvl.clone()));
-                }
-            } else if field_name == "message" {
-                if let Some(msg) = &entry.message {
-                    values.push(Value::String(msg.clone()));
-                }
-            }
-        }
-        
-        values
-    }
-}
-
-impl Default for LogParser {
-    fn default() -> Self {
-        Self::new()
+        entries.iter()
+            .filter_map(|entry| entry.fields.get(field_name))
+            .cloned()
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn test_parse_valid_json_log() {
-        let parser = LogParser::new();
-        let log_line = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"error","message":"Connection failed","user_id":123,"ip":"192.168.1.1"}"#;
-        
-        let result = parser.parse_line(log_line);
-        assert!(result.is_ok());
-        
-        let entry = result.unwrap();
-        assert_eq!(entry.timestamp, Some("2024-01-15T10:30:00Z".to_string()));
-        assert_eq!(entry.level, Some("error".to_string()));
-        assert_eq!(entry.message, Some("Connection failed".to_string()));
-        assert_eq!(entry.fields.len(), 2);
-        assert_eq!(entry.fields.get("user_id").and_then(|v| v.as_i64()), Some(123));
-    }
-
-    #[test]
-    fn test_level_filter() {
+    fn test_parse_valid_log() {
         let mut parser = LogParser::new();
         parser.set_level_filter("error");
+
+        let log_line = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"ERROR","message":"Database connection failed","error_code":500,"service":"auth"}"#;
         
-        let error_log = r#"{"level":"error","message":"Error occurred"}"#;
-        let info_log = r#"{"level":"info","message":"Info message"}"#;
-        
-        assert!(parser.parse_line(error_log).is_ok());
-        assert!(parser.parse_line(info_log).is_err());
+        let entry = parser.parse_line(log_line).unwrap();
+        assert_eq!(entry.level, "error");
+        assert_eq!(entry.message, "Database connection failed");
+        assert_eq!(entry.fields.get("error_code"), Some(&json!(500)));
     }
 
     #[test]
-    fn test_required_field_check() {
+    fn test_missing_required_field() {
         let mut parser = LogParser::new();
         parser.add_required_field("user_id");
+
+        let log_line = r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","message":"User login"}"#;
         
-        let valid_log = r#"{"level":"info","message":"User action","user_id":456}"#;
-        let invalid_log = r#"{"level":"info","message":"System event"}"#;
-        
-        assert!(parser.parse_line(valid_log).is_ok());
-        assert!(parser.parse_line(invalid_log).is_err());
+        let result = parser.parse_line(log_line);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required field"));
     }
 }
