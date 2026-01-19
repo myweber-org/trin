@@ -1,155 +1,154 @@
 
+use std::collections::HashMap;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct DataRecord {
     pub id: u32,
     pub name: String,
     pub value: f64,
-    pub category: String,
+    pub metadata: HashMap<String, String>,
 }
 
-impl DataRecord {
-    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
-        DataRecord {
-            id,
-            name,
-            value,
-            category,
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
         }
     }
-
-    pub fn is_valid(&self) -> bool {
-        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
-    }
 }
 
+impl Error for ProcessingError {}
+
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+    transformations: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
+            validation_rules: Vec::new(),
+            transformations: Vec::new(),
         }
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut count = 0;
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
 
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            if line_num == 0 {
-                continue;
-            }
+    pub fn add_transformation<F>(&mut self, transform: F)
+    where
+        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
+    {
+        self.transformations.push(Box::new(transform));
+    }
 
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 4 {
-                continue;
-            }
-
-            let id = match parts[0].parse::<u32>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-
-            let name = parts[1].to_string();
-            let value = match parts[2].parse::<f64>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-
-            let category = parts[3].to_string();
-
-            let record = DataRecord::new(id, name, value, category);
-            if record.is_valid() {
-                self.records.push(record);
-                count += 1;
-            }
+    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(&record)?;
         }
 
-        Ok(count)
-    }
-
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
-            .collect()
-    }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+        for transform in &self.transformations {
+            record = transform(record)?;
         }
 
-        let sum: f64 = self.records.iter().map(|record| record.value).sum();
-        Some(sum / self.records.len() as f64)
+        Ok(record)
     }
 
-    pub fn get_record_count(&self) -> usize {
-        self.records.len()
+    pub fn batch_process(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
+        
+        for record in records {
+            match self.process(record) {
+                Ok(processed) => results.push(processed),
+                Err(e) => return Err(e),
+            }
+        }
+        
+        Ok(results)
     }
+}
 
-    pub fn clear(&mut self) {
-        self.records.clear();
-    }
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+    
+    processor.add_validation_rule(|record| {
+        if record.name.is_empty() {
+            Err(ProcessingError::ValidationError("Name cannot be empty".to_string()))
+        } else {
+            Ok(())
+        }
+    });
+    
+    processor.add_validation_rule(|record| {
+        if record.value < 0.0 {
+            Err(ProcessingError::ValidationError("Value cannot be negative".to_string()))
+        } else {
+            Ok(())
+        }
+    });
+    
+    processor.add_transformation(|mut record| {
+        record.name = record.name.to_uppercase();
+        record.value = (record.value * 100.0).round() / 100.0;
+        Ok(record)
+    });
+    
+    processor
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_data_record_validation() {
-        let valid_record = DataRecord::new(1, "Test".to_string(), 10.5, "A".to_string());
-        assert!(valid_record.is_valid());
-
-        let invalid_record = DataRecord::new(2, "".to_string(), -5.0, "B".to_string());
-        assert!(!invalid_record.is_valid());
-    }
-
-    #[test]
-    fn test_csv_loading() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,category").unwrap();
-        writeln!(temp_file, "1,Item1,10.5,CategoryA").unwrap();
-        writeln!(temp_file, "2,Item2,20.0,CategoryB").unwrap();
-        writeln!(temp_file, "3,Item3,15.75,CategoryA").unwrap();
-
-        let mut processor = DataProcessor::new();
-        let result = processor.load_from_csv(temp_file.path());
+    fn test_data_processing() {
+        let processor = create_default_processor();
+        
+        let mut metadata = HashMap::new();
+        metadata.insert("category".to_string(), "test".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            name: "test record".to_string(),
+            value: 123.456,
+            metadata,
+        };
+        
+        let result = processor.process(record);
         assert!(result.is_ok());
-        assert_eq!(processor.get_record_count(), 3);
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.name, "TEST RECORD");
+        assert_eq!(processed.value, 123.46);
     }
-
+    
     #[test]
-    fn test_filtering() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord::new(1, "A".to_string(), 10.0, "X".to_string()));
-        processor.records.push(DataRecord::new(2, "B".to_string(), 20.0, "Y".to_string()));
-        processor.records.push(DataRecord::new(3, "C".to_string(), 30.0, "X".to_string()));
-
-        let filtered = processor.filter_by_category("X");
-        assert_eq!(filtered.len(), 2);
-    }
-
-    #[test]
-    fn test_average_calculation() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord::new(1, "A".to_string(), 10.0, "X".to_string()));
-        processor.records.push(DataRecord::new(2, "B".to_string(), 20.0, "Y".to_string()));
-        processor.records.push(DataRecord::new(3, "C".to_string(), 30.0, "Z".to_string()));
-
-        let average = processor.calculate_average();
-        assert_eq!(average, Some(20.0));
+    fn test_validation_failure() {
+        let processor = create_default_processor();
+        
+        let record = DataRecord {
+            id: 2,
+            name: "".to_string(),
+            value: 50.0,
+            metadata: HashMap::new(),
+        };
+        
+        let result = processor.process(record);
+        assert!(result.is_err());
     }
 }
