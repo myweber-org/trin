@@ -176,3 +176,159 @@ mod tests {
         assert_eq!(test_data.to_vec(), decrypted_content);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use argon2::{
+    password_hash::{rand_core::OsRng as ArgonRng, PasswordHasher, SaltString},
+    Argon2,
+};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::Path;
+
+const NONCE_SIZE: usize = 12;
+const SALT_SIZE: usize = 16;
+
+pub struct EncryptionResult {
+    pub encrypted_data: Vec<u8>,
+    pub nonce: [u8; NONCE_SIZE],
+    pub salt: [u8; SALT_SIZE],
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, String> {
+    let salt_string = SaltString::encode_b64(salt).map_err(|e| e.to_string())?;
+    let argon2 = Argon2::default();
+    
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt_string)
+        .map_err(|e| e.to_string())?;
+    
+    let hash_bytes = password_hash.hash.ok_or("Hash generation failed")?.as_bytes();
+    if hash_bytes.len() < 32 {
+        return Err("Insufficient hash length".to_string());
+    }
+    
+    let key_bytes: [u8; 32] = hash_bytes[..32].try_into().map_err(|_| "Invalid key length")?;
+    Ok(Key::<Aes256Gcm>::from_slice(&key_bytes).clone())
+}
+
+pub fn encrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str,
+) -> Result<EncryptionResult, String> {
+    let mut file = File::open(input_path).map_err(|e| e.to_string())?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| e.to_string())?;
+
+    let mut salt = [0u8; SALT_SIZE];
+    ArgonRng.fill_bytes(&mut salt);
+    
+    let key = derive_key(password, &salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    let encrypted_data = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+    output_file.write_all(&encrypted_data).map_err(|e| e.to_string())?;
+
+    Ok(EncryptionResult {
+        encrypted_data,
+        nonce: nonce_bytes,
+        salt,
+    })
+}
+
+pub fn decrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str,
+    nonce: &[u8; NONCE_SIZE],
+    salt: &[u8; SALT_SIZE],
+) -> Result<Vec<u8>, String> {
+    let mut file = File::open(input_path).map_err(|e| e.to_string())?;
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext).map_err(|e| e.to_string())?;
+
+    let key = derive_key(password, salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(nonce);
+    
+    let decrypted_data = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    let mut output_file = File::create(output_path).map_err(|e| e.to_string())?;
+    output_file.write_all(&decrypted_data).map_err(|e| e.to_string())?;
+
+    Ok(decrypted_data)
+}
+
+pub fn generate_secure_password(length: usize) -> Result<String, String> {
+    if length < 12 {
+        return Err("Password length must be at least 12 characters".to_string());
+    }
+    
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                            abcdefghijklmnopqrstuvwxyz\
+                            0123456789\
+                            !@#$%^&*()-_=+[]{}|;:,.<>?";
+    
+    let mut rng = OsRng;
+    let mut password = Vec::with_capacity(length);
+    
+    for _ in 0..length {
+        let idx = rng.next_u32() as usize % CHARSET.len();
+        password.push(CHARSET[idx]);
+    }
+    
+    String::from_utf8(password).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let plaintext = b"Test encryption and decryption";
+        let password = "StrongPassword123!";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), plaintext).unwrap();
+        
+        let result = encrypt_file(input_file.path(), encrypted_file.path(), password).unwrap();
+        
+        let decrypted = decrypt_file(
+            encrypted_file.path(),
+            decrypted_file.path(),
+            password,
+            &result.nonce,
+            &result.salt,
+        ).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+    
+    #[test]
+    fn test_password_generation() {
+        let password = generate_secure_password(16).unwrap();
+        assert_eq!(password.len(), 16);
+        assert!(password.chars().any(|c| c.is_ascii_uppercase()));
+        assert!(password.chars().any(|c| c.is_ascii_lowercase()));
+        assert!(password.chars().any(|c| c.is_ascii_digit()));
+        assert!(password.chars().any(|c| !c.is_ascii_alphanumeric()));
+    }
+}
