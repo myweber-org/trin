@@ -1,84 +1,95 @@
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
 }
 
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err("File does not exist".into());
-    }
-
-    let mut reader = Reader::from_path(path)?;
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        if record.value < 0.0 {
-            return Err(format!("Invalid value in record ID {}", record.id).into());
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
         }
-        records.push(record);
     }
 
-    if records.is_empty() {
-        return Err("No valid records found".into());
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let processed = Self::normalize_data(data);
+        self.cache.insert(key.to_string(), processed.clone());
+        
+        Ok(processed)
     }
 
-    Ok(records)
-}
+    fn normalize_data(data: &[f64]) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
 
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let count = records.len() as f64;
-    let mean = sum / count;
+        if std_dev.abs() < 1e-10 {
+            return vec![0.0; data.len()];
+        }
 
-    let variance: f64 = records
-        .iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
+        data.iter()
+            .map(|&x| (x - mean) / std_dev)
+            .collect()
+    }
 
-    let std_dev = variance.sqrt();
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
 
-    (mean, variance, std_dev)
+    pub fn get_cache_stats(&self) -> (usize, usize) {
+        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
+        (self.cache.len(), total_items)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
 
     #[test]
-    fn test_valid_csv_processing() {
-        let csv_data = "id,name,value,category\n1,ItemA,10.5,Alpha\n2,ItemB,20.3,Beta\n";
-        let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", csv_data).unwrap();
-
-        let result = process_data_file(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        let records = result.unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].name, "ItemA");
+    fn test_normalize_data() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = DataProcessor::normalize_data(&data);
+        
+        let sum: f64 = normalized.iter().sum();
+        let sum_sq: f64 = normalized.iter().map(|x| x * x).sum();
+        
+        assert!(sum.abs() < 1e-10);
+        assert!((sum_sq - (data.len() as f64 - 1.0)).abs() < 1e-10);
     }
 
     #[test]
-    fn test_statistics_calculation() {
-        let records = vec![
-            Record { id: 1, name: "Test1".to_string(), value: 10.0, category: "A".to_string() },
-            Record { id: 2, name: "Test2".to_string(), value: 20.0, category: "B".to_string() },
-        ];
+    fn test_empty_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_dataset("test", &[]);
+        
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Empty dataset provided");
+    }
 
-        let (mean, variance, std_dev) = calculate_statistics(&records);
-        assert_eq!(mean, 15.0);
-        assert_eq!(variance, 25.0);
-        assert_eq!(std_dev, 5.0);
+    #[test]
+    fn test_cache_functionality() {
+        let mut processor = DataProcessor::new();
+        let data = vec![10.0, 20.0, 30.0];
+        
+        let first_result = processor.process_dataset("key1", &data).unwrap();
+        let second_result = processor.process_dataset("key1", &data).unwrap();
+        
+        assert_eq!(first_result, second_result);
+        
+        let (unique_keys, total_items) = processor.get_cache_stats();
+        assert_eq!(unique_keys, 1);
+        assert_eq!(total_items, 3);
     }
 }
