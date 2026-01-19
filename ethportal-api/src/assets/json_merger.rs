@@ -43,3 +43,77 @@ mod tests {
         assert_eq!(result, expected);
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut result = Map::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                if result.contains_key(&key) {
+                    let existing = result.get(&key).unwrap();
+                    result.insert(key, resolve_conflict(existing, &value));
+                } else {
+                    result.insert(key, value);
+                }
+            }
+        }
+    }
+
+    Ok(Value::Object(result))
+}
+
+fn resolve_conflict(a: &Value, b: &Value) -> Value {
+    match (a, b) {
+        (Value::Array(arr_a), Value::Array(arr_b)) => {
+            let mut combined = arr_a.clone();
+            combined.extend(arr_b.clone());
+            Value::Array(combined)
+        }
+        (Value::Object(obj_a), Value::Object(obj_b)) => {
+            let mut merged = obj_a.clone();
+            for (key, val_b) in obj_b {
+                if merged.contains_key(key) {
+                    let val_a = merged.get(key).unwrap();
+                    merged.insert(key.clone(), resolve_conflict(val_a, val_b));
+                } else {
+                    merged.insert(key.clone(), val_b.clone());
+                }
+            }
+            Value::Object(merged)
+        }
+        _ => b.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_merge_objects() {
+        let a = json!({"name": "Alice", "age": 30});
+        let b = json!({"name": "Bob", "city": "London"});
+        
+        let merged = resolve_conflict(&a, &b);
+        assert_eq!(merged["name"], "Bob");
+        assert_eq!(merged["age"], 30);
+        assert_eq!(merged["city"], "London");
+    }
+
+    #[test]
+    fn test_merge_arrays() {
+        let a = json!([1, 2, 3]);
+        let b = json!([4, 5]);
+        
+        let merged = resolve_conflict(&a, &b);
+        assert_eq!(merged, json!([1, 2, 3, 4, 5]));
+    }
+}
