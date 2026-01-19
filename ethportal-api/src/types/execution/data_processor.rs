@@ -95,3 +95,105 @@ mod tests {
         assert_eq!(filtered[0], vec!["Charlie", "35", "Paris"]);
     }
 }
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_csv(&mut self, file_path: &Path) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(file_path)?;
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn max_value(&self) -> Option<f64> {
+        self.records.iter().map(|r| r.value).reduce(f64::max)
+    }
+
+    pub fn min_value(&self) -> Option<f64> {
+        self.records.iter().map(|r| r.value).reduce(f64::min)
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "id,value,category").unwrap();
+        writeln!(file, "1,10.5,A").unwrap();
+        writeln!(file, "2,20.3,B").unwrap();
+        writeln!(file, "3,15.7,A").unwrap();
+        writeln!(file, "4,25.1,B").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_load_and_calculate() {
+        let test_file = create_test_csv();
+        let mut processor = DataProcessor::new();
+        processor.load_csv(test_file.path()).unwrap();
+
+        assert_eq!(processor.record_count(), 4);
+        assert_eq!(processor.calculate_mean(), Some(17.9));
+        assert_eq!(processor.max_value(), Some(25.1));
+        assert_eq!(processor.min_value(), Some(10.5));
+    }
+
+    #[test]
+    fn test_filtering() {
+        let test_file = create_test_csv();
+        let mut processor = DataProcessor::new();
+        processor.load_csv(test_file.path()).unwrap();
+
+        let category_a = processor.filter_by_category("A");
+        assert_eq!(category_a.len(), 2);
+
+        let category_b = processor.filter_by_category("B");
+        assert_eq!(category_b.len(), 2);
+    }
+}
