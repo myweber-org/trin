@@ -1,131 +1,67 @@
-
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use hex;
+use rand::RngCore;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 
-pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
-    let mut input_file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    input_file.read_to_end(&mut buffer)?;
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-    let encrypted_data: Vec<u8> = buffer
-        .iter()
-        .enumerate()
-        .map(|(i, &byte)| byte ^ key[i % key.len()])
-        .collect();
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext).map_err(|e| format!("Failed to read input file: {}", e))?;
 
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&encrypted_data)?;
+    let mut iv = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let ciphertext = Aes256CbcEnc::new(key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output = fs::File::create(output_path).map_err(|e| format!("Failed to create output file: {}", e))?;
+    output.write_all(&iv).map_err(|e| format!("Failed to write IV: {}", e))?;
+    output.write_all(&ciphertext).map_err(|e| format!("Failed to write ciphertext: {}", e))?;
 
     Ok(())
 }
 
-pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
-    xor_encrypt_file(input_path, output_path, key)
-}
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; 32]) -> Result<(), String> {
+    let mut file = fs::File::open(input_path).map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut encrypted_data = Vec::new();
+    file.read_to_end(&mut encrypted_data).map_err(|e| format!("Failed to read input file: {}", e))?;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn test_xor_encryption() {
-        let test_data = b"Hello, Rust!";
-        let key = b"secret";
-
-        let input_path = "test_input.txt";
-        let encrypted_path = "test_encrypted.txt";
-        let decrypted_path = "test_decrypted.txt";
-
-        fs::write(input_path, test_data).unwrap();
-
-        xor_encrypt_file(input_path, encrypted_path, key).unwrap();
-        xor_decrypt_file(encrypted_path, decrypted_path, key).unwrap();
-
-        let decrypted_data = fs::read(decrypted_path).unwrap();
-        assert_eq!(decrypted_data, test_data);
-
-        fs::remove_file(input_path).ok();
-        fs::remove_file(encrypted_path).ok();
-        fs::remove_file(decrypted_path).ok();
+    if encrypted_data.len() < 16 {
+        return Err("File too short to contain IV".to_string());
     }
-}
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0x55;
+    let iv = &encrypted_data[..16];
+    let ciphertext = &encrypted_data[16..];
 
-pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
-    let data = fs::read(input_path)?;
-    
-    let encrypted_data: Vec<u8> = data.iter()
-        .map(|byte| byte ^ encryption_key)
-        .collect();
-    
-    fs::write(output_path, encrypted_data)
+    let plaintext = Aes256CbcDec::new(key.into(), iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    fs::write(output_path, plaintext).map_err(|e| format!("Failed to write output file: {}", e))?;
+
+    Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    encrypt_file(input_path, output_path, key)
+pub fn generate_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    key
 }
 
-pub fn process_file_interactive() -> io::Result<()> {
-    println!("Enter input file path:");
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input_path = input.trim();
+pub fn key_to_hex(key: &[u8; 32]) -> String {
+    hex::encode(key)
+}
 
-    println!("Enter output file path:");
-    let mut output = String::new();
-    io::stdin().read_line(&mut output)?;
-    let output_path = output.trim();
-
-    println!("Enter encryption key (0-255, leave empty for default):");
-    let mut key_input = String::new();
-    io::stdin().read_line(&mut key_input)?;
-    
-    let key = key_input.trim().parse::<u8>().ok();
-
-    println!("Encrypt (e) or Decrypt (d)?");
-    let mut mode = String::new();
-    io::stdin().read_line(&mut mode)?;
-
-    match mode.trim().to_lowercase().as_str() {
-        "e" => encrypt_file(input_path, output_path, key),
-        "d" => decrypt_file(input_path, output_path, key),
-        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid mode")),
+pub fn hex_to_key(hex_str: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex string: {}", e))?;
+    if bytes.len() != 32 {
+        return Err("Hex string must be 64 characters (32 bytes)".to_string());
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_encryption_decryption() {
-        let original_data = b"Hello, World!";
-        let temp_input = NamedTempFile::new().unwrap();
-        let temp_encrypted = NamedTempFile::new().unwrap();
-        let temp_decrypted = NamedTempFile::new().unwrap();
-
-        fs::write(temp_input.path(), original_data).unwrap();
-        
-        encrypt_file(
-            temp_input.path().to_str().unwrap(),
-            temp_encrypted.path().to_str().unwrap(),
-            Some(0x42),
-        ).unwrap();
-
-        decrypt_file(
-            temp_encrypted.path().to_str().unwrap(),
-            temp_decrypted.path().to_str().unwrap(),
-            Some(0x42),
-        ).unwrap();
-
-        let decrypted_data = fs::read(temp_decrypted.path()).unwrap();
-        assert_eq!(original_data.to_vec(), decrypted_data);
-    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes);
+    Ok(key)
 }
