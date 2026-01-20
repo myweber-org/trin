@@ -199,4 +199,108 @@ mod tests {
         let result = processor.process_numeric_data("invalid", &data);
         assert!(result.is_err());
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if category.trim().is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(Self {
+            id,
+            value,
+            category: category.trim().to_string(),
+        })
+    }
+
+    pub fn calculate_tax(&self, rate: f64) -> f64 {
+        self.value * rate
+    }
+}
+
+pub fn load_records_from_file(path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 3 {
+            return Err(format!("Invalid format at line {}", line_num + 1).into());
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let value = parts[1].parse::<f64>()?;
+        let category = parts[2].to_string();
+
+        match DataRecord::new(id, value, category) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Warning: Skipping line {}: {}", line_num + 1, e),
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn process_records(records: &[DataRecord]) -> (f64, Vec<String>) {
+    let total: f64 = records.iter().map(|r| r.value).sum();
+    let categories: Vec<String> = records
+        .iter()
+        .map(|r| r.category.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    (total, categories)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, 100.5, "TypeA".to_string()).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 100.5);
+        assert_eq!(record.category, "TypeA");
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        assert!(DataRecord::new(2, -10.0, "TypeB".to_string()).is_err());
+        assert!(DataRecord::new(3, 50.0, "  ".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_file_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,100.0,CategoryA").unwrap();
+        writeln!(temp_file, "2,200.0,CategoryB").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "").unwrap();
+
+        let records = load_records_from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].id, 1);
+        assert_eq!(records[1].category, "CategoryB");
+    }
 }
