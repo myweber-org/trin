@@ -1,121 +1,123 @@
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub enum DataError {
-    #[error("Invalid data format")]
-    InvalidFormat,
-    #[error("Missing required field: {0}")]
-    MissingField(String),
-    #[error("Validation failed: {0}")]
-    ValidationFailed(String),
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: HashMap<String, f64>,
-    pub tags: Vec<String>,
-}
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+        }
+    }
 
-impl DataRecord {
-    pub fn validate(&self) -> Result<(), DataError> {
-        if self.id == 0 {
-            return Err(DataError::ValidationFailed("ID cannot be zero".into()));
+    pub fn add_dataset(&mut self, key: &str, values: Vec<f64>) -> Result<(), String> {
+        if values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
         }
-        
-        if self.timestamp < 0 {
-            return Err(DataError::ValidationFailed("Timestamp cannot be negative".into()));
+
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Dataset contains invalid numeric values".to_string());
         }
-        
-        if self.values.is_empty() {
-            return Err(DataError::ValidationFailed("Values cannot be empty".into()));
-        }
-        
+
+        self.data.insert(key.to_string(), values);
         Ok(())
     }
-    
-    pub fn transform(&mut self, multiplier: f64) {
-        for value in self.values.values_mut() {
-            *value *= multiplier;
-        }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = sum / count as f64;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count as f64;
+            
+            let std_dev = variance.sqrt();
+
+            Statistics {
+                count,
+                mean,
+                variance,
+                std_dev,
+                min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+                max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            }
+        })
     }
-    
-    pub fn add_tag(&mut self, tag: String) {
-        if !self.tags.contains(&tag) {
-            self.tags.push(tag);
-        }
+
+    pub fn normalize_data(&self, key: &str) -> Option<Vec<f64>> {
+        self.data.get(key).map(|values| {
+            let stats = self.calculate_statistics(key).unwrap();
+            values.iter()
+                .map(|&x| (x - stats.mean) / stats.std_dev)
+                .collect()
+        })
+    }
+
+    pub fn merge_datasets(&mut self, key1: &str, key2: &str, new_key: &str) -> Result<(), String> {
+        let data1 = self.data.get(key1).ok_or("First dataset not found")?;
+        let data2 = self.data.get(key2).ok_or("Second dataset not found")?;
+
+        let mut merged = data1.clone();
+        merged.extend(data2.iter().cloned());
+        
+        self.add_dataset(new_key, merged)
     }
 }
 
-pub fn process_records(records: Vec<DataRecord>, multiplier: f64) -> Result<Vec<DataRecord>, DataError> {
-    let mut processed = Vec::with_capacity(records.len());
-    
-    for mut record in records {
-        record.validate()?;
-        record.transform(multiplier);
-        record.add_tag("processed".into());
-        processed.push(record);
-    }
-    
-    Ok(processed)
-}
-
-pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
-    let mut stats = HashMap::new();
-    
-    for record in records {
-        for (key, value) in &record.values {
-            let entry = stats.entry(key.clone()).or_insert((0.0, 0));
-            entry.0 += value;
-            entry.1 += 1;
-        }
-    }
-    
-    stats
-        .into_iter()
-        .map(|(key, (sum, count))| (key, sum / count as f64))
-        .collect()
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord {
-            id: 1,
-            timestamp: 1234567890,
-            values: [("temperature".into(), 25.5)].iter().cloned().collect(),
-            tags: vec![],
-        };
-        
-        assert!(valid_record.validate().is_ok());
-        
-        let invalid_record = DataRecord {
-            id: 0,
-            timestamp: 1234567890,
-            values: [("temperature".into(), 25.5)].iter().cloned().collect(),
-            tags: vec![],
-        };
-        
-        assert!(invalid_record.validate().is_err());
+    fn test_add_valid_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("test", vec![1.0, 2.0, 3.0]);
+        assert!(result.is_ok());
     }
-    
+
     #[test]
-    fn test_transform() {
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1234567890,
-            values: [("value".into(), 10.0)].iter().cloned().collect(),
-            tags: vec![],
-        };
+    fn test_add_empty_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("test", vec![]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("test", vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
         
-        record.transform(2.0);
-        assert_eq!(record.values.get("value"), Some(&20.0));
+        let stats = processor.calculate_statistics("test").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+    }
+
+    #[test]
+    fn test_merge_datasets() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("set1", vec![1.0, 2.0]).unwrap();
+        processor.add_dataset("set2", vec![3.0, 4.0]).unwrap();
+        
+        let result = processor.merge_datasets("set1", "set2", "merged");
+        assert!(result.is_ok());
+        
+        let merged = processor.data.get("merged").unwrap();
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged, &vec![1.0, 2.0, 3.0, 4.0]);
     }
 }
