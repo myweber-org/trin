@@ -253,4 +253,113 @@ mod tests {
         assert_eq!(first_result, second_result);
         assert_eq!(processor.cache_stats(), (1, 3));
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut rdr = Reader::from_path(path)?;
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value
+                .partial_cmp(&b.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    pub fn validate_records(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (index, record) in self.records.iter().enumerate() {
+            if record.name.trim().is_empty() {
+                errors.push(format!("Record {} has empty name", index));
+            }
+            if record.value < 0.0 {
+                errors.push(format!("Record {} has negative value", index));
+            }
+            if record.category.trim().is_empty() {
+                errors.push(format!("Record {} has empty category", index));
+            }
+        }
+        errors
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.count_records(), 0);
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
+        writeln!(temp_file, "2,ItemB,20.3,Category2").unwrap();
+        writeln!(temp_file, "3,ItemC,15.7,Category1").unwrap();
+
+        processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(processor.count_records(), 3);
+
+        let category1_items = processor.filter_by_category("Category1");
+        assert_eq!(category1_items.len(), 2);
+
+        let avg = processor.calculate_average().unwrap();
+        assert!((avg - 15.5).abs() < 0.01);
+
+        let max_record = processor.find_max_value().unwrap();
+        assert_eq!(max_record.id, 2);
+
+        let errors = processor.validate_records();
+        assert!(errors.is_empty());
+    }
 }
