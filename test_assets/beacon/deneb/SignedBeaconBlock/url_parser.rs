@@ -76,3 +76,33 @@ mod tests {
         );
     }
 }
+use std::collections::HashMap;
+
+pub fn parse_query_string(query: &str) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    
+    if query.is_empty() {
+        return params;
+    }
+    
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+            let decoded_key = urlencoding::decode(key).unwrap_or_else(|_| key.into());
+            let decoded_value = urlencoding::decode(value).unwrap_or_else(|_| value.into());
+            params.insert(decoded_key.into_owned(), decoded_value.into_owned());
+        }
+    }
+    
+    params
+}
+
+pub fn extract_query_from_url(url: &str) -> Option<String> {
+    url.split('?').nth(1).map(|s| s.to_string())
+}
+
+pub fn parse_url_query(url: &str) -> HashMap<String, String> {
+    extract_query_from_url(url)
+        .map(|query| parse_query_string(&query))
+        .unwrap_or_default()
+}
