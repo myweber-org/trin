@@ -1,3 +1,4 @@
+
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -21,34 +22,48 @@ impl DataProcessor {
         let reader = BufReader::new(file);
         let mut records = Vec::new();
 
-        for (line_number, line) in reader.lines().enumerate() {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
             
-            if self.has_header && line_number == 0 {
+            if line_num == 0 && self.has_header {
                 continue;
             }
 
-            let record: Vec<String> = line
+            let fields: Vec<String> = line
                 .split(self.delimiter)
-                .map(|field| field.trim().to_string())
+                .map(|s| s.trim().to_string())
                 .collect();
 
-            if !record.is_empty() {
-                records.push(record);
+            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+                records.push(fields);
             }
         }
 
         Ok(records)
     }
 
-    pub fn validate_record(&self, record: &[String], expected_fields: usize) -> bool {
-        record.len() == expected_fields && record.iter().all(|field| !field.is_empty())
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
     }
 
-    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
-        data.iter()
-            .filter_map(|record| record.get(column_index).cloned())
-            .collect()
+    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for record in records {
+            if column_index < record.len() {
+                if let Ok(value) = record[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            Some(sum / count as f64)
+        } else {
+            None
+        }
     }
 }
 
@@ -62,35 +77,36 @@ mod tests {
     fn test_process_file_with_header() {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "John,30,New York").unwrap();
-        writeln!(temp_file, "Alice,25,London").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
 
         let processor = DataProcessor::new(',', true);
         let result = processor.process_file(temp_file.path()).unwrap();
-
+        
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
     }
 
     #[test]
     fn test_validate_record() {
         let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["data1".to_string(), "data2".to_string()];
-        let invalid_record = vec!["".to_string(), "data2".to_string()];
-
-        assert!(processor.validate_record(&valid_record, 2));
-        assert!(!processor.validate_record(&invalid_record, 2));
+        let valid_record = vec!["test".to_string(), "123".to_string()];
+        let invalid_record = vec!["".to_string(), "data".to_string()];
+        
+        assert!(processor.validate_record(&valid_record));
+        assert!(!processor.validate_record(&invalid_record));
     }
 
     #[test]
-    fn test_extract_column() {
+    fn test_calculate_statistics() {
         let processor = DataProcessor::new(',', false);
-        let data = vec![
-            vec!["a".to_string(), "b".to_string()],
-            vec!["c".to_string(), "d".to_string()],
+        let records = vec![
+            vec!["A".to_string(), "10.5".to_string()],
+            vec!["B".to_string(), "20.5".to_string()],
+            vec!["C".to_string(), "30.5".to_string()],
         ];
-
-        let column = processor.extract_column(&data, 1);
-        assert_eq!(column, vec!["b".to_string(), "d".to_string()]);
+        
+        let avg = processor.calculate_statistics(&records, 1).unwrap();
+        assert!((avg - 20.5).abs() < 0.001);
     }
 }
