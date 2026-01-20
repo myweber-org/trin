@@ -1,153 +1,87 @@
-
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+    data: Vec<f64>,
+    frequency_map: HashMap<String, u32>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            cache: HashMap::new(),
+            data: Vec::new(),
+            frequency_map: HashMap::new(),
         }
     }
 
-    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
-        if values.is_empty() {
-            return Err("Empty data provided".to_string());
-        }
-
-        if values.iter().any(|&x| !x.is_finite()) {
-            return Err("Invalid numeric values detected".to_string());
-        }
-
-        let processed: Vec<f64> = values
-            .iter()
-            .map(|&x| x * 2.0)
-            .filter(|&x| x > 0.0)
-            .collect();
-
-        if processed.is_empty() {
-            return Err("All values filtered out".to_string());
-        }
-
-        self.cache.insert(key.to_string(), processed.clone());
-        Ok(processed)
-    }
-
-    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
-        self.cache.get(key)
-    }
-
-    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
-        self.cache.get(key).map(|data| {
-            let sum: f64 = data.iter().sum();
-            let count = data.len() as f64;
-            let mean = sum / count;
-            
-            let variance: f64 = data.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count;
-            
-            let std_dev = variance.sqrt();
-            
-            (mean, variance, std_dev)
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_valid_data_processing() {
-        let mut processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0];
-        let result = processor.process_numeric_data("test", &data);
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
         
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0]);
-    }
-
-    #[test]
-    fn test_invalid_data() {
-        let mut processor = DataProcessor::new();
-        let data = vec![f64::NAN, 1.0];
-        let result = processor.process_numeric_data("invalid", &data);
-        
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        let mut processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0];
-        processor.process_numeric_data("stats", &data).unwrap();
-        
-        let stats = processor.calculate_statistics("stats").unwrap();
-        assert!((stats.0 - 4.0).abs() < 0.001);
-    }
-}use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::path::Path;
-
-#[derive(Debug, Deserialize)]
-pub struct Record {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
-}
-
-pub struct DataProcessor {
-    records: Vec<Record>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            records: Vec::new(),
+        for line in reader.lines().skip(1) {
+            let line = line?;
+            let parts: Vec<&str> = line.split(',').collect();
+            
+            if parts.len() >= 2 {
+                if let Ok(value) = parts[1].parse::<f64>() {
+                    self.data.push(value);
+                }
+                
+                let category = parts[0].to_string();
+                *self.frequency_map.entry(category).or_insert(0) += 1;
+            }
         }
-    }
-
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let mut reader = Reader::from_path(path)?;
-        for result in reader.deserialize() {
-            let record: Record = result?;
-            self.records.push(record);
-        }
+        
         Ok(())
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
+
+    pub fn calculate_median(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        
+        let mut sorted_data = self.data.clone();
+        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let mid = sorted_data.len() / 2;
+        if sorted_data.len() % 2 == 0 {
+            Some((sorted_data[mid - 1] + sorted_data[mid]) / 2.0)
+        } else {
+            Some(sorted_data[mid])
+        }
+    }
+
+    pub fn get_category_frequency(&self, category: &str) -> u32 {
+        *self.frequency_map.get(category).unwrap_or(&0)
+    }
+
+    pub fn get_top_categories(&self, limit: usize) -> Vec<(String, u32)> {
+        let mut entries: Vec<_> = self.frequency_map.iter().collect();
+        entries.sort_by(|a, b| b.1.cmp(a.1));
+        
+        entries
+            .into_iter()
+            .take(limit)
+            .map(|(k, v)| (k.clone(), *v))
             .collect()
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
-        let sum: f64 = self.records.iter().map(|record| record.value).sum();
-        Some(sum / self.records.len() as f64)
-    }
-
-    pub fn find_max_value(&self) -> Option<&Record> {
-        self.records.iter().max_by(|a, b| {
-            a.value
-                .partial_cmp(&b.value)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    }
-
-    pub fn validate_records(&self) -> Vec<&Record> {
-        self.records
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<f64> {
+        self.data
             .iter()
-            .filter(|record| record.value < 0.0 || record.name.is_empty())
+            .filter(|&&x| x > threshold)
+            .copied()
             .collect()
     }
 }
@@ -155,21 +89,32 @@ impl DataProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_data_processing() {
-        let csv_data = "id,name,value,category\n1,ItemA,42.5,Alpha\n2,ItemB,-3.2,Beta\n3,,15.7,Alpha";
-        let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "{}", csv_data).unwrap();
-
         let mut processor = DataProcessor::new();
-        processor.load_from_csv(temp_file.path()).unwrap();
-
-        assert_eq!(processor.records.len(), 3);
-        assert_eq!(processor.filter_by_category("Alpha").len(), 2);
-        assert!(processor.calculate_average().is_some());
-        assert_eq!(processor.validate_records().len(), 2);
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "category,value").unwrap();
+        writeln!(temp_file, "A,10.5").unwrap();
+        writeln!(temp_file, "B,20.3").unwrap();
+        writeln!(temp_file, "A,15.2").unwrap();
+        writeln!(temp_file, "C,8.7").unwrap();
+        
+        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.calculate_mean(), Some(13.675));
+        assert_eq!(processor.calculate_median(), Some(12.85));
+        assert_eq!(processor.get_category_frequency("A"), 2);
+        assert_eq!(processor.get_category_frequency("B"), 1);
+        
+        let top_categories = processor.get_top_categories(2);
+        assert_eq!(top_categories.len(), 2);
+        assert_eq!(top_categories[0].0, "A");
+        
+        let filtered = processor.filter_by_threshold(12.0);
+        assert_eq!(filtered.len(), 2);
     }
 }
