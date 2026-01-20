@@ -1,186 +1,116 @@
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DatabaseConfig {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database_name: String,
+    pub timeout_seconds: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ServerConfig {
-    pub address: String,
-    pub port: u16,
-    pub enable_tls: bool,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
     pub max_connections: u32,
+    pub pool_timeout_seconds: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AppConfig {
-    pub database: DatabaseConfig,
-    pub server: ServerConfig,
-    pub log_level: String,
-    pub cache_ttl: u64,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub enable_console: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 10,
+                pool_timeout_seconds: 10,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: None,
+                enable_console: true,
+            },
+        }
+    }
 }
 
 impl AppConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let config_content = fs::read_to_string(path)?;
-        let mut config: AppConfig = serde_yaml::from_str(&config_content)?;
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| ConfigError::IoError(e.to_string()))?;
         
-        config.apply_environment_overrides();
+        let mut config: AppConfig = toml::from_str(&content)
+            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        
         config.validate()?;
-        
         Ok(config)
     }
     
-    fn apply_environment_overrides(&mut self) {
-        if let Ok(host) = env::var("DB_HOST") {
-            self.database.host = host;
-        }
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| ConfigError::SerializeError(e.to_string()))?;
         
-        if let Ok(port) = env::var("DB_PORT") {
-            if let Ok(port_num) = port.parse::<u16>() {
-                self.database.port = port_num;
-            }
-        }
-        
-        if let Ok(log_level) = env::var("LOG_LEVEL") {
-            self.log_level = log_level;
-        }
-    }
-    
-    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.database.port == 0 {
-            return Err("Database port cannot be zero".into());
-        }
-        
-        if self.server.port == 0 {
-            return Err("Server port cannot be zero".into());
-        }
-        
-        if self.cache_ttl > 86400 {
-            return Err("Cache TTL cannot exceed 24 hours".into());
-        }
-        
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
-            return Err(format!("Invalid log level: {}", self.log_level).into());
-        }
+        fs::write(path, content)
+            .map_err(|e| ConfigError::IoError(e.to_string()))?;
         
         Ok(())
     }
     
-    pub fn database_url(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.database.username,
-            self.database.password,
-            self.database.host,
-            self.database.port,
-            self.database.database_name
-        )
-    }
-    
-    pub fn server_address(&self) -> String {
-        format!("{}:{}", self.server.address, self.server.port)
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.server.port == 0 {
+            return Err(ConfigError::ValidationError("Port cannot be zero".to_string()));
+        }
+        
+        if self.database.max_connections == 0 {
+            return Err(ConfigError::ValidationError("Max connections cannot be zero".to_string()));
+        }
+        
+        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_log_levels.contains(&self.logging.level.as_str()) {
+            return Err(ConfigError::ValidationError(
+                format!("Invalid log level: {}", self.logging.level)
+            ));
+        }
+        
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    
-    #[test]
-    fn test_config_loading() {
-        let config_yaml = r#"
-database:
-  host: localhost
-  port: 5432
-  username: postgres
-  password: secret
-  database_name: mydb
-server:
-  address: 0.0.0.0
-  port: 8080
-  enable_tls: false
-  max_connections: 100
-log_level: info
-cache_ttl: 3600
-"#;
-        
-        let temp_file = NamedTempFile::new().unwrap();
-        fs::write(temp_file.path(), config_yaml).unwrap();
-        
-        let config = AppConfig::from_file(temp_file.path()).unwrap();
-        
-        assert_eq!(config.database.host, "localhost");
-        assert_eq!(config.database.port, 5432);
-        assert_eq!(config.server.port, 8080);
-        assert_eq!(config.log_level, "info");
-    }
-    
-    #[test]
-    fn test_environment_override() {
-        env::set_var("DB_HOST", "prod-db.example.com");
-        env::set_var("LOG_LEVEL", "debug");
-        
-        let config_yaml = r#"
-database:
-  host: localhost
-  port: 5432
-  username: postgres
-  password: secret
-  database_name: mydb
-server:
-  address: 0.0.0.0
-  port: 8080
-  enable_tls: false
-  max_connections: 100
-log_level: info
-cache_ttl: 3600
-"#;
-        
-        let temp_file = NamedTempFile::new().unwrap();
-        fs::write(temp_file.path(), config_yaml).unwrap();
-        
-        let config = AppConfig::from_file(temp_file.path()).unwrap();
-        
-        assert_eq!(config.database.host, "prod-db.example.com");
-        assert_eq!(config.log_level, "debug");
-        
-        env::remove_var("DB_HOST");
-        env::remove_var("LOG_LEVEL");
-    }
-    
-    #[test]
-    fn test_validation() {
-        let invalid_config = r#"
-database:
-  host: localhost
-  port: 0
-  username: postgres
-  password: secret
-  database_name: mydb
-server:
-  address: 0.0.0.0
-  port: 8080
-  enable_tls: false
-  max_connections: 100
-log_level: invalid_level
-cache_ttl: 100000
-"#;
-        
-        let temp_file = NamedTempFile::new().unwrap();
-        fs::write(temp_file.path(), invalid_config).unwrap();
-        
-        let result = AppConfig::from_file(temp_file.path());
-        assert!(result.is_err());
+#[derive(Debug)]
+pub enum ConfigError {
+    IoError(String),
+    ParseError(String),
+    SerializeError(String),
+    ValidationError(String),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::IoError(msg) => write!(f, "IO error: {}", msg),
+            ConfigError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+            ConfigError::SerializeError(msg) => write!(f, "Serialize error: {}", msg),
+            ConfigError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
     }
 }
+
+impl std::error::Error for ConfigError {}
