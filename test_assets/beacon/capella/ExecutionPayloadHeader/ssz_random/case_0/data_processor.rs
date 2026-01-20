@@ -268,3 +268,99 @@ mod tests {
         assert!(transformed.metadata.contains_key("processed_timestamp"));
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let path = Path::new(input_path);
+    if !path.exists() {
+        return Err("Input file does not exist".into());
+    }
+
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    let mut valid_count = 0;
+    let mut invalid_count = 0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.is_valid() {
+            writer.serialize(&record)?;
+            valid_count += 1;
+        } else {
+            invalid_count += 1;
+        }
+    }
+
+    writer.flush()?;
+    
+    println!("Processing complete:");
+    println!("  Valid records: {}", valid_count);
+    println!("  Invalid records: {}", invalid_count);
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            active: true,
+        };
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -50.0,
+            active: false,
+        };
+        assert!(!record.is_valid());
+    }
+
+    #[test]
+    fn test_csv_processing() {
+        let input_data = "id,name,value,active\n1,Alice,100.5,true\n2,Bob,-50.0,false\n3,,75.0,true\n";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        write!(input_file, "{}", input_data).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let result = process_csv(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        );
+        
+        assert!(result.is_ok());
+    }
+}
