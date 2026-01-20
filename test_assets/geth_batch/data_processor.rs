@@ -1,76 +1,84 @@
 
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 pub struct DataProcessor {
-    file_path: String,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new(file_path: &str) -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            file_path: file_path.to_string(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let path = Path::new(&self.file_path);
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-        
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
         let mut records = Vec::new();
-        for result in rdr.records() {
-            let record = result?;
-            let validated_record: Vec<String> = record
-                .iter()
-                .map(|field| field.trim().to_string())
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
                 .collect();
             
-            if !validated_record.is_empty() && validated_record.iter().any(|f| !f.is_empty()) {
-                records.push(validated_record);
+            if !fields.is_empty() {
+                records.push(fields);
             }
         }
-        
+
         Ok(records)
     }
 
-    pub fn filter_records(&self, records: Vec<Vec<String>>, column_index: usize, filter_value: &str) -> Vec<Vec<String>> {
-        records
-            .into_iter()
-            .filter(|record| {
-                record.get(column_index)
-                    .map(|value| value.contains(filter_value))
-                    .unwrap_or(false)
-            })
-            .collect()
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
     }
 
-    pub fn calculate_statistics(&self, records: Vec<Vec<String>>, column_index: usize) -> Result<(f64, f64), Box<dyn Error>> {
-        let numeric_values: Vec<f64> = records
-            .iter()
-            .filter_map(|record| record.get(column_index))
-            .filter_map(|value| value.parse::<f64>().ok())
-            .collect();
+    pub fn filter_valid_records(&self, records: Vec<Vec<String>>) -> Vec<Vec<String>> {
+        records
+            .into_iter()
+            .filter(|record| self.validate_record(record))
+            .collect()
+    }
+}
 
-        if numeric_values.is_empty() {
-            return Err("No valid numeric data found".into());
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-        let sum: f64 = numeric_values.iter().sum();
-        let count = numeric_values.len() as f64;
-        let average = sum / count;
+    #[test]
+    fn test_process_file_with_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Alice,25,London").unwrap();
 
-        let variance: f64 = numeric_values
-            .iter()
-            .map(|value| {
-                let diff = average - value;
-                diff * diff
-            })
-            .sum::<f64>() / count;
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["John", "30", "New York"]);
+    }
 
-        let std_dev = variance.sqrt();
-
-        Ok((average, std_dev))
+    #[test]
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        assert!(processor.validate_record(&["test".to_string(), "data".to_string()]));
+        assert!(!processor.validate_record(&[]));
+        assert!(!processor.validate_record(&["".to_string(), "value".to_string()]));
     }
 }
