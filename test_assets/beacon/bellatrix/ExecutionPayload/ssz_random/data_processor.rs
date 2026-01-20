@@ -228,3 +228,122 @@ mod tests {
         assert!(output_content.contains("test3"));
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ValidationError {
+    message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct UserData {
+    pub username: String,
+    pub email: String,
+    pub age: u8,
+}
+
+impl UserData {
+    pub fn new(username: String, email: String, age: u8) -> Result<Self, ValidationError> {
+        if username.len() < 3 || username.len() > 20 {
+            return Err(ValidationError {
+                message: "Username must be between 3 and 20 characters".to_string(),
+            });
+        }
+
+        if !email.contains('@') {
+            return Err(ValidationError {
+                message: "Email must contain '@' character".to_string(),
+            });
+        }
+
+        if age < 18 || age > 120 {
+            return Err(ValidationError {
+                message: "Age must be between 18 and 120".to_string(),
+            });
+        }
+
+        Ok(Self {
+            username,
+            email,
+            age,
+        })
+    }
+
+    pub fn normalize_username(&mut self) {
+        self.username = self.username.trim().to_lowercase();
+    }
+
+    pub fn normalize_email(&mut self) {
+        self.email = self.email.trim().to_lowercase();
+    }
+
+    pub fn to_json(&self) -> String {
+        format!(
+            r#"{{"username":"{}","email":"{}","age":{}}}"#,
+            self.username, self.email, self.age
+        )
+    }
+}
+
+pub fn process_user_input(
+    username: &str,
+    email: &str,
+    age: u8,
+) -> Result<String, ValidationError> {
+    let mut user_data = UserData::new(username.to_string(), email.to_string(), age)?;
+    
+    user_data.normalize_username();
+    user_data.normalize_email();
+    
+    Ok(user_data.to_json())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_user_data() {
+        let result = UserData::new("alice".to_string(), "alice@example.com".to_string(), 25);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_username() {
+        let result = UserData::new("ab".to_string(), "test@example.com".to_string(), 25);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_email() {
+        let result = UserData::new("bob".to_string(), "invalid-email".to_string(), 30);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut user = UserData::new("  JOHN  ".to_string(), "JOHN@EXAMPLE.COM".to_string(), 30).unwrap();
+        user.normalize_username();
+        user.normalize_email();
+        
+        assert_eq!(user.username, "john");
+        assert_eq!(user.email, "john@example.com");
+    }
+
+    #[test]
+    fn test_json_output() {
+        let user = UserData::new("charlie".to_string(), "charlie@test.com".to_string(), 35).unwrap();
+        let json = user.to_json();
+        assert!(json.contains("\"username\":\"charlie\""));
+        assert!(json.contains("\"email\":\"charlie@test.com\""));
+        assert!(json.contains("\"age\":35"));
+    }
+}
