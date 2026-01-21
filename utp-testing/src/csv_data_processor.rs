@@ -1,128 +1,121 @@
 
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use csv::{Reader, Writer};
 
-pub struct CsvProcessor {
-    delimiter: char,
-    has_headers: bool,
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    category: String,
+    value: f64,
+    active: bool,
 }
 
-impl CsvProcessor {
-    pub fn new(delimiter: char, has_headers: bool) -> Self {
-        CsvProcessor {
-            delimiter,
-            has_headers,
+impl DataRecord {
+    pub fn new(id: u32, category: &str, value: f64, active: bool) -> Self {
+        DataRecord {
+            id,
+            category: category.to_string(),
+            value,
+            active,
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
         }
     }
 
-    pub fn read_and_validate(&self, file_path: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
         let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut line_number = 0;
+        let mut rdr = Reader::from_reader(file);
 
-        for line in reader.lines() {
-            line_number += 1;
-            let line_content = line?;
-            
-            if line_content.trim().is_empty() {
-                continue;
-            }
-
-            let fields: Vec<String> = line_content
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if fields.is_empty() {
-                return Err(format!("Empty record at line {}", line_number).into());
-            }
-
-            records.push(fields);
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
         }
 
-        if records.is_empty() {
-            return Err("CSV file contains no data".into());
-        }
-
-        Ok(records)
+        Ok(())
     }
 
-    pub fn transform_numeric_fields(&self, records: &[Vec<String>]) -> Vec<Vec<String>> {
-        let mut transformed = Vec::with_capacity(records.len());
-        
-        for record in records {
-            let transformed_record: Vec<String> = record
-                .iter()
-                .map(|field| {
-                    if let Ok(num) = field.parse::<f64>() {
-                        format!("{:.2}", num)
-                    } else {
-                        field.clone()
-                    }
-                })
-                .collect();
-            transformed.push(transformed_record);
-        }
-        
-        transformed
-    }
-
-    pub fn filter_by_column_value(
-        &self,
-        records: &[Vec<String>],
-        column_index: usize,
-        filter_value: &str,
-    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        if records.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        if column_index >= records[0].len() {
-            return Err(format!("Column index {} out of bounds", column_index).into());
-        }
-
-        let filtered: Vec<Vec<String>> = records
+    pub fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+        self.records
             .iter()
-            .filter(|record| {
-                if column_index < record.len() {
-                    record[column_index] == filter_value
-                } else {
-                    false
-                }
-            })
+            .filter(|r| r.category == category)
             .cloned()
-            .collect();
+            .collect()
+    }
 
-        Ok(filtered)
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn export_active_records(&self, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let active_records: Vec<&DataRecord> = self.records.iter().filter(|r| r.active).collect();
+
+        let mut wtr = Writer::from_path(output_path)?;
+
+        for record in active_records {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_processing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "Name,Age,Score").unwrap();
-        writeln!(temp_file, "Alice,25,95.5").unwrap();
-        writeln!(temp_file, "Bob,30,87.25").unwrap();
-        writeln!(temp_file, "Charlie,25,91.75").unwrap();
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
 
-        let processor = CsvProcessor::new(',', true);
-        let records = processor.read_and_validate(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(records.len(), 3);
-        assert_eq!(records[0], vec!["Name", "Age", "Score"]);
-        
-        let transformed = processor.transform_numeric_fields(&records);
-        assert_eq!(transformed[1][2], "95.50");
-        
-        let filtered = processor.filter_by_column_value(&records, 1, "25").unwrap();
+        processor.add_record(DataRecord::new(1, "A", 10.5, true));
+        processor.add_record(DataRecord::new(2, "B", 20.3, false));
+        processor.add_record(DataRecord::new(3, "A", 15.7, true));
+
+        assert_eq!(processor.get_record_count(), 3);
+
+        let filtered = processor.filter_by_category("A");
         assert_eq!(filtered.len(), 2);
+
+        let avg = processor.calculate_average();
+        assert!(avg.is_some());
+        assert!((avg.unwrap() - 15.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_csv_export() {
+        let mut processor = DataProcessor::new();
+        processor.add_record(DataRecord::new(1, "Test", 42.0, true));
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        let result = processor.export_active_records(path);
+        assert!(result.is_ok());
     }
 }
