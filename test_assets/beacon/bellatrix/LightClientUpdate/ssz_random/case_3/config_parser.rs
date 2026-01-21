@@ -296,4 +296,112 @@ mod tests {
         assert!(url.contains("postgres://"));
         assert!(url.contains("localhost:5432"));
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub database_url: String,
+    pub server_port: u16,
+    pub log_level: String,
+    pub cache_size: usize,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config_map = HashMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let mut config_map = HashMap::new();
+        
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                let config_key = key.trim_start_matches("APP_").to_lowercase();
+                config_map.insert(config_key, value);
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
+        let database_url = map.get("database_url")
+            .map(|s| s.to_string())
+            .or_else(|| env::var("DATABASE_URL").ok())
+            .ok_or("Missing database_url configuration")?;
+
+        let server_port = map.get("server_port")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8080);
+
+        let log_level = map.get("log_level")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "info".to_string());
+
+        let cache_size = map.get("cache_size")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100);
+
+        Ok(Config {
+            database_url,
+            server_port,
+            log_level,
+            cache_size,
+        })
+    }
+
+    pub fn load() -> Result<Self, String> {
+        Self::from_file("config/app.conf")
+            .or_else(|_| Self::from_env())
+            .or_else(|_| Self::from_file("/etc/app/config.conf"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_from_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "database_url=postgres://localhost/test").unwrap();
+        writeln!(file, "server_port=3000").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "log_level=debug").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database_url, "postgres://localhost/test");
+        assert_eq!(config.server_port, 3000);
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(config.cache_size, 100);
+    }
+
+    #[test]
+    fn test_missing_required_field() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "server_port=3000").unwrap();
+
+        let result = Config::from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
 }
