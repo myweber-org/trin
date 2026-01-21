@@ -246,3 +246,129 @@ mod tests {
         assert_eq!(processor.calculate_average(), Some(100.0));
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    filters: Vec<Box<dyn Fn(&HashMap<String, String>) -> bool>>,
+    transformers: Vec<Box<dyn Fn(HashMap<String, String>) -> HashMap<String, String>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            filters: Vec::new(),
+            transformers: Vec::new(),
+        }
+    }
+
+    pub fn add_filter<F>(&mut self, filter: F)
+    where
+        F: Fn(&HashMap<String, String>) -> bool + 'static,
+    {
+        self.filters.push(Box::new(filter));
+    }
+
+    pub fn add_transformer<F>(&mut self, transformer: F)
+    where
+        F: Fn(HashMap<String, String>) -> HashMap<String, String> + 'static,
+    {
+        self.transformers.push(Box::new(transformer));
+    }
+
+    pub fn process(&self, data: Vec<HashMap<String, String>>) -> Vec<HashMap<String, String>> {
+        data.into_iter()
+            .filter(|record| self.filters.iter().all(|filter| filter(record)))
+            .map(|record| {
+                let mut transformed = record;
+                for transformer in &self.transformers {
+                    transformed = transformer(transformed);
+                }
+                transformed
+            })
+            .collect()
+    }
+
+    pub fn process_single(&self, record: HashMap<String, String>) -> Option<HashMap<String, String>> {
+        if self.filters.iter().all(|filter| filter(&record)) {
+            let mut transformed = record;
+            for transformer in &self.transformers {
+                transformed = transformer(transformed);
+            }
+            Some(transformed)
+        } else {
+            None
+        }
+    }
+}
+
+pub fn create_age_filter(min_age: u32) -> impl Fn(&HashMap<String, String>) -> bool {
+    move |record| {
+        record.get("age")
+            .and_then(|age_str| age_str.parse::<u32>().ok())
+            .map_or(false, |age| age >= min_age)
+    }
+}
+
+pub fn create_name_capitalizer() -> impl Fn(HashMap<String, String>) -> HashMap<String, String> {
+    |mut record| {
+        if let Some(name) = record.get_mut("name") {
+            let capitalized = name
+                .split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            *name = capitalized;
+        }
+        record
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        processor.add_filter(create_age_filter(18));
+        processor.add_transformer(create_name_capitalizer());
+
+        let test_data = vec![
+            [("name".to_string(), "john doe".to_string()), ("age".to_string(), "25".to_string())]
+                .iter().cloned().collect(),
+            [("name".to_string(), "jane smith".to_string()), ("age".to_string(), "16".to_string())]
+                .iter().cloned().collect(),
+            [("name".to_string(), "alice cooper".to_string()), ("age".to_string(), "30".to_string())]
+                .iter().cloned().collect(),
+        ];
+
+        let result = processor.process(test_data);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["name"], "John Doe");
+        assert_eq!(result[1]["name"], "Alice Cooper");
+    }
+
+    #[test]
+    fn test_single_record_processing() {
+        let mut processor = DataProcessor::new();
+        processor.add_filter(|record| record.get("status").map_or(false, |s| s == "active"));
+        processor.add_transformer(|mut record| {
+            record.insert("processed".to_string(), "true".to_string());
+            record
+        });
+
+        let valid_record = [("status".to_string(), "active".to_string())]
+            .iter().cloned().collect();
+        let invalid_record = [("status".to_string(), "inactive".to_string())]
+            .iter().cloned().collect();
+
+        assert!(processor.process_single(valid_record).is_some());
+        assert!(processor.process_single(invalid_record).is_none());
+    }
+}
