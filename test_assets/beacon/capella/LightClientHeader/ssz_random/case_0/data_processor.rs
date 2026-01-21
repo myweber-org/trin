@@ -354,4 +354,259 @@ mod tests {
         let expected_mean = (10.5 + 15.5 + 12.0) / 3.0;
         assert!((stats.0 - expected_mean).abs() < 0.0001);
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    config: ProcessingConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessingConfig {
+    pub max_values: usize,
+    pub require_timestamp: bool,
+    pub allowed_metadata_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(config: ProcessingConfig) -> Self {
+        DataProcessor { config }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.len() > self.config.max_values {
+            return Err(ProcessingError::ValidationError(format!(
+                "Too many values: {} > {}",
+                record.values.len(),
+                self.config.max_values
+            )));
+        }
+
+        if self.config.require_timestamp && record.timestamp <= 0 {
+            return Err(ProcessingError::ValidationError(
+                "Invalid timestamp".to_string(),
+            ));
+        }
+
+        for key in record.metadata.keys() {
+            if !self.config.allowed_metadata_keys.contains(key) {
+                return Err(ProcessingError::ValidationError(format!(
+                    "Disallowed metadata key: {}",
+                    key
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(&record)?;
+
+        let mut transformed = record.clone();
+        
+        transformed.values = transformed
+            .values
+            .iter()
+            .map(|&v| {
+                if v.is_nan() || v.is_infinite() {
+                    0.0
+                } else {
+                    v
+                }
+            })
+            .collect();
+
+        transformed.metadata.retain(|k, _| {
+            self.config.allowed_metadata_keys.contains(k)
+        });
+
+        if transformed.values.is_empty() {
+            return Err(ProcessingError::TransformationFailed(
+                "No valid values after transformation".to_string(),
+            ));
+        }
+
+        Ok(transformed)
+    }
+
+    pub fn batch_process(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
+        
+        for record in records {
+            match self.transform_record(record) {
+                Ok(transformed) => results.push(transformed),
+                Err(e) => return Err(e),
+            }
+        }
+        
+        Ok(results)
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if records.is_empty() {
+            return stats;
+        }
+
+        let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+        stats.insert("total_records".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+
+        let all_values: Vec<f64> = records
+            .iter()
+            .flat_map(|r| r.values.clone())
+            .filter(|&v| v.is_finite())
+            .collect();
+
+        if !all_values.is_empty() {
+            let sum: f64 = all_values.iter().sum();
+            let count = all_values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = all_values
+                .iter()
+                .map(|&v| (v - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            stats.insert("mean".to_string(), mean);
+            stats.insert("variance".to_string(), variance);
+            stats.insert("min".to_string(), all_values.iter().fold(f64::INFINITY, |a, &b| a.min(b)));
+            stats.insert("max".to_string(), all_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)));
+        }
+
+        stats
+    }
+}
+
+impl Default for ProcessingConfig {
+    fn default() -> Self {
+        ProcessingConfig {
+            max_values: 100,
+            require_timestamp: true,
+            allowed_metadata_keys: vec![
+                "source".to_string(),
+                "version".to_string(),
+                "quality".to_string(),
+            ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_record() -> DataRecord {
+        DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("source".to_string(), "test".to_string());
+                map
+            },
+        }
+    }
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(ProcessingConfig::default());
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_too_many_values() {
+        let mut config = ProcessingConfig::default();
+        config.max_values = 3;
+        let processor = DataProcessor::new(config);
+        
+        let mut record = create_test_record();
+        record.values = vec![1.0; 10];
+        
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let processor = DataProcessor::new(ProcessingConfig::default());
+        let mut record = create_test_record();
+        record.values.push(f64::NAN);
+        
+        let result = processor.transform_record(record);
+        assert!(result.is_ok());
+        
+        let transformed = result.unwrap();
+        assert_eq!(transformed.values.len(), 6);
+        assert!(transformed.values.iter().all(|&v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_batch_process() {
+        let processor = DataProcessor::new(ProcessingConfig::default());
+        let records = vec![create_test_record(), create_test_record()];
+        
+        let result = processor.batch_process(records);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(ProcessingConfig::default());
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1000,
+                values: vec![1.0, 2.0, 3.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 2000,
+                values: vec![4.0, 5.0],
+                metadata: HashMap::new(),
+            },
+        ];
+        
+        let stats = processor.calculate_statistics(&records);
+        assert_eq!(stats.get("total_records").unwrap(), &2.0);
+        assert_eq!(stats.get("total_values").unwrap(), &5.0);
+        assert_eq!(stats.get("mean").unwrap(), &3.0);
+    }
 }
