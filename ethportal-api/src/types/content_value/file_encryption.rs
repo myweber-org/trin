@@ -87,3 +87,87 @@ mod tests {
         assert_eq!(original_text.to_vec(), decrypted_data);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0xAA;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+    
+    let encrypted_data: Vec<u8> = buffer.iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+pub fn encrypt_string(text: &str, key: Option<u8>) -> Vec<u8> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    text.bytes()
+        .map(|byte| byte ^ encryption_key)
+        .collect()
+}
+
+pub fn decrypt_string(data: &[u8], key: Option<u8>) -> String {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    data.iter()
+        .map(|byte| (byte ^ encryption_key) as char)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_string_encryption() {
+        let original = "Hello, World!";
+        let encrypted = encrypt_string(original, None);
+        let decrypted = decrypt_string(&encrypted, None);
+        
+        assert_eq!(original, decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let original_content = b"Test file content for encryption";
+        
+        let input_temp = NamedTempFile::new()?;
+        let output_temp = NamedTempFile::new()?;
+        let decrypted_temp = NamedTempFile::new()?;
+        
+        fs::write(input_temp.path(), original_content)?;
+        
+        encrypt_file(
+            input_temp.path().to_str().unwrap(),
+            output_temp.path().to_str().unwrap(),
+            Some(0x55),
+        )?;
+        
+        decrypt_file(
+            output_temp.path().to_str().unwrap(),
+            decrypted_temp.path().to_str().unwrap(),
+            Some(0x55),
+        )?;
+        
+        let decrypted_content = fs::read(decrypted_temp.path())?;
+        assert_eq!(original_content.to_vec(), decrypted_content);
+        
+        Ok(())
+    }
+}
