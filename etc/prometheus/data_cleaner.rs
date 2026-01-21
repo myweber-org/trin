@@ -1,63 +1,19 @@
-use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
 
-pub struct DataCleaner {
-    records: Vec<String>,
-}
+pub fn clean_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut output_file = File::create(output_path)?;
 
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            records: Vec::new(),
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+
+        if !trimmed.is_empty() {
+            writeln!(output_file, "{}", trimmed)?;
         }
     }
 
-    pub fn add_record(&mut self, record: &str) {
-        self.records.push(record.trim().to_string());
-    }
-
-    pub fn deduplicate(&mut self) {
-        let mut seen = HashSet::new();
-        self.records.retain(|r| seen.insert(r.clone()));
-    }
-
-    pub fn normalize_case(&mut self) {
-        for record in &mut self.records {
-            *record = record.to_lowercase();
-        }
-    }
-
-    pub fn sort_records(&mut self) {
-        self.records.sort();
-    }
-
-    pub fn get_records(&self) -> &Vec<String> {
-        &self.records
-    }
-
-    pub fn clean(&mut self) {
-        self.deduplicate();
-        self.normalize_case();
-        self.sort_records();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_data_cleaning() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("  Apple  ");
-        cleaner.add_record("banana");
-        cleaner.add_record("Apple");
-        cleaner.add_record("Banana");
-        cleaner.add_record("apple");
-
-        cleaner.clean();
-        let result = cleaner.get_records();
-        assert_eq!(result.len(), 2);
-        assert!(result.contains(&"apple".to_string()));
-        assert!(result.contains(&"banana".to_string()));
-    }
+    Ok(())
 }
