@@ -1,116 +1,6 @@
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
-
-const DEFAULT_KEY: &[u8] = b"secret-encryption-key-2024";
-
-pub struct FileCipher {
-    key: Vec<u8>,
-}
-
-impl FileCipher {
-    pub fn new(key: Option<&[u8]>) -> Self {
-        let key = key.unwrap_or(DEFAULT_KEY).to_vec();
-        FileCipher { key }
-    }
-
-    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path, true)
-    }
-
-    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path, false)
-    }
-
-    fn process_file(&self, source_path: &Path, dest_path: &Path, is_encrypt: bool) -> io::Result<()> {
-        let mut source_file = fs::File::open(source_path)?;
-        let mut dest_file = fs::File::create(dest_path)?;
-
-        let mut buffer = [0u8; 4096];
-        let key_len = self.key.len();
-        let mut key_index = 0;
-
-        loop {
-            let bytes_read = source_file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-
-            for i in 0..bytes_read {
-                buffer[i] ^= self.key[key_index];
-                key_index = (key_index + 1) % key_len;
-            }
-
-            dest_file.write_all(&buffer[..bytes_read])?;
-        }
-
-        dest_file.flush()?;
-        Ok(())
-    }
-
-    pub fn encrypt_string(&self, input: &str) -> Vec<u8> {
-        self.process_bytes(input.as_bytes())
-    }
-
-    pub fn decrypt_string(&self, encrypted: &[u8]) -> String {
-        let decrypted = self.process_bytes(encrypted);
-        String::from_utf8_lossy(&decrypted).to_string()
-    }
-
-    fn process_bytes(&self, data: &[u8]) -> Vec<u8> {
-        let key_len = self.key.len();
-        data.iter()
-            .enumerate()
-            .map(|(i, &byte)| byte ^ self.key[i % key_len])
-            .collect()
-    }
-}
-
-pub fn generate_random_key(length: usize) -> Vec<u8> {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    (0..length).map(|_| rng.gen()).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_encryption_decryption() {
-        let cipher = FileCipher::new(Some(b"test-key"));
-        let original = "Hello, World! This is a test message.";
-        
-        let encrypted = cipher.encrypt_string(original);
-        let decrypted = cipher.decrypt_string(&encrypted);
-        
-        assert_ne!(encrypted, original.as_bytes());
-        assert_eq!(decrypted, original);
-    }
-
-    #[test]
-    fn test_file_operations() -> io::Result<()> {
-        let cipher = FileCipher::new(Some(b"file-test-key"));
-        let content = b"Sample file content for encryption test";
-        
-        let source_file = NamedTempFile::new()?;
-        let encrypted_file = NamedTempFile::new()?;
-        let decrypted_file = NamedTempFile::new()?;
-        
-        fs::write(source_file.path(), content)?;
-        
-        cipher.encrypt_file(source_file.path(), encrypted_file.path())?;
-        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path())?;
-        
-        let decrypted_content = fs::read(decrypted_file.path())?;
-        assert_eq!(decrypted_content, content);
-        
-        Ok(())
-    }
-}use aes_gcm::{
+use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
+    Aes256Gcm, Key, Nonce,
 };
 use std::{
     fs::{self, File},
@@ -131,15 +21,16 @@ pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> Resu
     input_file.read_to_end(&mut plaintext)
         .map_err(|e| format!("Failed to read input file: {}", e))?;
     
-    let nonce = generate_nonce();
+    let mut rng = OsRng;
+    let nonce = Nonce::from_slice(&rng.random_bytes(NONCE_SIZE));
     
-    let ciphertext = cipher.encrypt(&nonce, plaintext.as_ref())
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
         .map_err(|e| format!("Encryption failed: {}", e))?;
     
     let mut output_file = File::create(output_path)
         .map_err(|e| format!("Failed to create output file: {}", e))?;
     
-    output_file.write_all(&nonce)
+    output_file.write_all(nonce)
         .map_err(|e| format!("Failed to write nonce: {}", e))?;
     output_file.write_all(&ciphertext)
         .map_err(|e| format!("Failed to write ciphertext: {}", e))?;
@@ -177,21 +68,15 @@ pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Resu
     Ok(())
 }
 
-fn derive_key(password: &str) -> aes_gcm::Key<Aes256Gcm> {
-    let mut key = [0u8; 32];
+fn derive_key(password: &str) -> Key<Aes256Gcm> {
+    let mut key_bytes = [0u8; 32];
     let password_bytes = password.as_bytes();
     
-    for i in 0..key.len() {
-        key[i] = password_bytes[i % password_bytes.len()].wrapping_add(i as u8);
+    for (i, byte) in password_bytes.iter().enumerate() {
+        key_bytes[i % 32] ^= byte;
     }
     
-    aes_gcm::Key::<Aes256Gcm>::from_slice(&key).clone()
-}
-
-fn generate_nonce() -> Nonce {
-    let mut nonce = [0u8; NONCE_SIZE];
-    OsRng.fill_bytes(&mut nonce);
-    Nonce::from_slice(&nonce).clone()
+    *Key::<Aes256Gcm>::from_slice(&key_bytes)
 }
 
 #[cfg(test)]
