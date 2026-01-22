@@ -131,4 +131,106 @@ mod tests {
             assert!(errors.contains(&"PORT must be greater than 0".to_string()));
         }
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub workers: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub features: HashMap<String, bool>,
+    pub log_level: String,
+}
+
+impl AppConfig {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config: AppConfig = serde_yaml::from_str(&content)?;
+        
+        config.apply_environment_overrides();
+        Ok(config)
+    }
+
+    fn apply_environment_overrides(&mut self) {
+        if let Ok(host) = env::var("DB_HOST") {
+            self.database.host = host;
+        }
+        
+        if let Ok(port) = env::var("DB_PORT") {
+            if let Ok(port_num) = port.parse() {
+                self.database.port = port_num;
+            }
+        }
+        
+        if let Ok(log_level) = env::var("LOG_LEVEL") {
+            self.log_level = log_level;
+        }
+        
+        for (key, value) in env::vars() {
+            if key.starts_with("FEATURE_") {
+                let feature_name = key.trim_start_matches("FEATURE_").to_lowercase();
+                if let Ok(enabled) = value.parse() {
+                    self.features.insert(feature_name, enabled);
+                }
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        
+        if self.server.port == 0 {
+            errors.push("Server port cannot be 0".to_string());
+        }
+        
+        if self.database.host.is_empty() {
+            errors.push("Database host cannot be empty".to_string());
+        }
+        
+        if self.database.port == 0 {
+            errors.push("Database port cannot be 0".to_string());
+        }
+        
+        if !["debug", "info", "warn", "error"].contains(&self.log_level.as_str()) {
+            errors.push(format!("Invalid log level: {}", self.log_level));
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+pub fn load_config_with_fallback(paths: &[&str]) -> Result<AppConfig, Box<dyn std::error::Error>> {
+    for path in paths {
+        if let Ok(config) = AppConfig::from_file(path) {
+            if let Err(errors) = config.validate() {
+                eprintln!("Configuration validation failed for {}: {:?}", path, errors);
+                continue;
+            }
+            return Ok(config);
+        }
+    }
+    
+    Err("No valid configuration file found".into())
 }
