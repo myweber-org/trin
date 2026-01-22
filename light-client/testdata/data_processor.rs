@@ -109,3 +109,101 @@ mod tests {
         assert!((stats.2.unwrap() - 20.3).abs() < 0.001);
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: i64,
+}
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid data value: {0}")]
+    InvalidValue(f64),
+    #[error("Timestamp out of range: {0}")]
+    InvalidTimestamp(i64),
+    #[error("ID must be positive: {0}")]
+    InvalidId(u32),
+}
+
+pub struct DataProcessor {
+    max_value: f64,
+    min_timestamp: i64,
+    max_timestamp: i64,
+}
+
+impl DataProcessor {
+    pub fn new(max_value: f64, min_timestamp: i64, max_timestamp: i64) -> Self {
+        Self {
+            max_value,
+            min_timestamp,
+            max_timestamp,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId(record.id));
+        }
+
+        if record.value < 0.0 || record.value > self.max_value {
+            return Err(DataError::InvalidValue(record.value));
+        }
+
+        if record.timestamp < self.min_timestamp || record.timestamp > self.max_timestamp {
+            return Err(DataError::InvalidTimestamp(record.timestamp));
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_value(&self, record: &DataRecord) -> f64 {
+        record.value / self.max_value
+    }
+
+    pub fn process_records(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, DataError>> {
+        records
+            .into_iter()
+            .map(|record| {
+                self.validate_record(&record)?;
+                Ok(record)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let processor = DataProcessor::new(100.0, 0, 1000);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 500,
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+        assert_eq!(processor.normalize_value(&record), 0.5);
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let processor = DataProcessor::new(100.0, 0, 1000);
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 500,
+        };
+
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(DataError::InvalidValue(150.0))
+        ));
+    }
+}
