@@ -4,37 +4,37 @@ use std::fs;
 use std::path::Path;
 use std::collections::HashSet;
 
-pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged_map = Map::new();
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), String> {
+    let mut merged = Map::new();
     let mut processed_keys = HashSet::new();
-    let mut conflict_log = Vec::new();
+    let mut conflicts = Vec::new();
 
-    for file_path in file_paths {
-        let content = fs::read_to_string(file_path)?;
-        let json_value: Value = serde_json::from_str(&content)?;
-
-        if let Value::Object(obj) = json_value {
+    for path in paths {
+        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let json: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        
+        if let Value::Object(obj) = json {
             for (key, value) in obj {
                 if processed_keys.contains(&key) {
-                    conflict_log.push(format!("Conflict detected for key '{}' in file '{}'", key, file_path));
-                    continue;
+                    conflicts.push(key.clone());
+                } else {
+                    merged.insert(key.clone(), value);
+                    processed_keys.insert(key);
                 }
-                merged_map.insert(key.clone(), value);
-                processed_keys.insert(key);
             }
+        } else {
+            return Err("Input file does not contain a JSON object".to_string());
         }
     }
 
-    let merged_json = Value::Object(merged_map);
-    let json_string = serde_json::to_string_pretty(&merged_json)?;
-
-    fs::write(output_path, json_string)?;
-
-    if !conflict_log.is_empty() {
-        let log_path = Path::new(output_path).with_extension("log");
-        fs::write(log_path, conflict_log.join("\n"))?;
+    if !conflicts.is_empty() {
+        return Err(format!("Duplicate keys found: {}", conflicts.join(", ")));
     }
 
+    let output_json = Value::Object(merged);
+    let serialized = serde_json::to_string_pretty(&output_json).map_err(|e| e.to_string())?;
+    fs::write(output_path, serialized).map_err(|e| e.to_string())?;
+    
     Ok(())
 }
 
@@ -44,18 +44,16 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_merge_json_files() {
+    fn test_merge_valid_files() {
         let file1 = NamedTempFile::new().unwrap();
         let file2 = NamedTempFile::new().unwrap();
         let output = NamedTempFile::new().unwrap();
 
-        fs::write(file1.path(), r#"{"a": 1, "b": 2}"#).unwrap();
-        fs::write(file2.path(), r#"{"c": 3, "d": 4}"#).unwrap();
+        fs::write(&file1, r#"{"a": 1, "b": 2}"#).unwrap();
+        fs::write(&file2, r#"{"c": 3, "d": 4}"#).unwrap();
 
-        merge_json_files(
-            &[file1.path().to_str().unwrap(), file2.path().to_str().unwrap()],
-            output.path().to_str().unwrap()
-        ).unwrap();
+        let result = merge_json_files(&[file1.path(), file2.path()], output.path());
+        assert!(result.is_ok());
 
         let content = fs::read_to_string(output.path()).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
@@ -63,5 +61,19 @@ mod tests {
         assert_eq!(parsed["b"], 2);
         assert_eq!(parsed["c"], 3);
         assert_eq!(parsed["d"], 4);
+    }
+
+    #[test]
+    fn test_merge_with_conflict() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": 2}"#).unwrap();
+        fs::write(&file2, r#"{"b": 3, "c": 4}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()], output.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Duplicate keys found"));
     }
 }
