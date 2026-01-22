@@ -241,3 +241,127 @@ mod tests {
         assert_eq!(UrlParser::extract_path("invalid"), None);
     }
 }
+use regex::Regex;
+use std::collections::HashSet;
+
+pub struct UrlParser {
+    domain_blacklist: HashSet<String>,
+}
+
+impl UrlParser {
+    pub fn new() -> Self {
+        let mut blacklist = HashSet::new();
+        blacklist.insert("localhost".to_string());
+        blacklist.insert("127.0.0.1".to_string());
+        blacklist.insert("::1".to_string());
+        blacklist.insert("0.0.0.0".to_string());
+        
+        UrlParser {
+            domain_blacklist: blacklist,
+        }
+    }
+
+    pub fn extract_domain(&self, url: &str) -> Option<String> {
+        let re = Regex::new(r"^(?:https?://)?(?:www\.)?([^/:]+)").unwrap();
+        
+        if let Some(captures) = re.captures(url) {
+            let domain = captures.get(1)?.as_str().to_lowercase();
+            
+            if self.is_valid_domain(&domain) {
+                return Some(domain);
+            }
+        }
+        None
+    }
+
+    pub fn is_valid_url(&self, url: &str) -> bool {
+        let url_regex = Regex::new(
+            r"^https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)$"
+        ).unwrap();
+        
+        url_regex.is_match(url) && self.extract_domain(url).is_some()
+    }
+
+    fn is_valid_domain(&self, domain: &str) -> bool {
+        if domain.is_empty() || domain.len() > 253 {
+            return false;
+        }
+
+        if self.domain_blacklist.contains(domain) {
+            return false;
+        }
+
+        let parts: Vec<&str> = domain.split('.').collect();
+        if parts.len() < 2 {
+            return false;
+        }
+
+        for part in parts {
+            if part.is_empty() || part.len() > 63 {
+                return false;
+            }
+            
+            if !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return false;
+            }
+            
+            if part.starts_with('-') || part.ends_with('-') {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    pub fn normalize_url(&self, url: &str) -> Option<String> {
+        if !self.is_valid_url(url) {
+            return None;
+        }
+
+        let domain = self.extract_domain(url)?;
+        let mut normalized = format!("https://{}", domain);
+
+        if let Some(path_start) = url.find(&domain) {
+            let path = &url[path_start + domain.len()..];
+            if !path.is_empty() {
+                normalized.push_str(path);
+            }
+        }
+
+        Some(normalized)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_domain() {
+        let parser = UrlParser::new();
+        
+        assert_eq!(parser.extract_domain("https://example.com/path"), Some("example.com".to_string()));
+        assert_eq!(parser.extract_domain("http://www.test.org"), Some("test.org".to_string()));
+        assert_eq!(parser.extract_domain("invalid-url"), None);
+        assert_eq!(parser.extract_domain("https://localhost/api"), None);
+    }
+
+    #[test]
+    fn test_is_valid_url() {
+        let parser = UrlParser::new();
+        
+        assert!(parser.is_valid_url("https://example.com"));
+        assert!(parser.is_valid_url("http://sub.domain.co.uk/path?query=value"));
+        assert!(!parser.is_valid_url("not-a-url"));
+        assert!(!parser.is_valid_url("https://localhost"));
+    }
+
+    #[test]
+    fn test_normalize_url() {
+        let parser = UrlParser::new();
+        
+        assert_eq!(parser.normalize_url("http://example.com"), Some("https://example.com".to_string()));
+        assert_eq!(parser.normalize_url("https://www.test.org/path"), Some("https://test.org/path".to_string()));
+        assert_eq!(parser.normalize_url("invalid"), None);
+    }
+}
