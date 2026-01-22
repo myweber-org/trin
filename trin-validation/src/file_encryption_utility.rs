@@ -7,14 +7,9 @@ use argon2::{
         rand_core::OsRng,
         PasswordHasher, SaltString
     },
-    Argon2, Params
+    Argon2
 };
 use std::fs;
-use std::io::{Read, Write};
-use std::path::Path;
-
-const NONCE_SIZE: usize = 12;
-const SALT_SIZE: usize = 16;
 
 pub struct FileEncryptor {
     cipher: Aes256Gcm,
@@ -23,51 +18,44 @@ pub struct FileEncryptor {
 impl FileEncryptor {
     pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::new(
-            argon2::Algorithm::Argon2id,
-            argon2::Version::V0x13,
-            Params::new(15000, 2, 1, Some(32))?,
-        );
-        
+        let argon2 = Argon2::default();
         let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        
         let key_bytes = password_hash.hash.ok_or("Hash generation failed")?;
         let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
         let cipher = Aes256Gcm::new(key);
         
         Ok(Self { cipher })
     }
-    
-    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let mut file_data = Vec::new();
-        let mut file = fs::File::open(input_path)?;
-        file.read_to_end(&mut file_data)?;
-        
+
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let data = fs::read(input_path)?;
         let nonce = Nonce::generate(&mut OsRng);
-        let ciphertext = self.cipher.encrypt(&nonce, file_data.as_ref())?;
         
-        let mut output_file = fs::File::create(output_path)?;
-        output_file.write_all(nonce.as_slice())?;
-        output_file.write_all(&ciphertext)?;
+        let encrypted_data = self.cipher.encrypt(&nonce, data.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
         
+        let mut output = nonce.to_vec();
+        output.extend_from_slice(&encrypted_data);
+        
+        fs::write(output_path, output)?;
         Ok(())
     }
-    
-    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let mut encrypted_data = Vec::new();
-        let mut file = fs::File::open(input_path)?;
-        file.read_to_end(&mut encrypted_data)?;
+
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let encrypted_data = fs::read(input_path)?;
         
-        if encrypted_data.len() < NONCE_SIZE {
+        if encrypted_data.len() < 12 {
             return Err("Invalid encrypted file format".into());
         }
         
-        let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+        let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
         let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = self.cipher.decrypt(nonce, ciphertext)?;
         
-        let mut output_file = fs::File::create(output_path)?;
-        output_file.write_all(&plaintext)?;
+        let decrypted_data = self.cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
         
+        fs::write(output_path, decrypted_data)?;
         Ok(())
     }
 }
@@ -76,26 +64,32 @@ impl FileEncryptor {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
-    
+
     #[test]
     fn test_encryption_decryption() {
+        let test_data = b"Test encryption data";
         let password = "secure_password_123";
+        
         let encryptor = FileEncryptor::new(password).unwrap();
         
-        let original_content = b"Test data for encryption and decryption";
-        let mut input_file = NamedTempFile::new().unwrap();
-        input_file.write_all(original_content).unwrap();
-        
+        let input_file = NamedTempFile::new().unwrap();
         let encrypted_file = NamedTempFile::new().unwrap();
         let decrypted_file = NamedTempFile::new().unwrap();
         
-        encryptor.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
-        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+        fs::write(input_file.path(), test_data).unwrap();
         
-        let mut decrypted_content = Vec::new();
-        let mut decrypted = fs::File::open(decrypted_file.path()).unwrap();
-        decrypted.read_to_end(&mut decrypted_content).unwrap();
+        encryptor.encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap()
+        ).unwrap();
         
-        assert_eq!(original_content.to_vec(), decrypted_content);
+        let encryptor2 = FileEncryptor::new(password).unwrap();
+        encryptor2.decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap()
+        ).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(decrypted_data, test_data);
     }
 }
