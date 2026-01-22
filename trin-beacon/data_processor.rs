@@ -151,3 +151,162 @@ impl Default for DataProcessor {
         Self::new()
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+    #[error("Duplicate record ID: {0}")]
+    DuplicateId(u64),
+}
+
+pub struct DataProcessor {
+    cache: HashMap<u64, DataRecord>,
+    validation_rules: ValidationRules,
+}
+
+#[derive(Clone)]
+pub struct ValidationRules {
+    pub max_values: usize,
+    pub allowed_tags: Vec<String>,
+    pub timestamp_range: (i64, i64),
+}
+
+impl DataProcessor {
+    pub fn new(rules: ValidationRules) -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: rules,
+        }
+    }
+
+    pub fn process_record(&mut self, record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(&record)?;
+        
+        if self.cache.contains_key(&record.id) {
+            return Err(ProcessingError::DuplicateId(record.id));
+        }
+
+        let processed = self.transform_record(record.clone());
+        self.cache.insert(processed.id, processed.clone());
+        
+        Ok(processed)
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.len() > self.validation_rules.max_values {
+            return Err(ProcessingError::OutOfRange(
+                format!("Too many values: {}", record.values.len())
+            ));
+        }
+
+        if record.timestamp < self.validation_rules.timestamp_range.0 
+            || record.timestamp > self.validation_rules.timestamp_range.1 {
+            return Err(ProcessingError::OutOfRange(
+                format!("Timestamp out of range: {}", record.timestamp)
+            ));
+        }
+
+        for tag in &record.tags {
+            if !self.validation_rules.allowed_tags.contains(tag) {
+                return Err(ProcessingError::InvalidFormat);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn transform_record(&self, mut record: DataRecord) -> DataRecord {
+        let normalized_values: HashMap<String, f64> = record.values
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), *v))
+            .collect();
+        
+        record.values = normalized_values;
+        record.tags.sort();
+        record.tags.dedup();
+        
+        record
+    }
+
+    pub fn get_record(&self, id: u64) -> Option<&DataRecord> {
+        self.cache.get(&id)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_rules() -> ValidationRules {
+        ValidationRules {
+            max_values: 10,
+            allowed_tags: vec!["production".to_string(), "test".to_string()],
+            timestamp_range: (0, 1000000000),
+        }
+    }
+
+    #[test]
+    fn test_valid_record_processing() {
+        let mut processor = DataProcessor::new(create_test_rules());
+        let mut values = HashMap::new();
+        values.insert("temperature".to_string(), 23.5);
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 123456789,
+            values,
+            tags: vec!["production".to_string()],
+        };
+
+        let result = processor.process_record(record);
+        assert!(result.is_ok());
+        assert_eq!(processor.cache_size(), 1);
+    }
+
+    #[test]
+    fn test_duplicate_id() {
+        let mut processor = DataProcessor::new(create_test_rules());
+        let record1 = DataRecord {
+            id: 1,
+            timestamp: 100,
+            values: HashMap::new(),
+            tags: vec![],
+        };
+        
+        let record2 = DataRecord {
+            id: 1,
+            timestamp: 200,
+            values: HashMap::new(),
+            tags: vec![],
+        };
+
+        let _ = processor.process_record(record1);
+        let result = processor.process_record(record2);
+        
+        assert!(matches!(result, Err(ProcessingError::DuplicateId(1))));
+    }
+}
