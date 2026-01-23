@@ -1,92 +1,100 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    data: Vec<f64>,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor { data: Vec::new() }
+        DataProcessor {
+            cache: HashMap::new(),
+        }
     }
 
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        
-        for line in reader.lines() {
-            let line = line?;
-            if let Ok(value) = line.trim().parse::<f64>() {
-                self.data.push(value);
-            }
+    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data array provided".to_string());
         }
-        
-        Ok(())
-    }
 
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Invalid numeric values detected".to_string());
         }
-        
-        let sum: f64 = self.data.iter().sum();
-        Some(sum / self.data.len() as f64)
-    }
 
-    pub fn calculate_standard_deviation(&self) -> Option<f64> {
-        if self.data.len() < 2 {
-            return None;
-        }
-        
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.data
+        let processed: Vec<f64> = values
             .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.data.len() - 1) as f64;
-        
-        Some(variance.sqrt())
-    }
+            .map(|&x| x * 2.0)
+            .filter(|&x| x > 0.0)
+            .collect();
 
-    pub fn filter_outliers(&self, threshold: f64) -> Vec<f64> {
-        if let (Some(mean), Some(std_dev)) = (self.calculate_mean(), self.calculate_standard_deviation()) {
-            self.data
-                .iter()
-                .filter(|&&x| (x - mean).abs() <= threshold * std_dev)
-                .copied()
-                .collect()
-        } else {
-            self.data.clone()
+        if processed.is_empty() {
+            return Err("All values filtered out during processing".to_string());
         }
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
     }
 
-    pub fn data_count(&self) -> usize {
-        self.data.len()
+    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
+        self.cache.get(key).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = data.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+            
+            (mean, variance, std_dev)
+        })
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_valid_data_processing() {
         let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let result = processor.process_numeric_data("test", &data);
         
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "10.5\n15.2\n12.8\n14.1\n13.7").unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0, 8.0]);
+    }
+
+    #[test]
+    fn test_invalid_data_handling() {
+        let mut processor = DataProcessor::new();
+        let data = vec![f64::NAN, 1.0];
+        let result = processor.process_numeric_data("invalid", &data);
         
-        processor.load_from_csv(temp_file.path()).unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        processor.process_numeric_data("stats", &data).unwrap();
         
-        assert_eq!(processor.data_count(), 5);
-        assert!(processor.calculate_mean().unwrap() - 13.26 < 0.01);
-        assert!(processor.calculate_standard_deviation().unwrap() - 1.72 < 0.01);
+        let stats = processor.calculate_statistics("stats");
+        assert!(stats.is_some());
         
-        let filtered = processor.filter_outliers(2.0);
-        assert_eq!(filtered.len(), 5);
+        let (mean, variance, std_dev) = stats.unwrap();
+        assert_eq!(mean, 5.0);
+        assert_eq!(variance, 5.0);
+        assert_eq!(std_dev, 5.0_f64.sqrt());
     }
 }
