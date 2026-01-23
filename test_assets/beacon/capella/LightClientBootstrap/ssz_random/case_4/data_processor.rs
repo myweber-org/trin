@@ -1,74 +1,98 @@
+
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-pub struct DataRecord {
-    id: u32,
-    value: f64,
-    category: String,
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
 }
 
-impl DataRecord {
-    pub fn new(id: u32, value: f64, category: String) -> Result<Self, &'static str> {
-        if value < 0.0 {
-            return Err("Value cannot be negative");
-        }
-        if category.is_empty() {
-            return Err("Category cannot be empty");
-        }
-        Ok(Self { id, value, category })
-    }
-
-    pub fn calculate_adjusted_value(&self, multiplier: f64) -> f64 {
-        self.value * multiplier
-    }
-}
-
-pub fn load_csv_data(file_path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
-    let path = Path::new(file_path);
-    let file = File::open(path)?;
-    let mut rdr = csv::Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in rdr.deserialize() {
-        let (id, value, category): (u32, f64, String) = result?;
-        match DataRecord::new(id, value, category) {
-            Ok(record) => records.push(record),
-            Err(e) => eprintln!("Skipping invalid record: {}", e),
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
         }
     }
 
-    Ok(records)
-}
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
 
-pub fn process_records(records: &[DataRecord], threshold: f64) -> Vec<&DataRecord> {
-    records
-        .iter()
-        .filter(|r| r.value > threshold)
-        .collect()
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let record: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !record.is_empty() {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
+    }
+
+    pub fn extract_column(&self, records: &[Vec<String>], column_index: usize) -> Vec<String> {
+        records
+            .iter()
+            .filter_map(|record| record.get(column_index).cloned())
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_record_creation() {
-        let record = DataRecord::new(1, 42.5, String::from("A")).unwrap();
-        assert_eq!(record.id, 1);
-        assert_eq!(record.value, 42.5);
-        assert_eq!(record.category, "A");
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
     }
 
     #[test]
-    fn test_invalid_record() {
-        let result = DataRecord::new(2, -5.0, String::from("B"));
-        assert!(result.is_err());
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        let valid_record = vec!["data".to_string(), "value".to_string()];
+        let invalid_record = vec!["".to_string(), "value".to_string()];
+        
+        assert!(processor.validate_record(&valid_record));
+        assert!(!processor.validate_record(&invalid_record));
     }
 
     #[test]
-    fn test_calculation() {
-        let record = DataRecord::new(3, 10.0, String::from("C")).unwrap();
-        assert_eq!(record.calculate_adjusted_value(2.5), 25.0);
+    fn test_extract_column() {
+        let records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        let processor = DataProcessor::new(',', false);
+        let column = processor.extract_column(&records, 0);
+        
+        assert_eq!(column, vec!["a".to_string(), "c".to_string()]);
     }
 }
