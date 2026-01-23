@@ -498,3 +498,121 @@ mod tests {
         assert_eq!(names, vec!["name", "Alice", "Bob"]);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(Self { id, value, category })
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn get_statistics(&self) -> Statistics {
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        
+        Statistics {
+            count: self.records.len(),
+            min: values.iter().copied().fold(f64::INFINITY, f64::min),
+            max: values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            average: self.calculate_average().unwrap_or(0.0),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Statistics {
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+    pub average: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 42.5, "test".to_string());
+        assert!(record.is_ok());
+        
+        let invalid_record = DataRecord::new(2, -5.0, "test".to_string());
+        assert!(invalid_record.is_err());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,10.5,category_a").unwrap();
+        writeln!(temp_file, "2,20.5,category_b").unwrap();
+        writeln!(temp_file, "3,30.5,category_a").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let stats = processor.get_statistics();
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.min, 10.5);
+        assert_eq!(stats.max, 30.5);
+        
+        let filtered = processor.filter_by_category("category_a");
+        assert_eq!(filtered.len(), 2);
+    }
+}
