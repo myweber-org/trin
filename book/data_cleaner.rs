@@ -126,4 +126,74 @@ mod tests {
 
         assert_eq!(cleaner.get_records()[0], "multiple spaces");
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
+    }
+
+    pub fn normalize_text(&self, text: &str) -> String {
+        text.trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect()
+    }
+
+    pub fn deduplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_text(item);
+        if self.dedupe_set.contains(&normalized) {
+            false
+        } else {
+            self.dedupe_set.insert(normalized);
+            true
+        }
+    }
+
+    pub fn process_batch(&mut self, items: Vec<&str>) -> Vec<String> {
+        items
+            .into_iter()
+            .filter(|item| self.deduplicate(item))
+            .map(|item| self.normalize_text(item))
+            .collect()
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.normalize_text("  HELLO World!  "), "hello world");
+    }
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("hello"));
+        assert!(!cleaner.deduplicate("HELLO"));
+        assert!(cleaner.deduplicate("world"));
+        assert_eq!(cleaner.get_unique_count(), 2);
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let mut cleaner = DataCleaner::new();
+        let items = vec!["Apple", "apple", "Banana", "  banana  "];
+        let result = cleaner.process_batch(items);
+        assert_eq!(result, vec!["apple", "banana"]);
+    }
 }
