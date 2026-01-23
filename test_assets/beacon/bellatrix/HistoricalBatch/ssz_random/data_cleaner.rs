@@ -1,85 +1,29 @@
-
 use std::collections::HashSet;
+use std::io::{self, BufRead, Write};
 
-pub struct DataCleaner {
-    records: Vec<String>,
+fn clean_data(input: &str) -> String {
+    let lines: Vec<&str> = input.lines().collect();
+    let unique_lines: HashSet<&str> = lines.iter().cloned().collect();
+    let mut sorted_lines: Vec<&str> = unique_lines.into_iter().collect();
+    sorted_lines.sort();
+    sorted_lines.join("\n")
 }
 
-impl DataCleaner {
-    pub fn new() -> Self {
-        DataCleaner {
-            records: Vec::new(),
-        }
+fn main() -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut buffer = String::new();
+    
+    println!("Enter data (press Ctrl+D on Unix or Ctrl+Z on Windows to finish):");
+    for line in stdin.lock().lines() {
+        buffer.push_str(&line?);
+        buffer.push('\n');
     }
-
-    pub fn add_record(&mut self, record: String) {
-        self.records.push(record);
-    }
-
-    pub fn remove_duplicates(&mut self) -> usize {
-        let mut unique_set = HashSet::new();
-        let mut deduped_records = Vec::new();
-        let initial_count = self.records.len();
-
-        for record in self.records.drain(..) {
-            if unique_set.insert(record.clone()) {
-                deduped_records.push(record);
-            }
-        }
-
-        self.records = deduped_records;
-        initial_count - self.records.len()
-    }
-
-    pub fn validate_records(&self) -> (usize, usize) {
-        let mut valid_count = 0;
-        let mut invalid_count = 0;
-
-        for record in &self.records {
-            if !record.trim().is_empty() && record.len() <= 1000 {
-                valid_count += 1;
-            } else {
-                invalid_count += 1;
-            }
-        }
-
-        (valid_count, invalid_count)
-    }
-
-    pub fn get_records(&self) -> &Vec<String> {
-        &self.records
-    }
-
-    pub fn clear(&mut self) {
-        self.records.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deduplication() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("test".to_string());
-        cleaner.add_record("test".to_string());
-        cleaner.add_record("unique".to_string());
-
-        let duplicates_removed = cleaner.remove_duplicates();
-        assert_eq!(duplicates_removed, 1);
-        assert_eq!(cleaner.get_records().len(), 2);
-    }
-
-    #[test]
-    fn test_validation() {
-        let mut cleaner = DataCleaner::new();
-        cleaner.add_record("valid".to_string());
-        cleaner.add_record("".to_string());
-        cleaner.add_record("x".repeat(1001));
-
-        let (valid, invalid) = cleaner.validate_records();
-        assert_eq!(valid, 1);
-        assert_eq!(invalid, 2);
-    }
+    
+    let cleaned = clean_data(&buffer);
+    
+    let mut output_file = std::fs::File::create("cleaned_output.txt")?;
+    output_file.write_all(cleaned.as_bytes())?;
+    
+    println!("Data cleaned and saved to cleaned_output.txt");
+    Ok(())
 }
