@@ -137,4 +137,69 @@ mod tests {
         assert_eq!(merged["value"], "first");
         assert_eq!(merged["extra"], "data");
     }
+}use serde_json::{Map, Value};
+
+pub fn merge_json(a: &mut Value, b: &Value) {
+    match (a, b) {
+        (Value::Object(a_obj), Value::Object(b_obj)) => {
+            for (key, b_val) in b_obj {
+                if let Some(a_val) = a_obj.get_mut(key) {
+                    merge_json(a_val, b_val);
+                } else {
+                    a_obj.insert(key.clone(), b_val.clone());
+                }
+            }
+        }
+        (a_val, b_val) => {
+            *a_val = b_val.clone();
+        }
+    }
+}
+
+pub fn merge_multiple_json(objects: Vec<Value>) -> Option<Value> {
+    let mut result = Map::new().into();
+    for obj in objects {
+        merge_json(&mut result, &obj);
+    }
+    Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut a = json!({"name": "Alice", "age": 30});
+        let b = json!({"age": 31, "city": "London"});
+        merge_json(&mut a, &b);
+        assert_eq!(a, json!({"name": "Alice", "age": 31, "city": "London"}));
+    }
+
+    #[test]
+    fn test_nested_merge() {
+        let mut a = json!({"user": {"name": "Alice", "prefs": {"theme": "dark"}}});
+        let b = json!({"user": {"prefs": {"language": "en"}, "active": true}});
+        merge_json(&mut a, &b);
+        let expected = json!({
+            "user": {
+                "name": "Alice",
+                "prefs": {"theme": "dark", "language": "en"},
+                "active": true
+            }
+        });
+        assert_eq!(a, expected);
+    }
+
+    #[test]
+    fn test_multiple_merge() {
+        let objects = vec![
+            json!({"a": 1}),
+            json!({"b": 2}),
+            json!({"a": 3, "c": 4}),
+        ];
+        let result = merge_multiple_json(objects).unwrap();
+        assert_eq!(result, json!({"a": 3, "b": 2, "c": 4}));
+    }
 }
