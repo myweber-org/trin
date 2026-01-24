@@ -334,3 +334,162 @@ mod tests {
         assert_eq!(groups.get("B").unwrap().len(), 1);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    InvalidCategory,
+    DuplicateRecord,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::InvalidCategory => write!(f, "Category cannot be empty"),
+            DataError::DuplicateRecord => write!(f, "Record with this ID already exists"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+    next_id: u32,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+            next_id: 1,
+        }
+    }
+
+    pub fn add_record(&mut self, name: String, value: f64, category: String) -> Result<u32, DataError> {
+        if name.trim().is_empty() {
+            return Err(DataError::InvalidCategory);
+        }
+        
+        if value < 0.0 || value > 1000.0 {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if category.trim().is_empty() {
+            return Err(DataError::InvalidCategory);
+        }
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let record = DataRecord {
+            id,
+            name,
+            value,
+            category,
+        };
+
+        self.records.insert(id, record);
+        Ok(id)
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn update_record(&mut self, id: u32, value: f64) -> Result<(), DataError> {
+        if value < 0.0 || value > 1000.0 {
+            return Err(DataError::InvalidValue);
+        }
+
+        if let Some(record) = self.records.get_mut(&id) {
+            record.value = value;
+            Ok(())
+        } else {
+            Err(DataError::InvalidId)
+        }
+    }
+
+    pub fn remove_record(&mut self, id: u32) -> Result<DataRecord, DataError> {
+        self.records.remove(&id)
+            .ok_or(DataError::InvalidId)
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.values().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records.values()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn get_all_records(&self) -> Vec<&DataRecord> {
+        self.records.values().collect()
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_record() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_record("Test".to_string(), 100.0, "A".to_string());
+        assert!(result.is_ok());
+        assert_eq!(processor.record_count(), 1);
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_record("Test".to_string(), -10.0, "A".to_string());
+        assert!(matches!(result, Err(DataError::InvalidValue)));
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let mut processor = DataProcessor::new();
+        processor.add_record("A".to_string(), 50.0, "X".to_string()).unwrap();
+        processor.add_record("B".to_string(), 100.0, "X".to_string()).unwrap();
+        processor.add_record("C".to_string(), 150.0, "Y".to_string()).unwrap();
+        
+        assert_eq!(processor.calculate_average(), 100.0);
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let mut processor = DataProcessor::new();
+        processor.add_record("A".to_string(), 50.0, "X".to_string()).unwrap();
+        processor.add_record("B".to_string(), 100.0, "X".to_string()).unwrap();
+        processor.add_record("C".to_string(), 150.0, "Y".to_string()).unwrap();
+        
+        let filtered = processor.filter_by_category("X");
+        assert_eq!(filtered.len(), 2);
+    }
+}
