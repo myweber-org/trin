@@ -1,127 +1,122 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug)]
-pub struct DataRecord {
-    id: u32,
-    value: f64,
-    timestamp: String,
-}
-
-impl DataRecord {
-    pub fn new(id: u32, value: f64, timestamp: String) -> Result<Self, String> {
-        if value < 0.0 {
-            return Err("Value cannot be negative".to_string());
-        }
-        if timestamp.is_empty() {
-            return Err("Timestamp cannot be empty".to_string());
-        }
-        Ok(Self {
-            id,
-            value,
-            timestamp,
-        })
-    }
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    data: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        Self {
-            records: Vec::new(),
+        DataProcessor {
+            data: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            if line_num == 0 {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
-            }
-
-            let id = parts[0].parse::<u32>()?;
-            let value = parts[1].parse::<f64>()?;
-            let timestamp = parts[2].to_string();
-
-            match DataRecord::new(id, value, timestamp) {
-                Ok(record) => self.records.push(record),
-                Err(e) => eprintln!("Skipping invalid record at line {}: {}", line_num + 1, e),
-            }
+    pub fn add_dataset(&mut self, key: &str, values: Vec<f64>) -> Result<(), String> {
+        if values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
         }
 
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Dataset contains invalid numeric values".to_string());
+        }
+
+        self.data.insert(key.to_string(), values);
         Ok(())
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let count = values.len();
+            let sum: f64 = values.iter().sum();
+            let mean = sum / count as f64;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count as f64;
+            
+            let std_dev = variance.sqrt();
+            
+            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            
+            Statistics {
+                count,
+                mean,
+                std_dev,
+                min,
+                max,
+                sum,
+            }
+        })
+    }
+
+    pub fn normalize_data(&self, key: &str) -> Option<Vec<f64>> {
+        self.data.get(key).map(|values| {
+            let stats = self.calculate_statistics(key).unwrap();
+            values.iter()
+                .map(|&x| (x - stats.mean) / stats.std_dev)
+                .collect()
+        })
+    }
+
+    pub fn merge_datasets(&self, keys: &[&str]) -> Option<Vec<f64>> {
+        let mut result = Vec::new();
+        
+        for key in keys {
+            if let Some(values) = self.data.get(*key) {
+                result.extend(values);
+            } else {
+                return None;
+            }
         }
-
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+        
+        Some(result)
     }
+}
 
-    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.value >= threshold)
-            .collect()
-    }
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub sum: f64,
+}
 
-    pub fn record_count(&self) -> usize {
-        self.records.len()
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Statistics:\n  Count: {}\n  Mean: {:.4}\n  Std Dev: {:.4}\n  Min: {:.4}\n  Max: {:.4}\n  Sum: {:.4}",
+               self.count, self.mean, self.std_dev, self.min, self.max, self.sum)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_record_creation() {
-        let record = DataRecord::new(1, 42.5, "2024-01-15T10:30:00Z".to_string());
-        assert!(record.is_ok());
-
-        let invalid_record = DataRecord::new(2, -5.0, "2024-01-15T10:30:00Z".to_string());
-        assert!(invalid_record.is_err());
+    fn test_add_valid_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset("test", vec![1.0, 2.0, 3.0]);
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn test_data_processor() {
+    fn test_add_invalid_dataset() {
         let mut processor = DataProcessor::new();
-        assert_eq!(processor.record_count(), 0);
+        let result = processor.add_dataset("test", vec![]);
+        assert!(result.is_err());
+    }
 
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,timestamp").unwrap();
-        writeln!(temp_file, "1,100.5,2024-01-15T10:30:00Z").unwrap();
-        writeln!(temp_file, "2,200.0,2024-01-15T11:30:00Z").unwrap();
-        writeln!(temp_file, "3,50.0,2024-01-15T12:30:00Z").unwrap();
-
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(processor.record_count(), 3);
-
-        let average = processor.calculate_average();
-        assert_eq!(average, Some(116.83333333333333));
-
-        let filtered = processor.filter_by_threshold(150.0);
-        assert_eq!(filtered.len(), 1);
+    #[test]
+    fn test_calculate_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("numbers", vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        
+        let stats = processor.calculate_statistics("numbers").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.sum, 15.0);
     }
 }
