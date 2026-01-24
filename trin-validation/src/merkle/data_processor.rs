@@ -144,3 +144,214 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
+pub struct DataProcessor {
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, field: String, rule: ValidationRule) {
+        self.validation_rules.insert(field, rule);
+    }
+
+    pub fn process_record(&self, record: &DataRecord) -> Result<ProcessedRecord, ProcessingError> {
+        self.validate_record(record)?;
+        
+        let transformed_values = self.transform_values(&record.values);
+        let computed_metrics = self.compute_metrics(&transformed_values);
+        
+        Ok(ProcessedRecord {
+            original_id: record.id,
+            processed_timestamp: chrono::Utc::now().timestamp(),
+            transformed_values,
+            computed_metrics,
+            validation_passed: true,
+        })
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.id == 0 {
+            return Err(ProcessingError::InvalidFormat);
+        }
+
+        for (field, rule) in &self.validation_rules {
+            if let Some(value) = record.values.get(field) {
+                if !rule.is_valid(*value) {
+                    return Err(ProcessingError::OutOfRange(
+                        format!("Field '{}' failed validation", field)
+                    ));
+                }
+            } else if rule.required {
+                return Err(ProcessingError::MissingField(field.clone()));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn transform_values(&self, values: &HashMap<String, f64>) -> HashMap<String, f64> {
+        values.iter()
+            .map(|(key, value)| {
+                let transformed = if key.starts_with("log_") {
+                    value.ln()
+                } else if key.starts_with("norm_") {
+                    *value / 100.0
+                } else {
+                    *value
+                };
+                (key.clone(), transformed)
+            })
+            .collect()
+    }
+
+    fn compute_metrics(&self, values: &HashMap<String, f64>) -> Metrics {
+        let count = values.len() as f64;
+        let sum: f64 = values.values().sum();
+        let mean = if count > 0.0 { sum / count } else { 0.0 };
+        
+        let variance: f64 = values.values()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count.max(1.0);
+        
+        Metrics {
+            count: values.len(),
+            sum,
+            mean,
+            variance,
+            min: values.values().cloned().fold(f64::INFINITY, f64::min),
+            max: values.values().cloned().fold(f64::NEG_INFINITY, f64::max),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub required: bool,
+}
+
+impl ValidationRule {
+    pub fn new(min: Option<f64>, max: Option<f64>, required: bool) -> Self {
+        Self { min, max, required }
+    }
+
+    pub fn is_valid(&self, value: f64) -> bool {
+        if let Some(min) = self.min {
+            if value < min {
+                return false;
+            }
+        }
+        
+        if let Some(max) = self.max {
+            if value > max {
+                return false;
+            }
+        }
+        
+        true
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessedRecord {
+    pub original_id: u64,
+    pub processed_timestamp: i64,
+    pub transformed_values: HashMap<String, f64>,
+    pub computed_metrics: Metrics,
+    pub validation_passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Metrics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(
+            "temperature".to_string(),
+            ValidationRule::new(Some(-50.0), Some(100.0), true)
+        );
+
+        let mut values = HashMap::new();
+        values.insert("temperature".to_string(), 25.5);
+        values.insert("humidity".to_string(), 65.0);
+
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values,
+            metadata: None,
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.original_id, 1);
+        assert!(processed.validation_passed);
+        assert_eq!(processed.computed_metrics.count, 2);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(
+            "pressure".to_string(),
+            ValidationRule::new(Some(900.0), Some(1100.0), true)
+        );
+
+        let mut values = HashMap::new();
+        values.insert("pressure".to_string(), 1200.0);
+
+        let record = DataRecord {
+            id: 2,
+            timestamp: 1234567890,
+            values,
+            metadata: None,
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_err());
+    }
+}
