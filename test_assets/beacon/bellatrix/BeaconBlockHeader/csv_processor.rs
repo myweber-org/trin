@@ -222,4 +222,108 @@ mod tests {
         assert!((std_dev - 8.164965).abs() < 0.0001);
         assert_eq!(active_count, 2);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub columns: Vec<String>,
+}
+
+pub struct CsvProcessor {
+    pub records: Vec<CsvRecord>,
+}
+
+impl CsvProcessor {
+    pub fn new() -> Self {
+        CsvProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let columns: Vec<String> = line
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            self.records.push(CsvRecord { columns });
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_column_value(&self, column_index: usize, value: &str) -> Vec<&CsvRecord> {
+        self.records
+            .iter()
+            .filter(|record| {
+                record.columns.get(column_index)
+                    .map(|col| col == value)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    pub fn get_column_count(&self) -> Option<usize> {
+        self.records.first().map(|record| record.columns.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let mut processor = CsvProcessor::new();
+        let result = processor.load_from_file(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(processor.records.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let mut processor = CsvProcessor::new();
+        processor.records.push(CsvRecord {
+            columns: vec!["Alice".to_string(), "30".to_string(), "New York".to_string()],
+        });
+        processor.records.push(CsvRecord {
+            columns: vec!["Bob".to_string(), "25".to_string(), "London".to_string()],
+        });
+
+        let filtered = processor.filter_by_column_value(0, "Alice");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].columns[0], "Alice");
+    }
+
+    #[test]
+    fn test_empty_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let mut processor = CsvProcessor::new();
+        let result = processor.load_from_file(temp_file.path());
+        assert!(result.is_ok());
+        assert!(processor.is_empty());
+    }
 }
