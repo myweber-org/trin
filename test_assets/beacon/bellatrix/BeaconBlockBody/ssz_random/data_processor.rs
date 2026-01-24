@@ -262,3 +262,123 @@ mod tests {
         assert_eq!(processed[0].id, 1);
     }
 }
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    ValidationError(String),
+    #[error("Transformation failed: {0}")]
+    TransformationError(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InputData {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProcessedData {
+    pub id: u32,
+    pub normalized_value: f64,
+    pub processed_at: i64,
+    pub is_valid: bool,
+}
+
+pub struct DataProcessor {
+    min_value: f64,
+    max_value: f64,
+}
+
+impl DataProcessor {
+    pub fn new(min_value: f64, max_value: f64) -> Self {
+        DataProcessor { min_value, max_value }
+    }
+
+    pub fn validate_input(&self, data: &InputData) -> Result<(), DataError> {
+        if data.value < self.min_value || data.value > self.max_value {
+            return Err(DataError::ValidationError(
+                format!("Value {} out of range [{}, {}]", data.value, self.min_value, self.max_value)
+            ));
+        }
+        
+        if data.timestamp < 0 {
+            return Err(DataError::ValidationError(
+                format!("Invalid timestamp: {}", data.timestamp)
+            ));
+        }
+        
+        Ok(())
+    }
+
+    pub fn process(&self, input: InputData) -> Result<ProcessedData, DataError> {
+        self.validate_input(&input)?;
+        
+        let normalized_value = (input.value - self.min_value) / (self.max_value - self.min_value);
+        let processed_at = chrono::Utc::now().timestamp();
+        let is_valid = normalized_value >= 0.0 && normalized_value <= 1.0;
+        
+        Ok(ProcessedData {
+            id: input.id,
+            normalized_value,
+            processed_at,
+            is_valid,
+        })
+    }
+
+    pub fn batch_process(&self, inputs: Vec<InputData>) -> Vec<Result<ProcessedData, DataError>> {
+        inputs.into_iter()
+            .map(|input| self.process(input))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let input = InputData {
+            id: 1,
+            value: 50.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(processor.validate_input(&input).is_ok());
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let input = InputData {
+            id: 1,
+            value: 150.0,
+            timestamp: 1625097600,
+        };
+        
+        assert!(processor.validate_input(&input).is_err());
+    }
+
+    #[test]
+    fn test_process_data() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let input = InputData {
+            id: 1,
+            value: 75.0,
+            timestamp: 1625097600,
+        };
+        
+        let result = processor.process(input);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.id, 1);
+        assert!((processed.normalized_value - 0.75).abs() < 0.001);
+        assert!(processed.is_valid);
+    }
+}
