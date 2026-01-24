@@ -304,3 +304,152 @@ mod tests {
         assert_eq!(processed[1].values.get("value"), Some(&20.0));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationFailed("ID cannot be zero".to_string()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(ProcessingError::ValidationFailed("Timestamp cannot be negative".to_string()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(ProcessingError::ValidationFailed("Values cannot be empty".to_string()));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) {
+        for value in self.values.values_mut() {
+            *value *= multiplier;
+        }
+    }
+    
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>, multiplier: f64) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for mut record in records {
+        record.validate()?;
+        record.transform(multiplier);
+        record.add_tag("processed".to_string());
+        processed.push(record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    for record in records {
+        for (key, value) in &record.values {
+            let entry = stats.entry(key.clone()).or_insert(0.0);
+            *entry += value;
+        }
+    }
+    
+    for value in stats.values_mut() {
+        *value /= records.len() as f64;
+    }
+    
+    stats
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: [("temperature".to_string(), 25.5)].iter().cloned().collect(),
+            tags: vec![],
+        };
+        
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 0,
+            timestamp: 1234567890,
+            values: [("temperature".to_string(), 25.5)].iter().cloned().collect(),
+            tags: vec![],
+        };
+        
+        assert!(invalid_record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: [("value".to_string(), 10.0)].iter().cloned().collect(),
+            tags: vec![],
+        };
+        
+        record.transform(2.5);
+        assert_eq!(record.values.get("value"), Some(&25.0));
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1234567890,
+                values: [("a".to_string(), 2.0)].iter().cloned().collect(),
+                tags: vec![],
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1234567891,
+                values: [("b".to_string(), 4.0)].iter().cloned().collect(),
+                tags: vec![],
+            },
+        ];
+        
+        let result = process_records(records, 3.0);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        assert!(processed[0].tags.contains(&"processed".to_string()));
+    }
+}
