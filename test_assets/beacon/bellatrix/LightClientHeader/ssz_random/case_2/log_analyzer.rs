@@ -1,84 +1,50 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use regex::Regex;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LogEntry {
     timestamp: String,
     level: String,
     message: String,
-    source: String,
-}
-
-#[derive(Debug)]
-pub struct LogStats {
-    total_entries: usize,
-    level_counts: HashMap<String, usize>,
-    source_counts: HashMap<String, usize>,
-    errors: Vec<LogEntry>,
-    warnings: Vec<LogEntry>,
 }
 
 pub struct LogAnalyzer {
     entries: Vec<LogEntry>,
-    stats: LogStats,
+    level_counts: HashMap<String, usize>,
 }
 
 impl LogAnalyzer {
     pub fn new() -> Self {
         LogAnalyzer {
             entries: Vec::new(),
-            stats: LogStats {
-                total_entries: 0,
-                level_counts: HashMap::new(),
-                source_counts: HashMap::new(),
-                errors: Vec::new(),
-                warnings: Vec::new(),
-            },
+            level_counts: HashMap::new(),
         }
     }
 
-    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), std::io::Error> {
-        let file = File::open(path)?;
+    pub fn parse_file(&mut self, filepath: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(filepath)?;
         let reader = BufReader::new(file);
+        let log_pattern = Regex::new(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (\w+): (.+)")?;
 
         for line in reader.lines() {
             let line = line?;
-            if let Some(entry) = self.parse_log_line(&line) {
-                self.add_entry(entry);
+            if let Some(captures) = log_pattern.captures(&line) {
+                let entry = LogEntry {
+                    timestamp: captures[1].to_string(),
+                    level: captures[2].to_string(),
+                    message: captures[3].to_string(),
+                };
+                *self.level_counts.entry(entry.level.clone()).or_insert(0) += 1;
+                self.entries.push(entry);
             }
         }
-
         Ok(())
     }
 
-    fn parse_log_line(&self, line: &str) -> Option<LogEntry> {
-        let parts: Vec<&str> = line.splitn(4, '|').collect();
-        if parts.len() == 4 {
-            Some(LogEntry {
-                timestamp: parts[0].trim().to_string(),
-                level: parts[1].trim().to_string(),
-                source: parts[2].trim().to_string(),
-                message: parts[3].trim().to_string(),
-            })
-        } else {
-            None
-        }
-    }
-
-    fn add_entry(&mut self, entry: LogEntry) {
-        self.entries.push(entry.clone());
-        self.stats.total_entries += 1;
-
-        *self.stats.level_counts.entry(entry.level.clone()).or_insert(0) += 1;
-        *self.stats.source_counts.entry(entry.source.clone()).or_insert(0) += 1;
-
-        match entry.level.as_str() {
-            "ERROR" => self.stats.errors.push(entry.clone()),
-            "WARN" => self.stats.warnings.push(entry.clone()),
-            _ => {}
-        }
+    pub fn get_level_summary(&self) -> &HashMap<String, usize> {
+        &self.level_counts
     }
 
     pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
@@ -88,64 +54,29 @@ impl LogAnalyzer {
             .collect()
     }
 
-    pub fn filter_by_source(&self, source: &str) -> Vec<&LogEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.source == source)
-            .collect()
-    }
-
-    pub fn search_messages(&self, keyword: &str) -> Vec<&LogEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.message.contains(keyword))
-            .collect()
-    }
-
-    pub fn get_stats(&self) -> &LogStats {
-        &self.stats
-    }
-
-    pub fn get_top_sources(&self, n: usize) -> Vec<(&String, &usize)> {
-        let mut sources: Vec<_> = self.stats.source_counts.iter().collect();
-        sources.sort_by(|a, b| b.1.cmp(a.1));
-        sources.into_iter().take(n).collect()
-    }
-
-    pub fn get_error_rate(&self) -> f64 {
-        if self.stats.total_entries == 0 {
-            return 0.0;
-        }
-        self.stats.errors.len() as f64 / self.stats.total_entries as f64 * 100.0
-    }
-}
-
-impl Default for LogAnalyzer {
-    fn default() -> Self {
-        Self::new()
+    pub fn total_entries(&self) -> usize {
+        self.entries.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_log_parsing() {
-        let analyzer = LogAnalyzer::new();
-        let line = "2023-10-01 12:00:00|ERROR|auth_service|Failed to authenticate user";
-        
-        let entry = analyzer.parse_log_line(line).unwrap();
-        assert_eq!(entry.timestamp, "2023-10-01 12:00:00");
-        assert_eq!(entry.level, "ERROR");
-        assert_eq!(entry.source, "auth_service");
-        assert_eq!(entry.message, "Failed to authenticate user");
-    }
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "[2024-01-15 10:30:45] INFO: Application started").unwrap();
+        writeln!(temp_file, "[2024-01-15 10:31:00] ERROR: Database connection failed").unwrap();
+        writeln!(temp_file, "[2024-01-15 10:32:15] INFO: User login successful").unwrap();
 
-    #[test]
-    fn test_empty_analyzer() {
-        let analyzer = LogAnalyzer::new();
-        assert_eq!(analyzer.entries.len(), 0);
-        assert_eq!(analyzer.get_stats().total_entries, 0);
+        let mut analyzer = LogAnalyzer::new();
+        analyzer.parse_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(analyzer.total_entries(), 3);
+        assert_eq!(analyzer.get_level_summary().get("INFO"), Some(&2));
+        assert_eq!(analyzer.get_level_summary().get("ERROR"), Some(&1));
     }
 }
