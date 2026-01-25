@@ -1,96 +1,134 @@
-use std::collections::HashMap;
 use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DataRecord {
-    pub id: u32,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
+    id: u32,
+    value: f64,
+    category: String,
 }
 
 impl DataRecord {
-    pub fn new(id: u32, values: Vec<f64>) -> Self {
-        Self {
-            id,
-            values,
-            metadata: HashMap::new(),
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err(format!("Invalid value {} for record {}", value, id));
         }
+        if category.is_empty() {
+            return Err(format!("Empty category for record {}", id));
+        }
+        Ok(Self { id, value, category })
     }
 
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.id == 0 {
-            return Err("Invalid ID: ID cannot be zero".into());
-        }
+    pub fn calculate_adjusted_value(&self, multiplier: f64) -> f64 {
+        self.value * multiplier
+    }
+}
 
-        if self.values.is_empty() {
-            return Err("Invalid data: values vector cannot be empty".into());
-        }
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
 
-        for &value in &self.values {
-            if value.is_nan() || value.is_infinite() {
-                return Err("Invalid data: values contain NaN or infinite numbers".into());
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut line_count = 0;
+
+        for line in reader.lines() {
+            line_count += 1;
+            let line = line?;
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                return Err(format!("Invalid CSV format at line {}", line_count).into());
+            }
+
+            let id = parts[0].parse::<u32>()?;
+            let value = parts[1].parse::<f64>()?;
+            let category = parts[2].to_string();
+
+            match DataRecord::new(id, value, category) {
+                Ok(record) => self.records.push(record),
+                Err(e) => eprintln!("Warning: {} at line {}", e, line_count),
             }
         }
 
         Ok(())
     }
 
-    pub fn normalize(&mut self) {
-        if let Some(max) = self.values.iter().copied().reduce(f64::max) {
-            if max != 0.0 {
-                for value in &mut self.values {
-                    *value /= max;
-                }
-            }
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        let count = self.records.len() as f64;
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
         }
+
+        let total = self.calculate_total();
+        let mean = total / count;
+        let variance: f64 = self
+            .records
+            .iter()
+            .map(|record| (record.value - mean).powi(2))
+            .sum::<f64>()
+            / count;
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
     }
-
-    pub fn add_metadata(&mut self, key: String, value: String) {
-        self.metadata.insert(key, value);
-    }
-}
-
-pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
-    let mut processed = Vec::new();
-
-    for record in records {
-        record.validate()?;
-        let mut processed_record = record.clone();
-        processed_record.normalize();
-        processed_record.add_metadata(
-            "processed_timestamp".to_string(),
-            chrono::Utc::now().to_rfc3339(),
-        );
-        processed.push(processed_record);
-    }
-
-    Ok(processed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        assert!(valid_record.validate().is_ok());
-
-        let invalid_record = DataRecord::new(0, vec![1.0, 2.0]);
-        assert!(invalid_record.validate().is_err());
+    fn test_record_creation() {
+        let record = DataRecord::new(1, 42.5, "test".to_string()).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "test");
     }
 
     #[test]
-    fn test_normalization() {
-        let mut record = DataRecord::new(1, vec![2.0, 4.0, 6.0]);
-        record.normalize();
-        assert_eq!(record.values, vec![1.0 / 3.0, 2.0 / 3.0, 1.0]);
+    fn test_invalid_record() {
+        let result = DataRecord::new(2, -5.0, "test".to_string());
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_metadata_addition() {
-        let mut record = DataRecord::new(1, vec![1.0]);
-        record.add_metadata("source".to_string(), "test".to_string());
-        assert_eq!(record.metadata.get("source"), Some(&"test".to_string()));
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1,10.5,category_a").unwrap();
+        writeln!(temp_file, "2,20.0,category_b").unwrap();
+        writeln!(temp_file, "3,15.75,category_a").unwrap();
+
+        processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(processor.records.len(), 3);
+        assert_eq!(processor.calculate_total(), 46.25);
+
+        let filtered = processor.filter_by_category("category_a");
+        assert_eq!(filtered.len(), 2);
     }
 }
