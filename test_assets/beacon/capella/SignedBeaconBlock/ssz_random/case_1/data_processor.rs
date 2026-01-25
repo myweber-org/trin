@@ -1,122 +1,168 @@
 
-use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    data: HashMap<String, Vec<f64>>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
         DataProcessor {
-            data: HashMap::new(),
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn add_dataset(&mut self, key: &str, values: Vec<f64>) -> Result<(), String> {
-        if values.is_empty() {
-            return Err("Dataset cannot be empty".to_string());
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+
+        for (line_number, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line.is_empty() {
+                continue;
+            }
+
+            if self.has_header && line_number == 0 {
+                continue;
+            }
+
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.is_empty() {
+                return Err(format!("Empty record at line {}", line_number + 1).into());
+            }
+
+            records.push(fields);
         }
 
-        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
-            return Err("Dataset contains invalid numeric values".to_string());
+        if records.is_empty() {
+            return Err("No valid records found in file".into());
         }
 
-        self.data.insert(key.to_string(), values);
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), Box<dyn Error>> {
+        if records.is_empty() {
+            return Err("No records to validate".into());
+        }
+
+        let expected_len = records[0].len();
+        
+        for (idx, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(format!("Record {} has {} fields, expected {}", 
+                    idx + 1, record.len(), expected_len).into());
+            }
+
+            for (field_idx, field) in record.iter().enumerate() {
+                if field.is_empty() {
+                    return Err(format!("Empty field at record {}, position {}", 
+                        idx + 1, field_idx + 1).into());
+                }
+            }
+        }
+
         Ok(())
     }
 
-    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
-        self.data.get(key).map(|values| {
-            let count = values.len();
-            let sum: f64 = values.iter().sum();
-            let mean = sum / count as f64;
-            
-            let variance: f64 = values.iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count as f64;
-            
-            let std_dev = variance.sqrt();
-            
-            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            
-            Statistics {
-                count,
-                mean,
-                std_dev,
-                min,
-                max,
-                sum,
-            }
-        })
-    }
-
-    pub fn normalize_data(&self, key: &str) -> Option<Vec<f64>> {
-        self.data.get(key).map(|values| {
-            let stats = self.calculate_statistics(key).unwrap();
-            values.iter()
-                .map(|&x| (x - stats.mean) / stats.std_dev)
-                .collect()
-        })
-    }
-
-    pub fn merge_datasets(&self, keys: &[&str]) -> Option<Vec<f64>> {
-        let mut result = Vec::new();
-        
-        for key in keys {
-            if let Some(values) = self.data.get(*key) {
-                result.extend(values);
-            } else {
-                return None;
-            }
+    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Result<(f64, f64, f64), Box<dyn Error>> {
+        if records.is_empty() {
+            return Err("No records for statistics calculation".into());
         }
-        
-        Some(result)
-    }
-}
 
-pub struct Statistics {
-    pub count: usize,
-    pub mean: f64,
-    pub std_dev: f64,
-    pub min: f64,
-    pub max: f64,
-    pub sum: f64,
-}
+        if column_index >= records[0].len() {
+            return Err(format!("Column index {} out of bounds", column_index).into());
+        }
 
-impl std::fmt::Display for Statistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Statistics:\n  Count: {}\n  Mean: {:.4}\n  Std Dev: {:.4}\n  Min: {:.4}\n  Max: {:.4}\n  Sum: {:.4}",
-               self.count, self.mean, self.std_dev, self.min, self.max, self.sum)
+        let mut values = Vec::new();
+        let mut sum = 0.0;
+
+        for (idx, record) in records.iter().enumerate() {
+            let value_str = &record[column_index];
+            let value: f64 = match value_str.parse() {
+                Ok(v) => v,
+                Err(_) => return Err(format!("Invalid numeric value at record {}, column {}: {}", 
+                    idx + 1, column_index + 1, value_str).into()),
+            };
+            
+            values.push(value);
+            sum += value;
+        }
+
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let mean = sum / values.len() as f64;
+        let median = if values.len() % 2 == 0 {
+            (values[values.len() / 2 - 1] + values[values.len() / 2]) / 2.0
+        } else {
+            values[values.len() / 2]
+        };
+
+        let variance = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / values.len() as f64;
+        let std_dev = variance.sqrt();
+
+        Ok((mean, median, std_dev))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_add_valid_dataset() {
-        let mut processor = DataProcessor::new();
-        let result = processor.add_dataset("test", vec![1.0, 2.0, 3.0]);
-        assert!(result.is_ok());
+    fn test_process_file_with_header() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000").unwrap();
+        writeln!(temp_file, "Bob,25,45000").unwrap();
+        writeln!(temp_file, "Charlie,35,60000").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
+        
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["Alice", "30", "50000"]);
     }
 
     #[test]
-    fn test_add_invalid_dataset() {
-        let mut processor = DataProcessor::new();
-        let result = processor.add_dataset("test", vec![]);
-        assert!(result.is_err());
+    fn test_validate_records_valid() {
+        let records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        assert!(processor.validate_records(&records).is_ok());
     }
 
     #[test]
     fn test_calculate_statistics() {
-        let mut processor = DataProcessor::new();
-        processor.add_dataset("numbers", vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        let records = vec![
+            vec!["10.5".to_string(), "20.0".to_string()],
+            vec!["15.5".to_string(), "25.0".to_string()],
+            vec!["12.0".to_string(), "30.0".to_string()],
+        ];
         
-        let stats = processor.calculate_statistics("numbers").unwrap();
-        assert_eq!(stats.count, 5);
-        assert_eq!(stats.mean, 3.0);
-        assert_eq!(stats.sum, 15.0);
+        let processor = DataProcessor::new(',', false);
+        let (mean, median, std_dev) = processor.calculate_statistics(&records, 0).unwrap();
+        
+        assert!((mean - 12.666666666666666).abs() < 0.0001);
+        assert!((median - 12.0).abs() < 0.0001);
+        assert!((std_dev - 2.054804667).abs() < 0.0001);
     }
 }
