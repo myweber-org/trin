@@ -351,3 +351,197 @@ impl std::fmt::Display for Statistics {
         )
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data")]
+    InvalidInput,
+    #[error("Data transformation failed")]
+    TransformationFailed,
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, key: &str, value: f64) {
+        self.values.insert(key.to_string(), value);
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        if !self.tags.contains(&tag.to_string()) {
+            self.tags.push(tag.to_string());
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::ValidationError("ID cannot be zero".to_string()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationError("Timestamp cannot be negative".to_string()));
+        }
+
+        for (key, value) in &self.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(DataError::ValidationError(
+                    format!("Invalid value for key '{}': {}", key, value)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        record.validate()?;
+        
+        let mut transformed = record.clone();
+        
+        for (key, value) in &mut transformed.values {
+            *value = transform_value(*value)?;
+        }
+        
+        transformed.tags.sort();
+        transformed.tags.dedup();
+        
+        processed.push(transformed);
+    }
+    
+    processed.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    
+    Ok(processed)
+}
+
+fn transform_value(value: f64) -> Result<f64, DataError> {
+    if value < 0.0 {
+        return Err(DataError::TransformationFailed);
+    }
+    
+    let transformed = (value * 100.0).round() / 100.0;
+    
+    if transformed.is_nan() || transformed.is_infinite() {
+        Err(DataError::TransformationFailed)
+    } else {
+        Ok(transformed)
+    }
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    for record in records {
+        for (key, value) in &record.values {
+            let entry = stats.entry(key.clone()).or_insert(Vec::new());
+            entry.push(*value);
+        }
+    }
+    
+    let mut result = HashMap::new();
+    
+    for (key, values) in stats {
+        if let Some(avg) = calculate_average(&values) {
+            result.insert(format!("{}_avg", key), avg);
+        }
+        
+        if let Some(max) = values.iter().copied().reduce(f64::max) {
+            result.insert(format!("{}_max", key), max);
+        }
+        
+        if let Some(min) = values.iter().copied().reduce(f64::min) {
+            result.insert(format!("{}_min", key), min);
+        }
+    }
+    
+    result
+}
+
+fn calculate_average(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    
+    let sum: f64 = values.iter().sum();
+    Some(sum / values.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_record_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value("temperature", 25.5);
+        record.add_tag("sensor");
+        
+        assert!(record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(0, -1);
+        assert!(record.validate().is_err());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let mut record1 = DataRecord::new(1, 1000);
+        record1.add_value("pressure", 1013.25);
+        
+        let mut record2 = DataRecord::new(2, 900);
+        record2.add_value("pressure", 1012.78);
+        
+        let records = vec![record1, record2];
+        let processed = process_records(&records).unwrap();
+        
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].timestamp, 900);
+        assert_eq!(processed[1].timestamp, 1000);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut record1 = DataRecord::new(1, 1000);
+        record1.add_value("temperature", 22.5);
+        record1.add_value("humidity", 65.0);
+        
+        let mut record2 = DataRecord::new(2, 1100);
+        record2.add_value("temperature", 24.0);
+        record2.add_value("humidity", 68.0);
+        
+        let records = vec![record1, record2];
+        let stats = calculate_statistics(&records);
+        
+        assert_eq!(stats.get("temperature_avg"), Some(&23.25));
+        assert_eq!(stats.get("humidity_min"), Some(&65.0));
+    }
+}
