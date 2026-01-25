@@ -1,52 +1,62 @@
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use std::error::Error;
 
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
-
-const DEFAULT_KEY: u8 = 0x55;
-
-pub fn xor_encrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
-    let key = key.unwrap_or(DEFAULT_KEY);
-    let mut input_file = fs::File::open(input_path)?;
-    let mut output_file = fs::File::create(output_path)?;
-
-    let mut buffer = [0u8; 4096];
-    loop {
-        let bytes_read = input_file.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        for byte in buffer.iter_mut().take(bytes_read) {
-            *byte ^= key;
-        }
-        output_file.write_all(&buffer[..bytes_read])?;
-    }
-    Ok(())
+pub fn encrypt_data(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let cipher = Aes256Gcm::new_from_slice(key)?;
+    let nonce = Nonce::from_slice(&OsRng.gen::<[u8; 12]>());
+    
+    let ciphertext = cipher.encrypt(nonce, plaintext)?;
+    let mut result = Vec::with_capacity(12 + ciphertext.len());
+    result.extend_from_slice(nonce);
+    result.extend_from_slice(&ciphertext);
+    
+    Ok(result)
 }
 
-pub fn xor_decrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
-    xor_encrypt_file(input_path, output_path, key)
+pub fn decrypt_data(ciphertext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>> {
+    if ciphertext.len() < 12 {
+        return Err("Ciphertext too short".into());
+    }
+    
+    let cipher = Aes256Gcm::new_from_slice(key)?;
+    let nonce = Nonce::from_slice(&ciphertext[..12]);
+    let encrypted_data = &ciphertext[12..];
+    
+    let plaintext = cipher.decrypt(nonce, encrypted_data)?;
+    Ok(plaintext)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+    use rand::RngCore;
 
     #[test]
-    fn test_encrypt_decrypt() {
-        let original_data = b"Hello, this is a secret message!";
-        let mut input_file = NamedTempFile::new().unwrap();
-        input_file.write_all(original_data).unwrap();
-
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-
-        xor_encrypt_file(input_file.path(), encrypted_file.path(), Some(0xAA)).unwrap();
-        xor_decrypt_file(encrypted_file.path(), decrypted_file.path(), Some(0xAA)).unwrap();
-
-        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_data, decrypted_data.as_slice());
+    fn test_encryption_roundtrip() {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        
+        let plaintext = b"Secret message for encryption test";
+        
+        let encrypted = encrypt_data(plaintext, &key).unwrap();
+        let decrypted = decrypt_data(&encrypted, &key).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+    
+    #[test]
+    fn test_wrong_key_fails() {
+        let mut key1 = [0u8; 32];
+        let mut key2 = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key1);
+        rand::thread_rng().fill_bytes(&mut key2);
+        
+        let plaintext = b"Test data";
+        let encrypted = encrypt_data(plaintext, &key1).unwrap();
+        
+        assert!(decrypt_data(&encrypted, &key2).is_err());
     }
 }
