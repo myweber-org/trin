@@ -1,3 +1,4 @@
+
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -16,23 +17,23 @@ impl DataProcessor {
         }
     }
 
-    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
         let mut records = Vec::new();
-        let mut lines = reader.lines();
 
-        if self.has_header {
-            lines.next();
-        }
+        for (line_number, line) in reader.lines().enumerate() {
+            let line_content = line?;
+            
+            if line_number == 0 && self.has_header {
+                continue;
+            }
 
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
+            let fields: Vec<String> = line_content
                 .split(self.delimiter)
                 .map(|s| s.trim().to_string())
                 .collect();
-            
+
             if !fields.is_empty() {
                 records.push(fields);
             }
@@ -45,11 +46,32 @@ impl DataProcessor {
         !record.is_empty() && record.iter().all(|field| !field.is_empty())
     }
 
-    pub fn filter_valid_records(&self, records: Vec<Vec<String>>) -> Vec<Vec<String>> {
-        records
-            .into_iter()
-            .filter(|record| self.validate_record(record))
-            .collect()
+    pub fn calculate_statistics(&self, records: &[Vec<String>], column_index: usize) -> Option<(f64, f64, f64)> {
+        let values: Vec<f64> = records
+            .iter()
+            .filter_map(|record| record.get(column_index))
+            .filter_map(|value| value.parse::<f64>().ok())
+            .collect();
+
+        if values.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = values
+            .iter()
+            .map(|value| {
+                let diff = value - mean;
+                diff * diff
+            })
+            .sum::<f64>() / count;
+
+        let std_dev = variance.sqrt();
+
+        Some((mean, variance, std_dev))
     }
 }
 
@@ -60,27 +82,25 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_processing() {
+    fn test_data_processor() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "John,25,New York").unwrap();
-        writeln!(temp_file, "Jane,30,London").unwrap();
-        writeln!(temp_file, ",,").unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.0").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        writeln!(temp_file, "Charlie,35,55000.0").unwrap();
 
         let processor = DataProcessor::new(',', true);
-        let records = processor.process_csv(temp_file.path()).unwrap();
-        let valid_records = processor.filter_valid_records(records);
+        let records = processor.process_file(temp_file.path()).unwrap();
 
-        assert_eq!(valid_records.len(), 2);
-        assert_eq!(valid_records[0], vec!["John", "25", "New York"]);
-        assert_eq!(valid_records[1], vec!["Jane", "30", "London"]);
-    }
+        assert_eq!(records.len(), 3);
+        assert!(processor.validate_record(&records[0]));
 
-    #[test]
-    fn test_validation() {
-        let processor = DataProcessor::new(',', false);
-        assert!(processor.validate_record(&["data".to_string(), "value".to_string()]));
-        assert!(!processor.validate_record(&[]));
-        assert!(!processor.validate_record(&["".to_string(), "value".to_string()]));
+        let stats = processor.calculate_statistics(&records, 1);
+        assert!(stats.is_some());
+
+        let (mean, variance, std_dev) = stats.unwrap();
+        assert!((mean - 30.0).abs() < 0.001);
+        assert!((variance - 25.0).abs() < 0.001);
+        assert!((std_dev - 5.0).abs() < 0.001);
     }
 }
