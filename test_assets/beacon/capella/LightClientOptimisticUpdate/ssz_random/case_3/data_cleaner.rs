@@ -1,61 +1,40 @@
-use csv::ReaderBuilder;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
+use std::collections::HashSet;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+pub struct DataCleaner<T> {
+    data: Vec<T>,
 }
 
-pub fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let file = File::open(input_path)?;
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(file);
-
-    let mut valid_records = Vec::new();
-    let mut invalid_count = 0;
-
-    for result in rdr.deserialize() {
-        match result {
-            Ok(record) => {
-                let rec: Record = record;
-                if validate_record(&rec) {
-                    valid_records.push(rec);
-                } else {
-                    invalid_count += 1;
-                }
-            }
-            Err(e) => {
-                eprintln!("Skipping malformed record: {}", e);
-                invalid_count += 1;
-            }
-        }
+impl<T> DataCleaner<T> {
+    pub fn new(data: Vec<T>) -> Self {
+        DataCleaner { data }
     }
 
-    println!("Processing complete:");
-    println!("  Valid records: {}", valid_records.len());
-    println!("  Invalid records: {}", invalid_count);
-
-    if !valid_records.is_empty() {
-        let mut wtr = csv::Writer::from_path(output_path)?;
-        for record in valid_records {
-            wtr.serialize(record)?;
-        }
-        wtr.flush()?;
-        println!("Cleaned data written to: {}", output_path);
+    pub fn remove_nulls(self) -> Self
+    where
+        T: PartialEq,
+    {
+        let filtered_data: Vec<T> = self.data.into_iter().filter(|item| item != &None).collect();
+        DataCleaner { data: filtered_data }
     }
 
-    Ok(())
+    pub fn remove_duplicates(self) -> Self
+    where
+        T: Eq + std::hash::Hash + Clone,
+    {
+        let unique_set: HashSet<T> = self.data.into_iter().collect();
+        let unique_data: Vec<T> = unique_set.into_iter().collect();
+        DataCleaner { data: unique_data }
+    }
+
+    pub fn get_data(self) -> Vec<T> {
+        self.data
+    }
 }
 
-fn validate_record(record: &Record) -> bool {
-    !record.name.trim().is_empty() &&
-    record.value >= 0.0 &&
-    !record.category.is_empty() &&
-    record.id > 0
+pub fn clean_dataset<T>(data: Vec<T>) -> Vec<T>
+where
+    T: Eq + std::hash::Hash + Clone + PartialEq,
+{
+    let cleaner = DataCleaner::new(data);
+    cleaner.remove_nulls().remove_duplicates().get_data()
 }
