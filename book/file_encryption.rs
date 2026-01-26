@@ -45,3 +45,78 @@ fn main() -> io::Result<()> {
     println!("File processed successfully with XOR key 0x{:02X}", DEFAULT_KEY);
     Ok(())
 }
+use base64::{engine::general_purpose, Engine as _};
+use std::fs;
+use std::io::{self, Read, Write};
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+
+    let encoded_data = general_purpose::STANDARD.encode(&encrypted_data);
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(encoded_data.as_bytes())?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut encoded_data = String::new();
+    input_file.read_to_string(&mut encoded_data)?;
+
+    let encrypted_data = general_purpose::STANDARD.decode(encoded_data.trim())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let decrypted_data: Vec<u8> = encrypted_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&decrypted_data)?;
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let original_data = b"Hello, Rust encryption!";
+        let key = b"secret_key";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), original_data).unwrap();
+        
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.to_vec(), decrypted_data);
+    }
+}
