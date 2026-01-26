@@ -1,29 +1,29 @@
+use std::collections::HashSet;
+use std::io::{self, BufRead, Write};
 
-use regex::Regex;
-
-pub fn clean_string(input: &str) -> String {
-    let re = Regex::new(r"\s+").unwrap();
-    let trimmed = input.trim();
-    let normalized = re.replace_all(trimmed, " ");
-    normalized.to_string()
+fn clean_data(input: &str) -> String {
+    let lines: Vec<&str> = input.lines().collect();
+    let unique_lines: HashSet<&str> = lines.iter().cloned().collect();
+    let mut sorted_lines: Vec<&str> = unique_lines.into_iter().collect();
+    sorted_lines.sort();
+    sorted_lines.join("\n")
 }
 
-pub fn clean_string_lowercase(input: &str) -> String {
-    clean_string(input).to_lowercase()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_clean_string() {
-        assert_eq!(clean_string("  hello   world  "), "hello world");
-        assert_eq!(clean_string("data\n\twith\tspaces"), "data with spaces");
+fn main() -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut input = String::new();
+    
+    println!("Enter data (press Ctrl+D on Unix or Ctrl+Z on Windows to finish):");
+    for line in stdin.lock().lines() {
+        input.push_str(&line?);
+        input.push('\n');
     }
-
-    #[test]
-    fn test_clean_string_lowercase() {
-        assert_eq!(clean_string_lowercase("  HELLO   World  "), "hello world");
-    }
+    
+    let cleaned = clean_data(&input);
+    
+    let mut output_file = std::fs::File::create("cleaned_output.txt")?;
+    output_file.write_all(cleaned.as_bytes())?;
+    
+    println!("Data cleaned and saved to cleaned_output.txt");
+    Ok(())
 }
