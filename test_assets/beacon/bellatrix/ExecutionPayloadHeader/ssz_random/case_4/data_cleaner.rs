@@ -70,4 +70,82 @@ mod tests {
         assert_eq!(cleaned.len(), 5);
         assert!(!cleaned.contains(&100.0));
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = Reader::from_reader(input_file);
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = Writer::from_writer(output_file);
+
+    for result in reader.deserialize() {
+        let mut record: Record = result?;
+        
+        record.name = record.name.trim().to_string();
+        record.category = record.category.to_uppercase();
+        
+        if record.value < 0.0 {
+            record.value = 0.0;
+        }
+        
+        writer.serialize(&record)?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() && 
+    record.id > 0 && 
+    record.category.len() <= 10
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "raw_data.csv";
+    let output_file = "cleaned_data.csv";
+    
+    match clean_csv(input_file, output_file) {
+        Ok(_) => println!("Data cleaning completed successfully"),
+        Err(e) => eprintln!("Error during data cleaning: {}", e),
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validate_record() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.5,
+            category: "CATEGORY".to_string(),
+        };
+        
+        let invalid_record = Record {
+            id: 0,
+            name: "".to_string(),
+            value: -5.0,
+            category: "TOOLONGCATEGORYNAME".to_string(),
+        };
+        
+        assert!(validate_record(&valid_record));
+        assert!(!validate_record(&invalid_record));
+    }
 }
