@@ -1,86 +1,110 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
-
-pub struct DataRecord {
-    id: u32,
-    value: f64,
-    category: String,
-}
+use std::collections::HashMap;
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
 }
 
 impl DataProcessor {
-    pub fn new() -> Self {
+    pub fn new(rules: Vec<ValidationRule>) -> Self {
         DataProcessor {
-            records: Vec::new(),
+            cache: HashMap::new(),
+            validation_rules: rules,
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
-        let path = Path::new(file_path);
-        let file = File::open(path)?;
-        let mut rdr = csv::Reader::from_reader(file);
-        
-        for result in rdr.deserialize() {
-            let record: DataRecord = result?;
-            self.records.push(record);
+    pub fn process_dataset(&mut self, dataset_id: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
         }
+
+        self.validate_data(data)?;
         
-        Ok(self.records.len())
+        let processed_data = self.transform_data(data);
+        self.cache.insert(dataset_id.to_string(), processed_data.clone());
+        
+        Ok(processed_data)
     }
 
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
+    fn validate_data(&self, data: &[f64]) -> Result<(), String> {
+        for rule in &self.validation_rules {
+            if rule.required && data.is_empty() {
+                return Err("Data required but empty".to_string());
+            }
+
+            for &value in data {
+                if value < rule.min_value || value > rule.max_value {
+                    return Err(format!(
+                        "Value {} outside allowed range [{}, {}]",
+                        value, rule.min_value, rule.max_value
+                    ));
+                }
+            }
         }
-        
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
+        Ok(())
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
+    fn transform_data(&self, data: &[f64]) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        data.iter()
+            .map(|&x| (x - mean).abs())
             .collect()
     }
 
-    pub fn validate_records(&self) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.value.is_finite() && !r.category.is_empty())
-            .collect()
+    pub fn get_cached_result(&self, dataset_id: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_id)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_data_processing() {
-        let mut processor = DataProcessor::new();
+        let rules = vec![ValidationRule {
+            min_value: 0.0,
+            max_value: 100.0,
+            required: true,
+        }];
+
+        let mut processor = DataProcessor::new(rules);
+        let test_data = vec![10.0, 20.0, 30.0, 40.0];
         
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,10.5,alpha").unwrap();
-        writeln!(temp_file, "2,20.3,beta").unwrap();
-        writeln!(temp_file, "3,15.7,alpha").unwrap();
-        
-        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        let result = processor.process_dataset("test1", &test_data);
         assert!(result.is_ok());
-        assert_eq!(processor.records.len(), 3);
         
-        let avg = processor.calculate_average().unwrap();
-        assert!((avg - 15.5).abs() < 0.01);
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), test_data.len());
         
-        let alpha_records = processor.filter_by_category("alpha");
-        assert_eq!(alpha_records.len(), 2);
+        let cached = processor.get_cached_result("test1");
+        assert!(cached.is_some());
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let rules = vec![ValidationRule {
+            min_value: 0.0,
+            max_value: 50.0,
+            required: true,
+        }];
+
+        let mut processor = DataProcessor::new(rules);
+        let invalid_data = vec![10.0, 60.0, 30.0];
+        
+        let result = processor.process_dataset("test2", &invalid_data);
+        assert!(result.is_err());
     }
 }
