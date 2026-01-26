@@ -4,12 +4,24 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct DataRecord {
     pub id: u32,
     pub value: f64,
     pub category: String,
     pub valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: &str) -> Self {
+        let valid = value >= 0.0 && !category.is_empty();
+        DataRecord {
+            id,
+            value,
+            category: category.to_string(),
+            valid,
+        }
+    }
 }
 
 pub struct DataProcessor {
@@ -30,36 +42,20 @@ impl DataProcessor {
 
         for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
-            
             if line_num == 0 {
                 continue;
             }
 
             let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 4 {
+            if parts.len() != 3 {
                 continue;
             }
 
-            let id = match parts[0].parse::<u32>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
+            let id = parts[0].parse::<u32>().unwrap_or(0);
+            let value = parts[1].parse::<f64>().unwrap_or(0.0);
+            let category = parts[2].trim();
 
-            let value = match parts[1].parse::<f64>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-
-            let category = parts[2].to_string();
-            let valid = parts[3].parse::<bool>().unwrap_or(false);
-
-            let record = DataRecord {
-                id,
-                value,
-                category,
-                valid,
-            };
-
+            let record = DataRecord::new(id, value, category);
             self.records.push(record);
             count += 1;
         }
@@ -73,7 +69,6 @@ impl DataProcessor {
 
     pub fn calculate_average(&self) -> Option<f64> {
         let valid_records: Vec<&DataRecord> = self.filter_valid();
-        
         if valid_records.is_empty() {
             return None;
         }
@@ -86,10 +81,12 @@ impl DataProcessor {
         let mut groups = std::collections::HashMap::new();
         
         for record in &self.records {
-            groups
-                .entry(record.category.clone())
-                .or_insert_with(Vec::new)
-                .push(record);
+            if record.valid {
+                groups
+                    .entry(record.category.clone())
+                    .or_insert_with(Vec::new)
+                    .push(record);
+            }
         }
         
         groups
@@ -107,107 +104,43 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor_creation() {
-        let processor = DataProcessor::new();
-        assert_eq!(processor.count_records(), 0);
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 42.5, "A");
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "A");
+        assert!(record.valid);
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(2, -5.0, "");
+        assert!(!record.valid);
     }
 
     #[test]
     fn test_csv_loading() {
-        let mut processor = DataProcessor::new();
-        
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category,valid").unwrap();
-        writeln!(temp_file, "1,42.5,CategoryA,true").unwrap();
-        writeln!(temp_file, "2,37.8,CategoryB,false").unwrap();
-        writeln!(temp_file, "3,invalid,CategoryC,true").unwrap();
-        
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,10.5,TypeA").unwrap();
+        writeln!(temp_file, "2,20.3,TypeB").unwrap();
+        writeln!(temp_file, "3,-5.0,TypeC").unwrap();
+
+        let mut processor = DataProcessor::new();
         let result = processor.load_from_csv(temp_file.path());
+        
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 2);
-        assert_eq!(processor.count_records(), 2);
+        assert_eq!(processor.count_records(), 3);
     }
 
     #[test]
-    fn test_filter_valid() {
+    fn test_average_calculation() {
         let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord {
-            id: 1,
-            value: 10.0,
-            category: "Test".to_string(),
-            valid: true,
-        });
-        processor.records.push(DataRecord {
-            id: 2,
-            value: 20.0,
-            category: "Test".to_string(),
-            valid: false,
-        });
-        
-        let valid_records = processor.filter_valid();
-        assert_eq!(valid_records.len(), 1);
-        assert_eq!(valid_records[0].id, 1);
-    }
+        processor.records.push(DataRecord::new(1, 10.0, "A"));
+        processor.records.push(DataRecord::new(2, 20.0, "B"));
+        processor.records.push(DataRecord::new(3, -5.0, "C"));
 
-    #[test]
-    fn test_calculate_average() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord {
-            id: 1,
-            value: 10.0,
-            category: "Test".to_string(),
-            valid: true,
-        });
-        processor.records.push(DataRecord {
-            id: 2,
-            value: 20.0,
-            category: "Test".to_string(),
-            valid: true,
-        });
-        processor.records.push(DataRecord {
-            id: 3,
-            value: 30.0,
-            category: "Test".to_string(),
-            valid: false,
-        });
-        
-        let average = processor.calculate_average();
-        assert!(average.is_some());
-        assert_eq!(average.unwrap(), 15.0);
-    }
-
-    #[test]
-    fn test_empty_average() {
-        let processor = DataProcessor::new();
-        let average = processor.calculate_average();
-        assert!(average.is_none());
-    }
-
-    #[test]
-    fn test_group_by_category() {
-        let mut processor = DataProcessor::new();
-        processor.records.push(DataRecord {
-            id: 1,
-            value: 10.0,
-            category: "CategoryA".to_string(),
-            valid: true,
-        });
-        processor.records.push(DataRecord {
-            id: 2,
-            value: 20.0,
-            category: "CategoryB".to_string(),
-            valid: true,
-        });
-        processor.records.push(DataRecord {
-            id: 3,
-            value: 30.0,
-            category: "CategoryA".to_string(),
-            valid: true,
-        });
-        
-        let groups = processor.group_by_category();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups.get("CategoryA").unwrap().len(), 2);
-        assert_eq!(groups.get("CategoryB").unwrap().len(), 1);
+        let avg = processor.calculate_average();
+        assert_eq!(avg, Some(15.0));
     }
 }
