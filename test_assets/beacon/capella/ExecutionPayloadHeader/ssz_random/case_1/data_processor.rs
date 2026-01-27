@@ -401,3 +401,138 @@ mod tests {
         assert_eq!(names, vec!["Alice", "Bob"]);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationFailed("ID cannot be zero".into()));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(ProcessingError::ValidationFailed("Timestamp cannot be negative".into()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(ProcessingError::ValidationFailed("Values cannot be empty".into()));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) {
+        for value in self.values.values_mut() {
+            *value *= multiplier;
+        }
+    }
+    
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<usize, ProcessingError> {
+    let mut processed_count = 0;
+    
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.transform(multiplier);
+        record.add_tag("processed".into());
+        processed_count += 1;
+    }
+    
+    Ok(processed_count)
+}
+
+pub fn filter_records_by_threshold(records: &[DataRecord], threshold: f64) -> Vec<DataRecord> {
+    records
+        .iter()
+        .filter(|record| {
+            record.values.values().any(|&value| value > threshold)
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: HashMap::from([("temperature".into(), 25.5)]),
+            tags: vec![],
+        };
+        
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 0,
+            timestamp: 1625097600,
+            values: HashMap::new(),
+            tags: vec![],
+        };
+        
+        assert!(invalid_record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: HashMap::from([("value".into(), 10.0)]),
+            tags: vec![],
+        };
+        
+        record.transform(2.0);
+        assert_eq!(record.values.get("value"), Some(&20.0));
+    }
+    
+    #[test]
+    fn test_filter_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1625097600,
+                values: HashMap::from([("value".into(), 5.0)]),
+                tags: vec![],
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1625097600,
+                values: HashMap::from([("value".into(), 15.0)]),
+                tags: vec![],
+            },
+        ];
+        
+        let filtered = filter_records_by_threshold(&records, 10.0);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 2);
+    }
+}
