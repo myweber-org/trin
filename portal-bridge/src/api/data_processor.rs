@@ -103,3 +103,119 @@ mod tests {
         assert_eq!(freq.get("B"), Some(&1));
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+    
+    fn process(&mut self) {
+        self.name = self.name.trim().to_uppercase();
+        if self.value > 1000.0 {
+            self.value = 1000.0;
+        }
+    }
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+    
+    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_records(&self) -> Vec<&Record> {
+        self.records.iter().filter(|r| r.is_valid()).collect()
+    }
+    
+    fn process_all(&mut self) {
+        for record in &mut self.records {
+            record.process();
+        }
+    }
+    
+    fn save_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        let mut wtr = csv::Writer::from_writer(file);
+        
+        for record in &self.records {
+            wtr.serialize(record)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+    
+    fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        let count = values.len() as f64;
+        
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    match processor.load_from_csv("input_data.csv") {
+        Ok(_) => println!("Data loaded successfully"),
+        Err(e) => eprintln!("Error loading data: {}", e),
+    }
+    
+    let valid_records = processor.validate_records();
+    println!("Valid records: {}", valid_records.len());
+    
+    processor.process_all();
+    
+    match processor.save_to_csv("processed_data.csv") {
+        Ok(_) => println!("Data saved successfully"),
+        Err(e) => eprintln!("Error saving data: {}", e),
+    }
+    
+    let (mean, variance, std_dev) = processor.calculate_statistics();
+    println!("Statistics - Mean: {:.2}, Variance: {:.2}, Std Dev: {:.2}", 
+             mean, variance, std_dev);
+    
+    Ok(())
+}
