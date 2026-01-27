@@ -200,3 +200,86 @@ pub fn load_encryptor_from_key(key_path: &Path) -> io::Result<FileEncryptor> {
     let cipher = Aes256Gcm::new(key);
     Ok(FileEncryptor { cipher })
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+    
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let original_text = b"Hello, World! This is a test message.";
+        
+        let input_temp = NamedTempFile::new().unwrap();
+        let encrypted_temp = NamedTempFile::new().unwrap();
+        let decrypted_temp = NamedTempFile::new().unwrap();
+        
+        fs::write(input_temp.path(), original_text).unwrap();
+        
+        encrypt_file(
+            input_temp.path().to_str().unwrap(),
+            encrypted_temp.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        let encrypted_content = fs::read(encrypted_temp.path()).unwrap();
+        assert_ne!(encrypted_content, original_text);
+        
+        decrypt_file(
+            encrypted_temp.path().to_str().unwrap(),
+            decrypted_temp.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_temp.path()).unwrap();
+        assert_eq!(decrypted_content, original_text);
+    }
+    
+    #[test]
+    fn test_default_key() {
+        let test_data = b"Test data for default key";
+        
+        let input_temp = NamedTempFile::new().unwrap();
+        let output_temp = NamedTempFile::new().unwrap();
+        
+        fs::write(input_temp.path(), test_data).unwrap();
+        
+        encrypt_file(
+            input_temp.path().to_str().unwrap(),
+            output_temp.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        let encrypted = fs::read(output_temp.path()).unwrap();
+        let decrypted: Vec<u8> = encrypted.iter().map(|b| b ^ DEFAULT_KEY).collect();
+        
+        assert_eq!(decrypted, test_data);
+    }
+}
