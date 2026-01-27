@@ -382,3 +382,142 @@ mod tests {
         assert_eq!(category_b_records.len(), 1);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub field_name: String,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn process_data(&mut self, dataset: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, String> {
+        if dataset.is_empty() {
+            return Err("Empty dataset provided".to_string());
+        }
+
+        let mut processed = Vec::with_capacity(dataset.len());
+        
+        for (index, row) in dataset.iter().enumerate() {
+            match self.validate_row(row) {
+                Ok(validated_row) => {
+                    let transformed = self.transform_row(&validated_row);
+                    processed.push(transformed);
+                    self.cache.insert(format!("row_{}", index), validated_row);
+                }
+                Err(e) => return Err(format!("Validation failed at row {}: {}", index, e)),
+            }
+        }
+
+        Ok(processed)
+    }
+
+    fn validate_row(&self, row: &[f64]) -> Result<Vec<f64>, String> {
+        if row.len() != self.validation_rules.len() {
+            return Err(format!(
+                "Row length {} doesn't match validation rules count {}",
+                row.len(),
+                self.validation_rules.len()
+            ));
+        }
+
+        let mut validated = Vec::with_capacity(row.len());
+        
+        for (i, (&value, rule)) in row.iter().zip(self.validation_rules.iter()).enumerate() {
+            if rule.required && value.is_nan() {
+                return Err(format!("Required field {} is NaN at position {}", rule.field_name, i));
+            }
+            
+            if !value.is_nan() && (value < rule.min_value || value > rule.max_value) {
+                return Err(format!(
+                    "Field {} value {} out of range [{}, {}] at position {}",
+                    rule.field_name, value, rule.min_value, rule.max_value, i
+                ));
+            }
+            
+            validated.push(value);
+        }
+
+        Ok(validated)
+    }
+
+    fn transform_row(&self, row: &[f64]) -> Vec<f64> {
+        row.iter()
+            .map(|&x| {
+                if x.is_nan() {
+                    0.0
+                } else {
+                    x * 2.0
+                }
+            })
+            .collect()
+    }
+
+    pub fn get_cached_row(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn get_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        stats.insert("cache_size".to_string(), self.cache.len() as f64);
+        stats.insert("validation_rules_count".to_string(), self.validation_rules.len() as f64);
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor_validation() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule {
+            field_name: "temperature".to_string(),
+            min_value: -50.0,
+            max_value: 100.0,
+            required: true,
+        });
+
+        let valid_data = vec![vec![25.0]];
+        let result = processor.process_data(&valid_data);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_data_handling() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule {
+            field_name: "pressure".to_string(),
+            min_value: 0.0,
+            max_value: 10.0,
+            required: true,
+        });
+
+        let invalid_data = vec![vec![15.0]];
+        let result = processor.process_data(&invalid_data);
+        assert!(result.is_err());
+    }
+}
