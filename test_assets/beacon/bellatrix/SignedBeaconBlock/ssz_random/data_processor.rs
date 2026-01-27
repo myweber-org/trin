@@ -521,3 +521,107 @@ mod tests {
         assert_eq!(type_a_records.len(), 2);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Result<Self, ValidationError> {
+        if threshold < 0.0 || threshold > 1.0 {
+            return Err(ValidationError {
+                message: format!("Threshold {} must be between 0.0 and 1.0", threshold),
+            });
+        }
+
+        Ok(DataProcessor { threshold })
+    }
+
+    pub fn process_data(&self, input: &[f64]) -> Result<Vec<f64>, ValidationError> {
+        if input.is_empty() {
+            return Err(ValidationError {
+                message: "Input data cannot be empty".to_string(),
+            });
+        }
+
+        let mean = input.iter().sum::<f64>() / input.len() as f64;
+        let filtered: Vec<f64> = input
+            .iter()
+            .filter(|&&value| (value - mean).abs() / mean <= self.threshold)
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            return Err(ValidationError {
+                message: "All data points filtered out".to_string(),
+            });
+        }
+
+        Ok(filtered)
+    }
+
+    pub fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
+        if data.len() < 2 {
+            return data.to_vec();
+        }
+
+        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max - min;
+
+        if range == 0.0 {
+            return vec![0.5; data.len()];
+        }
+
+        data.iter()
+            .map(|&value| (value - min) / range)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_processor_creation() {
+        let processor = DataProcessor::new(0.5);
+        assert!(processor.is_ok());
+
+        let invalid = DataProcessor::new(1.5);
+        assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn test_data_processing() {
+        let processor = DataProcessor::new(0.3).unwrap();
+        let data = vec![1.0, 1.1, 1.2, 10.0];
+        let result = processor.process_data(&data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new(0.5).unwrap();
+        let data = vec![0.0, 10.0, 20.0, 30.0];
+        let normalized = processor.normalize_data(&data);
+        assert_eq!(normalized[0], 0.0);
+        assert_eq!(normalized[3], 1.0);
+    }
+}
