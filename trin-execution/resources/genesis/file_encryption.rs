@@ -1,43 +1,59 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::error::Error;
 
-pub fn encrypt_data(plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
     
-    let ciphertext = cipher.encrypt(&nonce, plaintext)?;
-    Ok((ciphertext, nonce.to_vec()))
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
 }
 
-pub fn decrypt_data(ciphertext: &[u8], key: &[u8], nonce: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let key = Key::<Aes256Gcm>::from_slice(key);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(nonce);
-    
-    let plaintext = cipher.decrypt(nonce, ciphertext)?;
-    Ok(plaintext)
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+pub fn generate_key(length: usize) -> Vec<u8> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..length).map(|_| rng.gen()).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let original_data = b"Secret message for encryption test";
-        let (ciphertext, nonce) = encrypt_data(original_data).unwrap();
+    fn test_encryption_decryption() {
+        let original_content = b"Secret data to encrypt";
+        let key = b"testkey";
         
-        let key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
-        let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from_slice(&key));
-        let nonce_slice = Nonce::from_slice(&nonce);
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
         
-        let encrypted = cipher.encrypt(nonce_slice, original_data).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key, &nonce).unwrap();
+        fs::write(input_file.path(), original_content).unwrap();
         
-        assert_eq!(original_data.to_vec(), decrypted);
+        xor_encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            key,
+        ).unwrap();
+        
+        xor_decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            key,
+        ).unwrap();
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
