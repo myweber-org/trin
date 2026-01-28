@@ -163,3 +163,115 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{rand_core::OsRng as ArgonRng, SaltString},
+    Argon2, PasswordHasher, PasswordVerifier
+};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const NONCE_SIZE: usize = 12;
+const SALT_SIZE: usize = 16;
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub nonce: [u8; NONCE_SIZE],
+    pub salt: [u8; SALT_SIZE],
+}
+
+pub fn derive_key(password: &str, salt: &[u8]) -> Result<Key<Aes256Gcm>, Box<dyn std::error::Error>> {
+    let argon2 = Argon2::default();
+    let mut output_key_material = [0u8; 32];
+    
+    argon2.hash_password_into(
+        password.as_bytes(),
+        salt,
+        &mut output_key_material
+    )?;
+    
+    Ok(Key::<Aes256Gcm>::from_slice(&output_key_material).clone())
+}
+
+pub fn encrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str
+) -> Result<EncryptionResult, Box<dyn std::error::Error>> {
+    let mut file_content = Vec::new();
+    fs::File::open(input_path)?.read_to_end(&mut file_content)?;
+    
+    let mut rng = OsRng;
+    let mut nonce = [0u8; NONCE_SIZE];
+    rng.fill_bytes(&mut nonce);
+    
+    let mut salt = [0u8; SALT_SIZE];
+    rng.fill_bytes(&mut salt);
+    
+    let key = derive_key(password, &salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    
+    let nonce_obj = Nonce::from_slice(&nonce);
+    let ciphertext = cipher.encrypt(nonce_obj, file_content.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    let result = EncryptionResult {
+        ciphertext: ciphertext.clone(),
+        nonce,
+        salt,
+    };
+    
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&salt)?;
+    output_file.write_all(&nonce)?;
+    output_file.write_all(&ciphertext)?;
+    
+    Ok(result)
+}
+
+pub fn decrypt_file(
+    input_path: &Path,
+    output_path: &Path,
+    password: &str
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut encrypted_data = Vec::new();
+    fs::File::open(input_path)?.read_to_end(&mut encrypted_data)?;
+    
+    if encrypted_data.len() < SALT_SIZE + NONCE_SIZE {
+        return Err("Invalid encrypted file format".into());
+    }
+    
+    let salt = &encrypted_data[..SALT_SIZE];
+    let nonce = &encrypted_data[SALT_SIZE..SALT_SIZE + NONCE_SIZE];
+    let ciphertext = &encrypted_data[SALT_SIZE + NONCE_SIZE..];
+    
+    let key = derive_key(password, salt)?;
+    let cipher = Aes256Gcm::new(&key);
+    
+    let nonce_obj = Nonce::from_slice(nonce);
+    let plaintext = cipher.decrypt(nonce_obj, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    
+    fs::File::create(output_path)?.write_all(&plaintext)?;
+    
+    Ok(plaintext)
+}
+
+pub fn generate_password_hash(password: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let salt = SaltString::generate(&mut ArgonRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+    
+    Ok(password_hash.to_string())
+}
+
+pub fn verify_password(password: &str, hash: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    let parsed_hash = argon2::password_hash::PasswordHash::new(hash)?;
+    let argon2 = Argon2::default();
+    
+    Ok(argon2.verify_password(password.as_bytes(), &parsed_hash).is_ok())
+}
