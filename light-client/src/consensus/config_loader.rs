@@ -1,60 +1,86 @@
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 
-#[derive(Debug, Deserialize)]
-pub struct AppConfig {
-    pub server_port: u16,
-    pub database_url: String,
-    pub log_level: String,
-    pub cache_ttl: u64,
+pub struct Config {
+    values: HashMap<String, String>,
 }
 
-impl AppConfig {
+impl Config {
     pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let content = fs::read_to_string(path)?;
-        let mut config: AppConfig = toml::from_str(&content)?;
-        
-        config.apply_environment_overrides();
-        Ok(config)
-    }
-    
-    fn apply_environment_overrides(&mut self) {
-        if let Ok(port) = env::var("APP_PORT") {
-            if let Ok(parsed_port) = port.parse::<u16>() {
-                self.server_port = parsed_port;
+        let mut values = HashMap::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let processed_value = Self::substitute_env_vars(value.trim());
+                values.insert(key.trim().to_string(), processed_value);
             }
         }
-        
-        if let Ok(db_url) = env::var("DATABASE_URL") {
-            self.database_url = db_url;
-        }
-        
-        if let Ok(log_level) = env::var("LOG_LEVEL") {
-            self.log_level = log_level;
-        }
+
+        Ok(Config { values })
     }
-    
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
-        
-        if self.server_port == 0 {
-            errors.push("Server port cannot be 0".to_string());
+
+    fn substitute_env_vars(value: &str) -> String {
+        let mut result = value.to_string();
+        for (key, env_value) in env::vars() {
+            let placeholder = format!("${}", key);
+            if result.contains(&placeholder) {
+                result = result.replace(&placeholder, &env_value);
+            }
         }
-        
-        if self.database_url.is_empty() {
-            errors.push("Database URL cannot be empty".to_string());
-        }
-        
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
-            errors.push(format!("Invalid log level: {}", self.log_level));
-        }
-        
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).cloned().unwrap_or(default.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_basic_parsing() {
+        let test_content = "HOST=localhost\nPORT=8080\n# Comment\nDEBUG=true";
+        let temp_path = "test_config.tmp";
+        fs::write(temp_path, test_content).unwrap();
+
+        let config = Config::from_file(temp_path).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("DEBUG"), Some(&"true".to_string()));
+        assert_eq!(config.get("MISSING"), None);
+
+        fs::remove_file(temp_path).unwrap();
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("APP_ENV", "production");
+        let test_content = "ENVIRONMENT=${APP_ENV}\nHOST=api.${APP_ENV}.example.com";
+        let temp_path = "test_env.tmp";
+        fs::write(temp_path, test_content).unwrap();
+
+        let config = Config::from_file(temp_path).unwrap();
+        assert_eq!(config.get("ENVIRONMENT"), Some(&"production".to_string()));
+        assert_eq!(
+            config.get("HOST"),
+            Some(&"api.production.example.com".to_string())
+        );
+
+        fs::remove_file(temp_path).unwrap();
+        env::remove_var("APP_ENV");
     }
 }
