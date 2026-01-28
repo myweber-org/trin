@@ -1,140 +1,19 @@
-use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
-}
-
-impl DataRecord {
-    pub fn new(id: u64, values: Vec<f64>) -> Self {
-        Self {
-            id,
-            values,
-            metadata: HashMap::new(),
-        }
-    }
-
-    pub fn validate(&self) -> Result<(), String> {
-        if self.id == 0 {
-            return Err("Invalid record ID".to_string());
-        }
-
-        if self.values.is_empty() {
-            return Err("Empty values array".to_string());
-        }
-
-        for value in &self.values {
-            if value.is_nan() || value.is_infinite() {
-                return Err("Invalid numeric value detected".to_string());
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn transform(&mut self, factor: f64) {
-        for value in &mut self.values {
-            *value *= factor;
-        }
-    }
-
-    pub fn add_metadata(&mut self, key: String, value: String) {
-        self.metadata.insert(key, value);
-    }
-}
-
-pub fn process_records(records: &mut [DataRecord], factor: f64) -> Result<Vec<DataRecord>, String> {
-    let mut processed = Vec::new();
-
-    for record in records {
-        record.validate()?;
-        let mut transformed = record.clone();
-        transformed.transform(factor);
-        processed.push(transformed);
-    }
-
-    Ok(processed)
-}
-
-pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
-    let mut stats = HashMap::new();
-
-    if records.is_empty() {
-        return stats;
-    }
-
-    let total_values: usize = records.iter().map(|r| r.values.len()).sum();
-    let all_values: Vec<f64> = records.iter().flat_map(|r| r.values.clone()).collect();
-
-    let sum: f64 = all_values.iter().sum();
-    let count = all_values.len() as f64;
-
-    stats.insert("total_records".to_string(), records.len() as f64);
-    stats.insert("total_values".to_string(), total_values as f64);
-    stats.insert("average".to_string(), sum / count);
-
-    if let Some(min) = all_values.iter().copied().reduce(f64::min) {
-        stats.insert("minimum".to_string(), min);
-    }
-
-    if let Some(max) = all_values.iter().copied().reduce(f64::max) {
-        stats.insert("maximum".to_string(), max);
-    }
-
-    stats
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_record_validation() {
-        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        assert!(valid_record.validate().is_ok());
-
-        let invalid_record = DataRecord::new(0, vec![1.0, 2.0]);
-        assert!(invalid_record.validate().is_err());
-    }
-
-    #[test]
-    fn test_record_transformation() {
-        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        record.transform(2.0);
-        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
-    }
-
-    #[test]
-    fn test_process_records() {
-        let mut records = vec![
-            DataRecord::new(1, vec![1.0, 2.0]),
-            DataRecord::new(2, vec![3.0, 4.0]),
-        ];
-
-        let result = process_records(&mut records, 2.0);
-        assert!(result.is_ok());
-
-        let processed = result.unwrap();
-        assert_eq!(processed[0].values, vec![2.0, 4.0]);
-        assert_eq!(processed[1].values, vec![6.0, 8.0]);
-    }
-}
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-pub struct DataRecord {
-    pub id: u32,
-    pub value: f64,
-    pub category: String,
-    pub valid: bool,
+#[derive(Debug, PartialEq)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
 }
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
+    records: Vec<Record>,
 }
 
 impl DataProcessor {
@@ -148,83 +27,61 @@ impl DataProcessor {
         let path = Path::new(file_path);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        
+
         let mut count = 0;
-        
         for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
             
             if line_num == 0 {
                 continue;
             }
-            
+
             let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                continue;
+            if parts.len() != 4 {
+                return Err(format!("Invalid CSV format at line {}", line_num + 1).into());
             }
-            
-            let id = match parts[0].parse::<u32>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let value = match parts[1].parse::<f64>() {
-                Ok(val) => val,
-                Err(_) => continue,
-            };
-            
-            let category = parts[2].to_string();
-            let valid = value >= 0.0 && value <= 1000.0;
-            
-            self.records.push(DataRecord {
+
+            let id = parts[0].parse::<u32>()?;
+            let name = parts[1].to_string();
+            let value = parts[2].parse::<f64>()?;
+            let active = parts[3].parse::<bool>()?;
+
+            let record = Record {
                 id,
+                name,
                 value,
-                category,
-                valid,
-            });
-            
+                active,
+            };
+
+            self.records.push(record);
             count += 1;
         }
-        
+
         Ok(count)
     }
 
-    pub fn filter_valid(&self) -> Vec<&DataRecord> {
-        self.records.iter().filter(|r| r.valid).collect()
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
     }
 
     pub fn calculate_average(&self) -> Option<f64> {
-        let valid_records: Vec<&DataRecord> = self.filter_valid();
-        
-        if valid_records.is_empty() {
+        if self.records.is_empty() {
             return None;
         }
-        
-        let sum: f64 = valid_records.iter().map(|r| r.value).sum();
-        Some(sum / valid_records.len() as f64)
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
     }
 
-    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&DataRecord>> {
-        let mut groups = std::collections::HashMap::new();
-        
-        for record in &self.records {
-            if record.valid {
-                groups
-                    .entry(record.category.clone())
-                    .or_insert_with(Vec::new)
-                    .push(record);
-            }
-        }
-        
-        groups
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == target_id)
     }
 
-    pub fn count_records(&self) -> usize {
+    pub fn record_count(&self) -> usize {
         self.records.len()
-    }
-
-    pub fn count_valid(&self) -> usize {
-        self.records.iter().filter(|r| r.valid).count()
     }
 }
 
@@ -235,28 +92,62 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processor() {
-        let mut processor = DataProcessor::new();
-        
+    fn test_load_from_csv() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,value,category").unwrap();
-        writeln!(temp_file, "1,100.5,TypeA").unwrap();
-        writeln!(temp_file, "2,200.0,TypeB").unwrap();
-        writeln!(temp_file, "3,1500.0,TypeA").unwrap();
-        
+        writeln!(temp_file, "id,name,value,active").unwrap();
+        writeln!(temp_file, "1,Test1,10.5,true").unwrap();
+        writeln!(temp_file, "2,Test2,20.0,false").unwrap();
+        writeln!(temp_file, "3,Test3,15.75,true").unwrap();
+
+        let mut processor = DataProcessor::new();
         let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 3);
-        assert_eq!(processor.count_records(), 3);
-        assert_eq!(processor.count_valid(), 2);
-        
-        let average = processor.calculate_average();
-        assert!(average.is_some());
-        assert_eq!(average.unwrap(), 150.25);
-        
-        let groups = processor.group_by_category();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups.get("TypeA").unwrap().len(), 1);
-        assert_eq!(groups.get("TypeB").unwrap().len(), 1);
+        assert_eq!(processor.record_count(), 3);
+    }
+
+    #[test]
+    fn test_filter_active() {
+        let mut processor = DataProcessor::new();
+        processor.records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: false },
+            Record { id: 3, name: "C".to_string(), value: 30.0, active: true },
+        ];
+
+        let active = processor.filter_active();
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|r| r.active));
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let mut processor = DataProcessor::new();
+        processor.records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: true },
+            Record { id: 3, name: "C".to_string(), value: 30.0, active: true },
+        ];
+
+        let avg = processor.calculate_average();
+        assert_eq!(avg, Some(20.0));
+    }
+
+    #[test]
+    fn test_find_by_id() {
+        let mut processor = DataProcessor::new();
+        processor.records = vec![
+            Record { id: 1, name: "A".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "B".to_string(), value: 20.0, active: true },
+        ];
+
+        let found = processor.find_by_id(2);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, 2);
+        assert_eq!(found.unwrap().name, "B");
+
+        let not_found = processor.find_by_id(99);
+        assert!(not_found.is_none());
     }
 }
