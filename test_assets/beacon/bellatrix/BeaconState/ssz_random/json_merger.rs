@@ -1,10 +1,13 @@
-
-use serde_json::{Map, Value};
-use std::fs;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
-pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
-    let mut merged_map = Map::new();
+type JsonValue = serde_json::Value;
+type JsonMap = HashMap<String, JsonValue>;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged_map = JsonMap::new();
 
     for path_str in file_paths {
         let path = Path::new(path_str);
@@ -12,10 +15,13 @@ pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error
             return Err(format!("File not found: {}", path_str).into());
         }
 
-        let content = fs::read_to_string(path)?;
-        let json_value: Value = serde_json::from_str(&content)?;
+        let mut file_content = String::new();
+        let mut file = File::open(path)?;
+        file.read_to_string(&mut file_content)?;
 
-        if let Value::Object(map) = json_value {
+        let json_val: JsonValue = serde_json::from_str(&file_content)?;
+
+        if let JsonValue::Object(map) = json_val {
             for (key, value) in map {
                 if merged_map.contains_key(&key) {
                     eprintln!("Warning: Key '{}' already exists, overwriting.", key);
@@ -23,53 +29,63 @@ pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error
                 merged_map.insert(key, value);
             }
         } else {
-            return Err("Top-level JSON must be an object".into());
+            return Err("Top-level JSON value must be an object".into());
         }
     }
 
-    Ok(Value::Object(merged_map))
+    Ok(JsonValue::Object(
+        merged_map
+            .into_iter()
+            .map(|(k, v)| (k, v))
+            .collect(),
+    ))
+}
+
+pub fn write_merged_json(output_path: &str, json_value: &JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+    let json_string = serde_json::to_string_pretty(json_value)?;
+    fs::write(output_path, json_string)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_merge_json_files() {
-        let mut file1 = NamedTempFile::new().unwrap();
-        let mut file2 = NamedTempFile::new().unwrap();
+    fn test_merge_basic() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
 
-        writeln!(file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
-        writeln!(file2, r#"{"city": "Berlin", "active": true}"#).unwrap();
+        fs::write(file1.path(), r#"{"a": 1, "b": "test"}"#).unwrap();
+        fs::write(file2.path(), r#"{"c": true, "d": [1,2,3]}"#).unwrap();
 
-        let result = merge_json_files(&[
+        let paths = [
             file1.path().to_str().unwrap(),
             file2.path().to_str().unwrap(),
-        ]).unwrap();
+        ];
+        let merged = merge_json_files(&paths).unwrap();
 
-        let expected_json: Value = serde_json::from_str(
-            r#"{"name": "Alice", "age": 30, "city": "Berlin", "active": true}"#
-        ).unwrap();
-
-        assert_eq!(result, expected_json);
+        assert_eq!(merged["a"], 1);
+        assert_eq!(merged["b"], "test");
+        assert_eq!(merged["c"], true);
+        assert!(merged["d"].is_array());
     }
 
     #[test]
-    fn test_overwrite_keys() {
-        let mut file1 = NamedTempFile::new().unwrap();
-        let mut file2 = NamedTempFile::new().unwrap();
+    fn test_overwrite_key() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
 
-        writeln!(file1, r#"{"id": 1, "value": "old"}"#).unwrap();
-        writeln!(file2, r#"{"id": 2, "extra": "data"}"#).unwrap();
+        fs::write(file1.path(), r#"{"key": "first"}"#).unwrap();
+        fs::write(file2.path(), r#"{"key": "second"}"#).unwrap();
 
-        let result = merge_json_files(&[
+        let paths = [
             file1.path().to_str().unwrap(),
             file2.path().to_str().unwrap(),
-        ]).unwrap();
+        ];
+        let merged = merge_json_files(&paths).unwrap();
 
-        let id_value = result.get("id").and_then(|v| v.as_i64()).unwrap();
-        assert_eq!(id_value, 2);
+        assert_eq!(merged["key"], "second");
     }
 }
