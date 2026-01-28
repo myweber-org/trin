@@ -132,3 +132,96 @@ mod tests {
         assert_eq!(stats.count, 4);
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub fn process_csv_file(input_path: &str, output_path: &str) -> Result<usize, Box<dyn Error>> {
+    let input_path = Path::new(input_path);
+    let mut reader = Reader::from_path(input_path)?;
+    
+    let output_path = Path::new(output_path);
+    let mut writer = Writer::from_path(output_path)?;
+    
+    let mut valid_count = 0;
+    
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.is_valid() {
+            writer.serialize(&record)?;
+            valid_count += 1;
+        }
+    }
+    
+    writer.flush()?;
+    Ok(valid_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            active: true,
+        };
+        assert!(record.is_valid());
+    }
+    
+    #[test]
+    fn test_invalid_record() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            active: false,
+        };
+        assert!(!record.is_valid());
+    }
+    
+    #[test]
+    fn test_csv_processing() -> Result<(), Box<dyn Error>> {
+        let input_data = "id,name,value,active\n1,Alice,100.5,true\n2,Bob,-50.0,false\n3,,75.3,true";
+        
+        let input_file = NamedTempFile::new()?;
+        fs::write(&input_file, input_data)?;
+        
+        let output_file = NamedTempFile::new()?;
+        
+        let valid_count = process_csv_file(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        )?;
+        
+        assert_eq!(valid_count, 1);
+        
+        let output_content = fs::read_to_string(output_file.path())?;
+        assert!(output_content.contains("Alice"));
+        assert!(!output_content.contains("Bob"));
+        assert!(!output_content.contains(",,"));
+        
+        Ok(())
+    }
+}
