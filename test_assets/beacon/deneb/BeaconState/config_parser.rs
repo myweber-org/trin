@@ -98,4 +98,84 @@ mod tests {
         assert_eq!(parser.get("PORT").unwrap(), "8080");
         assert_eq!(parser.get("HOST").unwrap(), "localhost:8080");
     }
+}use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+pub struct Config {
+    pub database_url: String,
+    pub api_key: String,
+    pub debug_mode: bool,
+    pub port: u16,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut config_map = HashMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let mut config_map = HashMap::new();
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                config_map.insert(key.trim_start_matches("APP_").to_string(), value);
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
+        let database_url = map
+            .get("DATABASE_URL")
+            .ok_or("Missing DATABASE_URL")?
+            .to_string();
+
+        let api_key = map
+            .get("API_KEY")
+            .ok_or("Missing API_KEY")?
+            .to_string();
+
+        let debug_mode = map
+            .get("DEBUG_MODE")
+            .map(|s| s.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let port = map
+            .get("PORT")
+            .map(|s| s.parse::<u16>().unwrap_or(8080))
+            .unwrap_or(8080);
+
+        Ok(Config {
+            database_url,
+            api_key,
+            debug_mode,
+            port,
+        })
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        Config {
+            database_url: other.database_url,
+            api_key: other.api_key,
+            debug_mode: other.debug_mode || self.debug_mode,
+            port: other.port,
+        }
+    }
 }
