@@ -98,3 +98,68 @@ mod tests {
         );
     }
 }
+use std::env;
+use std::fs;
+use regex::Regex;
+
+pub struct Config {
+    pub database_url: String,
+    pub api_key: String,
+    pub debug_mode: bool,
+    pub port: u16,
+}
+
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let processed_content = Self::substitute_env_vars(&content);
+        
+        let lines: Vec<&str> = processed_content.lines().collect();
+        let mut config = Config {
+            database_url: String::new(),
+            api_key: String::new(),
+            debug_mode: false,
+            port: 8080,
+        };
+
+        for line in lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = trimmed.split_once('=') {
+                match key.trim() {
+                    "DATABASE_URL" => config.database_url = value.trim().to_string(),
+                    "API_KEY" => config.api_key = value.trim().to_string(),
+                    "DEBUG_MODE" => config.debug_mode = value.trim().parse().unwrap_or(false),
+                    "PORT" => config.port = value.trim().parse().unwrap_or(8080),
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(config)
+    }
+
+    fn substitute_env_vars(content: &str) -> String {
+        let re = Regex::new(r"\$\{([A-Za-z0-9_]+)\}").unwrap();
+        re.replace_all(content, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            env::var(var_name).unwrap_or_else(|_| String::new())
+        }).to_string()
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.database_url.is_empty() {
+            return Err("DATABASE_URL is required".to_string());
+        }
+        if self.api_key.is_empty() {
+            return Err("API_KEY is required".to_string());
+        }
+        if self.port == 0 {
+            return Err("PORT must be greater than 0".to_string());
+        }
+        Ok(())
+    }
+}
