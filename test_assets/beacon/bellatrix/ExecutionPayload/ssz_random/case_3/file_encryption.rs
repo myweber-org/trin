@@ -332,3 +332,139 @@ mod tests {
         assert_eq!(decrypted_data, test_data);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{
+    password_hash::{
+        PasswordHasher, SaltString, PasswordHash, PasswordVerifier
+    },
+    Pbkdf2
+};
+use rand::RngCore;
+use std::fs;
+use std::io::{self, Write};
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct FileEncryptor {
+    key: Key<Aes256Gcm>,
+}
+
+impl FileEncryptor {
+    pub fn from_password(password: &str, salt: &[u8]) -> io::Result<Self> {
+        let salt_string = SaltString::encode_b64(salt)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        
+        let password_hash = Pbkdf2
+            .hash_password(password.as_bytes(), &salt_string)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        
+        let hash_bytes = password_hash.hash.ok_or_else(|| 
+            io::Error::new(io::ErrorKind::InvalidData, "No hash generated")
+        )?;
+        
+        let key_bytes: [u8; 32] = hash_bytes.as_bytes()[..32]
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid key length"))?;
+        
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        Ok(Self { key: *key })
+    }
+    
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> io::Result<()> {
+        let plaintext = fs::read(input_path)?;
+        
+        let mut nonce_bytes = [0u8; NONCE_LENGTH];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        
+        let cipher = Aes256Gcm::new(&self.key);
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        
+        let mut output = Vec::with_capacity(NONCE_LENGTH + ciphertext.len());
+        output.extend_from_slice(&nonce_bytes);
+        output.extend_from_slice(&ciphertext);
+        
+        fs::write(output_path, &output)?;
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> io::Result<()> {
+        let data = fs::read(input_path)?;
+        
+        if data.len() < NONCE_LENGTH {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData, 
+                "File too short to contain nonce"
+            ));
+        }
+        
+        let nonce = Nonce::from_slice(&data[..NONCE_LENGTH]);
+        let ciphertext = &data[NONCE_LENGTH..];
+        
+        let cipher = Aes256Gcm::new(&self.key);
+        let plaintext = cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        
+        fs::write(output_path, &plaintext)?;
+        Ok(())
+    }
+}
+
+pub fn generate_salt() -> Vec<u8> {
+    let mut salt = vec![0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    salt
+}
+
+pub fn verify_password(password: &str, salt: &[u8], stored_hash: &str) -> io::Result<bool> {
+    let parsed_hash = PasswordHash::new(stored_hash)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    
+    let salt_string = SaltString::encode_b64(salt)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    
+    let result = Pbkdf2.verify_password(password.as_bytes(), &salt_string, &parsed_hash);
+    Ok(result.is_ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() -> io::Result<()> {
+        let password = "secure_password_123";
+        let salt = generate_salt();
+        
+        let encryptor = FileEncryptor::from_password(password, &salt)?;
+        
+        let test_data = b"Hello, this is a secret message!";
+        let input_file = NamedTempFile::new()?;
+        let encrypted_file = NamedTempFile::new()?;
+        let decrypted_file = NamedTempFile::new()?;
+        
+        fs::write(input_file.path(), test_data)?;
+        
+        encryptor.encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap()
+        )?;
+        
+        encryptor.decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap()
+        )?;
+        
+        let decrypted_data = fs::read(decrypted_file.path())?;
+        assert_eq!(test_data.to_vec(), decrypted_data);
+        
+        Ok(())
+    }
+}
