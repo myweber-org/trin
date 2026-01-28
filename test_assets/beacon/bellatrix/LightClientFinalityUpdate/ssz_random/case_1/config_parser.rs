@@ -115,4 +115,130 @@ mod tests {
         let errors = result.unwrap_err();
         assert!(errors.len() >= 2);
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    pub pool_size: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub workers: usize,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub database: DatabaseConfig,
+    pub server: ServerConfig,
+    pub log_level: String,
+    pub enable_debug: bool,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        DatabaseConfig {
+            host: "localhost".to_string(),
+            port: 5432,
+            username: "postgres".to_string(),
+            password: "".to_string(),
+            database: "app_db".to_string(),
+            pool_size: 10,
+        }
+    }
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            address: "0.0.0.0".to_string(),
+            port: 8080,
+            workers: 4,
+            timeout_seconds: 30,
+        }
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            database: DatabaseConfig::default(),
+            server: ServerConfig::default(),
+            log_level: "info".to_string(),
+            enable_debug: false,
+        }
+    }
+}
+
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<AppConfig, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)?;
+    let config: AppConfig = toml::from_str(&config_str)?;
+    
+    validate_config(&config)?;
+    
+    Ok(config)
+}
+
+pub fn load_config_with_defaults<P: AsRef<Path>>(path: P) -> AppConfig {
+    match load_config(path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Failed to load config: {}. Using defaults.", e);
+            AppConfig::default()
+        }
+    }
+}
+
+fn validate_config(config: &AppConfig) -> Result<(), String> {
+    if config.database.host.is_empty() {
+        return Err("Database host cannot be empty".to_string());
+    }
+    
+    if config.database.port == 0 {
+        return Err("Database port cannot be zero".to_string());
+    }
+    
+    if config.database.pool_size == 0 {
+        return Err("Database pool size must be greater than zero".to_string());
+    }
+    
+    if config.server.port == 0 {
+        return Err("Server port cannot be zero".to_string());
+    }
+    
+    if config.server.workers == 0 {
+        return Err("Server workers must be greater than zero".to_string());
+    }
+    
+    let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
+    if !valid_log_levels.contains(&config.log_level.as_str()) {
+        return Err(format!("Invalid log level: {}. Must be one of: {:?}", 
+            config.log_level, valid_log_levels));
+    }
+    
+    Ok(())
+}
+
+pub fn save_config<P: AsRef<Path>>(config: &AppConfig, path: P) -> Result<(), Box<dyn std::error::Error>> {
+    validate_config(config)?;
+    
+    let config_str = toml::to_string_pretty(config)?;
+    fs::write(path, config_str)?;
+    
+    Ok(())
+}
+
+pub fn generate_default_config<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let default_config = AppConfig::default();
+    save_config(&default_config, path)
 }
