@@ -173,3 +173,106 @@ mod tests {
         assert!((dept_avg_salary["Marketing"] - 46500.0).abs() < 0.001);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    id: u32,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    pub fn new(id: u32, category: &str, value: f64, active: bool) -> Self {
+        Record {
+            id,
+            category: category.to_string(),
+            value,
+            active,
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut rdr = csv::Reader::from_reader(reader);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category && r.active)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn export_to_csv(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        let mut wtr = csv::Writer::from_writer(writer);
+
+        for record in &self.records {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+pub fn process_data_sample() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.add_record(Record::new(1, "A", 10.5, true));
+    processor.add_record(Record::new(2, "B", 20.3, true));
+    processor.add_record(Record::new(3, "A", 15.7, false));
+    processor.add_record(Record::new(4, "C", 8.9, true));
+
+    let filtered = processor.filter_by_category("A");
+    println!("Filtered records count: {}", filtered.len());
+
+    let avg = processor.calculate_average();
+    println!("Average value: {:.2}", avg);
+
+    processor.export_to_csv("output.csv")?;
+
+    Ok(())
+}
