@@ -326,3 +326,100 @@ pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
 
     stats
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    id: u64,
+    category: String,
+    value: f64,
+    metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, category: String, value: f64) -> Self {
+        Self {
+            id,
+            category,
+            value,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.id == 0 {
+            return Err("Invalid ID: must be greater than 0".into());
+        }
+        
+        if self.category.is_empty() {
+            return Err("Category cannot be empty".into());
+        }
+
+        if !self.value.is_finite() {
+            return Err("Value must be a finite number".into());
+        }
+
+        Ok(())
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn transform_value(&mut self, multiplier: f64) -> Result<(), Box<dyn Error>> {
+        if multiplier <= 0.0 {
+            return Err("Multiplier must be positive".into());
+        }
+        
+        self.value *= multiplier;
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut processed = Vec::new();
+    
+    for record in records {
+        record.validate()?;
+        
+        let mut processed_record = DataRecord::new(
+            record.id,
+            record.category.clone(),
+            record.value,
+        );
+        
+        for (key, value) in &record.metadata {
+            processed_record.add_metadata(key.clone(), value.clone());
+        }
+        
+        processed_record.transform_value(1.5)?;
+        processed.push(processed_record);
+    }
+    
+    Ok(processed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let avg = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - avg).powi(2))
+        .sum::<f64>() / count;
+    
+    stats.insert("total_records".to_string(), count);
+    stats.insert("sum".to_string(), sum);
+    stats.insert("average".to_string(), avg);
+    stats.insert("variance".to_string(), variance);
+    
+    stats
+}
