@@ -94,3 +94,68 @@ mod tests {
         assert!((std_dev - 8.164965).abs() < 0.0001);
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = Reader::from_reader(input_file);
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = Writer::from_writer(output_file);
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.value > 0.0 && record.active {
+            writer.serialize(Record {
+                id: record.id,
+                name: record.name.to_uppercase(),
+                value: record.value * 1.1,
+                active: record.active,
+            })?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+pub fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() && record.value >= 0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_record() {
+        let valid_record = Record {
+            id: 1,
+            name: "test".to_string(),
+            value: 10.5,
+            active: true,
+        };
+        
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -5.0,
+            active: false,
+        };
+
+        assert!(validate_record(&valid_record));
+        assert!(!validate_record(&invalid_record));
+    }
+}
