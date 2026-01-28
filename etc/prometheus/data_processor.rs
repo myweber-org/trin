@@ -199,4 +199,99 @@ impl Default for DataProcessor {
     fn default() -> Self {
         Self::new()
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub fn process_data(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(input_file);
+
+    let output_file = File::create(output_path)?;
+    let mut writer = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.value >= min_value && record.active {
+            writer.serialize(&record)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
+    let count = records.len() as f64;
+    if count == 0.0 {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (sum, mean, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            Record { id: 1, name: "Test1".to_string(), value: 10.0, active: true },
+            Record { id: 2, name: "Test2".to_string(), value: 20.0, active: true },
+            Record { id: 3, name: "Test3".to_string(), value: 30.0, active: true },
+        ];
+        
+        let (sum, mean, std_dev) = calculate_statistics(&records);
+        
+        assert_eq!(sum, 60.0);
+        assert_eq!(mean, 20.0);
+        assert!((std_dev - 8.164965).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_process_data() {
+        let input_data = "id,name,value,active\n1,ItemA,15.5,true\n2,ItemB,5.0,false\n3,ItemC,25.0,true\n";
+        let input_file = NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), input_data).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let result = process_data(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            10.0
+        );
+        
+        assert!(result.is_ok());
+        
+        let output_content = std::fs::read_to_string(output_file.path()).unwrap();
+        assert!(output_content.contains("ItemA"));
+        assert!(!output_content.contains("ItemB"));
+        assert!(output_content.contains("ItemC"));
+    }
 }
