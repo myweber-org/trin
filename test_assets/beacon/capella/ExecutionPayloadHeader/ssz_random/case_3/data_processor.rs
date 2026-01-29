@@ -2,51 +2,106 @@
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    filters: Vec<Box<dyn Fn(&str) -> bool>>,
-    transformations: HashMap<String, Box<dyn Fn(String) -> String>>,
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            filters: Vec::new(),
-            transformations: HashMap::new(),
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    pub fn add_filter<F>(&mut self, filter: F)
-    where
-        F: Fn(&str) -> bool + 'static,
-    {
-        self.filters.push(Box::new(filter));
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
     }
 
-    pub fn add_transformation<F>(&mut self, name: &str, transform: F)
-    where
-        F: Fn(String) -> String + 'static,
-    {
-        self.transformations
-            .insert(name.to_string(), Box::new(transform));
-    }
-
-    pub fn process_data(&self, input: &str) -> Option<String> {
-        if !self.filters.iter().all(|f| f(input)) {
-            return None;
+    pub fn process_dataset(&mut self, dataset_name: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
         }
 
-        let mut result = input.to_string();
-        for transform in self.transformations.values() {
-            result = transform(result);
+        for rule in &self.validation_rules {
+            if rule.required && data.iter().any(|&x| x.is_nan()) {
+                return Err(format!("Field '{}' contains invalid values", rule.field_name));
+            }
         }
 
-        Some(result)
-    }
-
-    pub fn batch_process(&self, inputs: Vec<&str>) -> Vec<String> {
-        inputs
+        let processed_data: Vec<f64> = data
             .iter()
-            .filter_map(|&input| self.process_data(input))
-            .collect()
+            .map(|&value| {
+                let mut transformed = value;
+                
+                for rule in &self.validation_rules {
+                    if value < rule.min_value {
+                        transformed = rule.min_value;
+                    } else if value > rule.max_value {
+                        transformed = rule.max_value;
+                    }
+                }
+                
+                transformed * 1.05
+            })
+            .collect();
+
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
+        
+        Ok(processed_data)
+    }
+
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
+    }
+
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<DatasetStatistics> {
+        self.cache.get(dataset_name).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = data.iter()
+                .map(|value| {
+                    let diff = mean - value;
+                    diff * diff
+                })
+                .sum::<f64>() / count;
+            
+            DatasetStatistics {
+                mean,
+                variance,
+                min: *data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                max: *data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0),
+                count: data.len(),
+            }
+        })
+    }
+}
+
+pub struct DatasetStatistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
+
+impl ValidationRule {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+            required,
+        }
     }
 }
 
@@ -55,17 +110,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_processor() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
+        let rule = ValidationRule::new("temperature", -50.0, 150.0, true);
+        processor.add_validation_rule(rule);
+
+        let data = vec![25.0, 30.0, 35.0, 40.0];
+        let result = processor.process_dataset("test_data", &data);
         
-        processor.add_filter(|s| s.len() > 3);
-        processor.add_transformation("uppercase", |s| s.to_uppercase());
-        processor.add_transformation("trim", |s| s.trim().to_string());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 4);
+    }
 
-        let result = processor.process_data("  test data  ");
-        assert_eq!(result, Some("TEST DATA".to_string()));
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let rule = ValidationRule::new("pressure", 0.0, 100.0, true);
+        processor.add_validation_rule(rule);
 
-        let batch_result = processor.batch_process(vec!["a", "valid data", "  another  "]);
-        assert_eq!(batch_result, vec!["VALID DATA".to_string(), "ANOTHER".to_string()]);
+        let data = vec![];
+        let result = processor.process_dataset("empty_data", &data);
+        
+        assert!(result.is_err());
     }
 }
