@@ -251,4 +251,72 @@ impl std::fmt::Display for DataStatistics {
         write!(f, "Statistics: Count={}, Avg={:.2}, Var={:.2}, Min={:.2}, Max={:.2}",
             self.count, self.average, self.variance, self.min_value, self.max_value)
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if category.trim().is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(Self {
+            id,
+            value,
+            category: category.trim().to_string(),
+        })
+    }
+
+    pub fn calculate_tax(&self, rate: f64) -> f64 {
+        self.value * rate
+    }
+}
+
+pub fn load_records_from_file(path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 3 {
+            return Err(format!("Invalid format at line {}", line_num + 1).into());
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let value = parts[1].parse::<f64>()?;
+        let category = parts[2].to_string();
+
+        match DataRecord::new(id, value, category) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Warning: Skipping line {}: {}", line_num + 1, e),
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn filter_by_category(records: &[DataRecord], category: &str) -> Vec<&DataRecord> {
+    records
+        .iter()
+        .filter(|r| r.category == category)
+        .collect()
+}
+
+pub fn calculate_total(records: &[DataRecord]) -> f64 {
+    records.iter().map(|r| r.value).sum()
 }
