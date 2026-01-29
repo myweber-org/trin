@@ -1,120 +1,89 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    data: Vec<f64>,
-    frequency_map: HashMap<String, u32>,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            data: Vec::new(),
-            frequency_map: HashMap::new(),
+            cache: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        
-        for line in reader.lines().skip(1) {
-            let line = line?;
-            let parts: Vec<&str> = line.split(',').collect();
-            
-            if parts.len() >= 2 {
-                if let Ok(value) = parts[1].parse::<f64>() {
-                    self.data.push(value);
-                }
-                
-                let category = parts[0].to_string();
-                *self.frequency_map.entry(category).or_insert(0) += 1;
-            }
+    pub fn process_numeric_data(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty data provided".to_string());
         }
-        
-        Ok(())
-    }
 
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
         }
-        
-        let sum: f64 = self.data.iter().sum();
-        Some(sum / self.data.len() as f64)
-    }
 
-    pub fn calculate_median(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
-        }
-        
-        let mut sorted_data = self.data.clone();
-        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
-        let mid = sorted_data.len() / 2;
-        if sorted_data.len() % 2 == 0 {
-            Some((sorted_data[mid - 1] + sorted_data[mid]) / 2.0)
-        } else {
-            Some(sorted_data[mid])
-        }
-    }
-
-    pub fn get_category_frequency(&self, category: &str) -> u32 {
-        *self.frequency_map.get(category).unwrap_or(&0)
-    }
-
-    pub fn get_top_categories(&self, limit: usize) -> Vec<(String, u32)> {
-        let mut entries: Vec<_> = self.frequency_map.iter().collect();
-        entries.sort_by(|a, b| b.1.cmp(a.1));
-        
-        entries
-            .into_iter()
-            .take(limit)
-            .map(|(k, v)| (k.clone(), *v))
-            .collect()
-    }
-
-    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<f64> {
-        self.data
+        let processed: Vec<f64> = data
             .iter()
-            .filter(|&&x| x > threshold)
-            .copied()
-            .collect()
+            .filter(|&&x| x.is_finite())
+            .map(|&x| x * 2.0)
+            .collect();
+
+        if processed.is_empty() {
+            return Err("All values were invalid".to_string());
+        }
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    pub fn calculate_statistics(&self, data: &[f64]) -> (f64, f64, f64) {
+        let count = data.len() as f64;
+        let sum: f64 = data.iter().sum();
+        let mean = sum / count;
+
+        let variance: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / count;
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_process_valid_data() {
         let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0];
+        let result = processor.process_numeric_data("test", &data).unwrap();
+        assert_eq!(result, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_process_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![];
+        let result = processor.process_numeric_data("test", &data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_functionality() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0];
         
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "category,value").unwrap();
-        writeln!(temp_file, "A,10.5").unwrap();
-        writeln!(temp_file, "B,20.3").unwrap();
-        writeln!(temp_file, "A,15.2").unwrap();
-        writeln!(temp_file, "C,8.7").unwrap();
+        let result1 = processor.process_numeric_data("test", &data).unwrap();
+        let result2 = processor.process_numeric_data("test", &data).unwrap();
         
-        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(processor.calculate_mean(), Some(13.675));
-        assert_eq!(processor.calculate_median(), Some(12.85));
-        assert_eq!(processor.get_category_frequency("A"), 2);
-        assert_eq!(processor.get_category_frequency("B"), 1);
-        
-        let top_categories = processor.get_top_categories(2);
-        assert_eq!(top_categories.len(), 2);
-        assert_eq!(top_categories[0].0, "A");
-        
-        let filtered = processor.filter_by_threshold(12.0);
-        assert_eq!(filtered.len(), 2);
+        assert_eq!(result1, result2);
+        assert_eq!(processor.cache_size(), 1);
     }
 }
