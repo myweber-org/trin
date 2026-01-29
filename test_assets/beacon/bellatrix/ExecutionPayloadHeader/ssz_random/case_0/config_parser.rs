@@ -1,108 +1,88 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs;
+use regex::Regex;
 
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub database_url: String,
-    pub port: u16,
-    pub debug_mode: bool,
-    pub api_keys: HashMap<String, String>,
+pub struct ConfigParser {
+    values: HashMap<String, String>,
 }
 
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
 
-        let mut config_map = HashMap::new();
+    pub fn load_from_str(&mut self, content: &str) -> Result<(), String> {
+        let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
+        
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            if let Some((key, value)) = trimmed.split_once('=') {
-                config_map.insert(key.trim().to_string(), value.trim().to_string());
+            
+            if let Some(equal_pos) = trimmed.find('=') {
+                let key = trimmed[..equal_pos].trim().to_string();
+                let mut value = trimmed[equal_pos + 1..].trim().to_string();
+                
+                value = var_pattern.replace_all(&value, |caps: &regex::Captures| {
+                    let var_name = &caps[1];
+                    env::var(var_name).unwrap_or_else(|_| String::new())
+                }).to_string();
+                
+                self.values.insert(key, value);
             }
         }
-
-        Self::from_map(&config_map)
-    }
-
-    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
-        let database_url = Self::get_value(map, "DATABASE_URL")?;
-        let port_str = Self::get_value(map, "PORT")?;
-        let port = port_str
-            .parse()
-            .map_err(|_| format!("Invalid port number: {}", port_str))?;
-        let debug_mode = Self::get_value(map, "DEBUG")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false);
-
-        let mut api_keys = HashMap::new();
-        for (key, value) in map {
-            if key.starts_with("API_KEY_") {
-                api_keys.insert(key.clone(), value.clone());
-            }
-        }
-
-        Ok(Config {
-            database_url,
-            port,
-            debug_mode,
-            api_keys,
-        })
-    }
-
-    fn get_value(map: &HashMap<String, String>, key: &str) -> Result<String, String> {
-        map.get(key)
-            .map(|s| s.clone())
-            .or_else(|| env::var(key).ok())
-            .ok_or_else(|| format!("Missing required configuration: {}", key))
-    }
-
-    pub fn validate(&self) -> Result<(), String> {
-        if self.database_url.is_empty() {
-            return Err("Database URL cannot be empty".to_string());
-        }
-        if self.port == 0 {
-            return Err("Port must be greater than 0".to_string());
-        }
+        
         Ok(())
+    }
+    
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+    
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
+    }
+    
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+    
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_config_parsing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "DATABASE_URL=postgres://localhost/test").unwrap();
-        writeln!(temp_file, "PORT=8080").unwrap();
-        writeln!(temp_file, "# This is a comment").unwrap();
-        writeln!(temp_file, "DEBUG=true").unwrap();
-        writeln!(temp_file, "API_KEY_WEATHER=abc123").unwrap();
-
-        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.database_url, "postgres://localhost/test");
-        assert_eq!(config.port, 8080);
-        assert_eq!(config.debug_mode, true);
-        assert_eq!(config.api_keys.get("API_KEY_WEATHER"), Some(&"abc123".to_string()));
-    }
-
-    #[test]
-    fn test_env_fallback() {
-        env::set_var("DATABASE_URL", "postgres://env/test");
-        let map = HashMap::from([
-            ("PORT".to_string(), "3000".to_string()),
-        ]);
+    fn test_basic_parsing() {
+        let mut parser = ConfigParser::new();
+        let config = "server_host=localhost\nserver_port=8080\n# This is a comment";
         
-        let config = Config::from_map(&map).unwrap();
-        assert_eq!(config.database_url, "postgres://env/test");
-        env::remove_var("DATABASE_URL");
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("server_host"), Some(&"localhost".to_string()));
+        assert_eq!(parser.get("server_port"), Some(&"8080".to_string()));
+        assert_eq!(parser.get("nonexistent"), None);
+    }
+    
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("APP_MODE", "production");
+        
+        let mut parser = ConfigParser::new();
+        let config = "mode=${APP_MODE}\npath=/var/log/${APP_MODE}.log";
+        
+        parser.load_from_str(config).unwrap();
+        
+        assert_eq!(parser.get("mode"), Some(&"production".to_string()));
+        assert_eq!(parser.get("path"), Some(&"/var/log/production.log".to_string()));
+        
+        env::remove_var("APP_MODE");
     }
 }
