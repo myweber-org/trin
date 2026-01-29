@@ -107,3 +107,55 @@ mod tests {
         assert_eq!(result, expected);
     }
 }
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+
+pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut output_file = File::create(output_path)?;
+
+    for line in reader.lines() {
+        let mut line = line?;
+        line = line.trim().to_string();
+
+        if !line.is_empty() {
+            let cleaned_columns: Vec<String> = line
+                .split(',')
+                .map(|col| col.trim().to_string())
+                .collect();
+            writeln!(output_file, "{}", cleaned_columns.join(","))?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn test_clean_csv() {
+        let test_input = "test_input.csv";
+        let test_output = "test_output.csv";
+
+        let mut input_file = File::create(test_input).unwrap();
+        writeln!(input_file, "  a , b , c  ").unwrap();
+        writeln!(input_file, "").unwrap();
+        writeln!(input_file, "x,y,z").unwrap();
+        drop(input_file);
+
+        clean_csv(test_input, test_output).unwrap();
+
+        let mut output_file = File::open(test_output).unwrap();
+        let mut content = String::new();
+        output_file.read_to_string(&mut content).unwrap();
+
+        assert_eq!(content, "a,b,c\nx,y,z\n");
+
+        std::fs::remove_file(test_input).unwrap();
+        std::fs::remove_file(test_output).unwrap();
+    }
+}
