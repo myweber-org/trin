@@ -48,4 +48,79 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     
     Ok(())
+}use std::collections::HashSet;
+
+pub struct DataCleaner;
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner
+    }
+
+    pub fn deduplicate_strings(&self, strings: &[String]) -> Vec<String> {
+        let mut seen = HashSet::new();
+        strings
+            .iter()
+            .filter(|s| seen.insert(s.clone()))
+            .cloned()
+            .collect()
+    }
+
+    pub fn normalize_strings(&self, strings: &[String]) -> Vec<String> {
+        strings
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .collect()
+    }
+
+    pub fn clean_data(&self, raw_data: &[String]) -> Vec<String> {
+        let normalized = self.normalize_strings(raw_data);
+        self.deduplicate_strings(&normalized)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let cleaner = DataCleaner::new();
+        let input = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+            "Banana".to_string(),
+        ];
+        let result = cleaner.deduplicate_strings(&input);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        let input = vec![
+            "  Apple  ".to_string(),
+            "BANANA".to_string(),
+            "  Cherry  ".to_string(),
+        ];
+        let result = cleaner.normalize_strings(&input);
+        assert_eq!(result[0], "apple");
+        assert_eq!(result[1], "banana");
+        assert_eq!(result[2], "cherry");
+    }
+
+    #[test]
+    fn test_full_clean() {
+        let cleaner = DataCleaner::new();
+        let input = vec![
+            "  Apple  ".to_string(),
+            "apple".to_string(),
+            "BANANA".to_string(),
+            "banana  ".to_string(),
+            "  Cherry  ".to_string(),
+        ];
+        let result = cleaner.clean_data(&input);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    }
 }
