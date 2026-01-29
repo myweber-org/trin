@@ -1,3 +1,4 @@
+
 use std::collections::HashMap;
 
 pub struct DataProcessor {
@@ -20,44 +21,29 @@ impl DataProcessor {
             return Ok(cached.clone());
         }
 
-        let validated = self.validate_data(data)?;
-        let normalized = self.normalize_data(&validated);
-        let transformed = self.apply_transformations(&normalized);
-
+        let processed = Self::normalize_data(data)?;
+        let transformed = Self::apply_transformations(&processed);
+        
         self.cache.insert(key.to_string(), transformed.clone());
         Ok(transformed)
     }
 
-    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
-        let mut result = Vec::with_capacity(data.len());
+    fn normalize_data(data: &[f64]) -> Result<Vec<f64>, String> {
+        let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
         
-        for &value in data {
-            if !value.is_finite() {
-                return Err(format!("Invalid numeric value detected: {}", value));
-            }
-            if value < 0.0 {
-                return Err("Negative values not allowed".to_string());
-            }
-            result.push(value);
+        if (max - min).abs() < f64::EPSILON {
+            return Err("Cannot normalize constant dataset".to_string());
         }
-        
-        Ok(result)
+
+        Ok(data.iter()
+            .map(|&x| (x - min) / (max - min))
+            .collect())
     }
 
-    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
-        let max_value = data.iter().fold(f64::MIN, |a, &b| a.max(b));
-        if max_value == 0.0 {
-            return vec![0.0; data.len()];
-        }
-        
+    fn apply_transformations(data: &[f64]) -> Vec<f64> {
         data.iter()
-            .map(|&x| x / max_value)
-            .collect()
-    }
-
-    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
-        data.iter()
-            .map(|&x| (x * 100.0).ln_1p())
+            .map(|&x| x.ln_1p().exp_m1())
             .collect()
     }
 
@@ -76,102 +62,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_processing() {
-        let mut processor = DataProcessor::new();
+    fn test_normalization() {
         let data = vec![1.0, 2.0, 3.0, 4.0];
-        
-        let result = processor.process_dataset("test", &data).unwrap();
-        assert_eq!(result.len(), 4);
-        
-        let cached_result = processor.process_dataset("test", &data).unwrap();
-        assert_eq!(result, cached_result);
+        let result = DataProcessor::normalize_data(&data).unwrap();
+        assert_eq!(result, vec![0.0, 1.0/3.0, 2.0/3.0, 1.0]);
     }
 
     #[test]
-    fn test_validation_rejects_negative() {
-        let processor = DataProcessor::new();
-        let data = vec![1.0, -2.0, 3.0];
-        
-        assert!(processor.validate_data(&data).is_err());
+    fn test_empty_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_dataset("test", &[]);
+        assert!(result.is_err());
     }
-}use csv::{Reader, Writer};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    active: bool,
-}
-
-pub fn process_data(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut reader = Reader::from_reader(input_file);
-    
-    let output_file = File::create(output_path)?;
-    let mut writer = Writer::from_writer(output_file);
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        
-        if record.value >= min_value && record.active {
-            writer.serialize(&record)?;
-        }
-    }
-
-    writer.flush()?;
-    Ok(())
-}
-
-pub fn calculate_statistics(path: &str) -> Result<(f64, f64, usize), Box<dyn Error>> {
-    let file = File::open(path)?;
-    let mut reader = Reader::from_reader(file);
-    
-    let mut sum = 0.0;
-    let mut count = 0;
-    let mut max_value = f64::MIN;
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        
-        if record.active {
-            sum += record.value;
-            count += 1;
-            if record.value > max_value {
-                max_value = record.value;
-            }
-        }
-    }
-
-    let average = if count > 0 { sum / count as f64 } else { 0.0 };
-    Ok((average, max_value, count))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_data() {
-        let input_data = "id,name,value,active\n1,test1,10.5,true\n2,test2,5.0,false\n3,test3,15.0,true\n";
-        let input_file = NamedTempFile::new().unwrap();
-        std::fs::write(input_file.path(), input_data).unwrap();
+    fn test_cache_functionality() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0];
         
-        let output_file = NamedTempFile::new().unwrap();
+        let result1 = processor.process_dataset("key1", &data).unwrap();
+        let result2 = processor.process_dataset("key1", &data).unwrap();
         
-        process_data(
-            input_file.path().to_str().unwrap(),
-            output_file.path().to_str().unwrap(),
-            10.0
-        ).unwrap();
-        
-        let output = std::fs::read_to_string(output_file.path()).unwrap();
-        assert!(output.contains("test1"));
-        assert!(!output.contains("test2"));
-        assert!(output.contains("test3"));
+        assert_eq!(result1, result2);
+        assert_eq!(processor.cache_stats(), (1, 1));
     }
 }
