@@ -3,62 +3,129 @@ use std::collections::HashMap;
 
 pub struct DataProcessor {
     cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
             cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
-        if values.is_empty() {
-            return Err("Empty data array provided".to_string());
-        }
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
 
-        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
-            return Err("Invalid numeric values detected".to_string());
-        }
-
-        let processed: Vec<f64> = values
-            .iter()
-            .map(|&x| {
-                if x < 0.0 {
-                    x.abs()
-                } else {
-                    x * 1.5
+    pub fn process_dataset(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<ProcessedRecord>, String> {
+        let mut results = Vec::new();
+        
+        for (index, record) in dataset.iter().enumerate() {
+            match self.validate_record(record) {
+                Ok(_) => {
+                    let processed = self.transform_record(record);
+                    self.cache_record(&processed);
+                    results.push(processed);
                 }
-            })
-            .collect();
-
-        self.cache.insert(key.to_string(), processed.clone());
-        Ok(processed)
+                Err(err) => {
+                    return Err(format!("Validation failed at record {}: {}", index, err));
+                }
+            }
+        }
+        
+        Ok(results)
     }
 
-    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
-        self.cache.get(key).map(|values| {
-            let sum: f64 = values.iter().sum();
-            let count = values.len() as f64;
-            let mean = sum / count;
+    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<(), String> {
+        for rule in &self.validation_rules {
+            if let Some(&value) = record.get(&rule.field_name) {
+                if value < rule.min_value || value > rule.max_value {
+                    return Err(format!("Field '{}' value {} out of range [{}, {}]", 
+                        rule.field_name, value, rule.min_value, rule.max_value));
+                }
+            } else if rule.required {
+                return Err(format!("Required field '{}' not found", rule.field_name));
+            }
+        }
+        Ok(())
+    }
+
+    fn transform_record(&self, record: &HashMap<String, f64>) -> ProcessedRecord {
+        let mut normalized = HashMap::new();
+        let mut statistics = RecordStats::default();
+        
+        for (key, &value) in record {
+            let transformed = (value - 100.0) / 50.0;
+            normalized.insert(key.clone(), transformed);
             
-            let variance: f64 = values
-                .iter()
-                .map(|&x| (x - mean).powi(2))
-                .sum::<f64>() / count;
-            
-            let std_dev = variance.sqrt();
-            
-            (mean, variance, std_dev)
+            statistics.update(value);
+        }
+        
+        ProcessedRecord {
+            original: record.clone(),
+            normalized,
+            statistics,
+        }
+    }
+
+    fn cache_record(&mut self, record: &ProcessedRecord) {
+        for (key, &value) in &record.normalized {
+            self.cache
+                .entry(key.clone())
+                .or_insert_with(Vec::new)
+                .push(value);
+        }
+    }
+
+    pub fn get_cached_average(&self, field: &str) -> Option<f64> {
+        self.cache.get(field).map(|values| {
+            values.iter().sum::<f64>() / values.len() as f64
         })
     }
+}
 
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
+pub struct ProcessedRecord {
+    original: HashMap<String, f64>,
+    normalized: HashMap<String, f64>,
+    statistics: RecordStats,
+}
+
+#[derive(Default)]
+pub struct RecordStats {
+    count: usize,
+    sum: f64,
+    min: f64,
+    max: f64,
+}
+
+impl RecordStats {
+    fn update(&mut self, value: f64) {
+        self.count += 1;
+        self.sum += value;
+        
+        if self.count == 1 {
+            self.min = value;
+            self.max = value;
+        } else {
+            self.min = self.min.min(value);
+            self.max = self.max.max(value);
+        }
     }
 
-    pub fn get_cached_keys(&self) -> Vec<String> {
-        self.cache.keys().cloned().collect()
+    pub fn average(&self) -> f64 {
+        if self.count > 0 {
+            self.sum / self.count as f64
+        } else {
+            0.0
+        }
     }
 }
 
@@ -67,36 +134,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_process_valid_data() {
+    fn test_validation_success() {
         let mut processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0, -4.0];
+        processor.add_validation_rule(ValidationRule {
+            field_name: "temperature".to_string(),
+            min_value: -50.0,
+            max_value: 150.0,
+            required: true,
+        });
+
+        let mut record = HashMap::new();
+        record.insert("temperature".to_string(), 25.0);
         
-        let result = processor.process_numeric_data("test", &data);
-        assert!(result.is_ok());
-        
-        let processed = result.unwrap();
-        assert_eq!(processed, vec![1.5, 3.0, 4.5, 4.0]);
+        assert!(processor.validate_record(&record).is_ok());
     }
 
     #[test]
-    fn test_statistics_calculation() {
+    fn test_validation_failure() {
         let mut processor = DataProcessor::new();
-        let data = vec![2.0, 4.0, 6.0];
-        
-        processor.process_numeric_data("stats", &data).unwrap();
-        let stats = processor.calculate_statistics("stats").unwrap();
-        
-        assert!((stats.0 - 6.0).abs() < 0.001);
-        assert!((stats.1 - 6.0).abs() < 0.001);
-        assert!((stats.2 - 2.449).abs() < 0.001);
-    }
+        processor.add_validation_rule(ValidationRule {
+            field_name: "pressure".to_string(),
+            min_value: 0.0,
+            max_value: 100.0,
+            required: true,
+        });
 
-    #[test]
-    fn test_invalid_data() {
-        let mut processor = DataProcessor::new();
-        let data = vec![1.0, f64::NAN, 3.0];
+        let mut record = HashMap::new();
+        record.insert("pressure".to_string(), 150.0);
         
-        let result = processor.process_numeric_data("invalid", &data);
-        assert!(result.is_err());
+        assert!(processor.validate_record(&record).is_err());
     }
 }
