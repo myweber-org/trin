@@ -64,4 +64,49 @@ mod tests {
         assert_eq!(cleaned.len(), 1);
         assert_eq!(cleaned[0].get("id").unwrap(), "123");
     }
+}use csv::{Reader, Writer};
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Clone)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    let mut seen_ids = HashSet::new();
+    let mut cleaned_records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+
+        if !seen_ids.contains(&record.id) {
+            seen_ids.insert(record.id);
+            cleaned_records.push(record);
+        }
+    }
+
+    cleaned_records.sort_by(|a, b| a.id.cmp(&b.id));
+
+    writer.write_record(&["id", "name", "value", "category"])?;
+    for record in cleaned_records {
+        writer.serialize(record)?;
+    }
+
+    writer.flush()?;
+    println!("Cleaned {} records to {}", cleaned_records.len(), output_path);
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    clean_csv("input_data.csv", "cleaned_data.csv")?;
+    Ok(())
 }
