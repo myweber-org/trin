@@ -43,4 +43,34 @@ async fn main() {
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(stream, addr));
     }
+}use tokio::net::TcpListener;
+use tokio_tungstenite::accept_async;
+use futures_util::{SinkExt, StreamExt};
+
+pub async fn run_websocket_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind(addr).await?;
+    println!("WebSocket server listening on: {}", addr);
+
+    while let Ok((stream, _)) = listener.accept().await {
+        let ws_stream = accept_async(stream).await?;
+        let (mut write, mut read) = ws_stream.split();
+
+        tokio::spawn(async move {
+            while let Some(message) = read.next().await {
+                match message {
+                    Ok(msg) => {
+                        if let Err(e) = write.send(msg).await {
+                            eprintln!("Error sending message: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error receiving message: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+    }
+    Ok(())
 }
