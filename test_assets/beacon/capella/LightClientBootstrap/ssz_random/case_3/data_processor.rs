@@ -231,3 +231,117 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Self {
+        DataRecord { id, value, category }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if self.category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { records: Vec::new() }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), String> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.add_record(record)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn get_statistics(&self) -> (usize, Option<f64>, Option<f64>) {
+        let count = self.records.len();
+        let avg = self.calculate_average();
+        let max = self.records.iter().map(|r| r.value).max_by(|a, b| a.partial_cmp(b).unwrap());
+
+        (count, avg, max)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 10.5, "test".to_string());
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_record = DataRecord::new(0, -5.0, "".to_string());
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord::new(1, 10.0, "A".to_string());
+        let record2 = DataRecord::new(2, 20.0, "B".to_string());
+        
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        
+        assert_eq!(processor.calculate_average(), Some(15.0));
+        assert_eq!(processor.filter_by_category("A").len(), 1);
+        
+        let (count, avg, max) = processor.get_statistics();
+        assert_eq!(count, 2);
+        assert_eq!(avg, Some(15.0));
+        assert_eq!(max, Some(20.0));
+    }
+}
