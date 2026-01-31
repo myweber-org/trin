@@ -199,3 +199,155 @@ mod tests {
         assert!(processor.is_empty());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub category: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+pub struct CsvProcessor {
+    records: Vec<CsvRecord>,
+}
+
+impl CsvProcessor {
+    pub fn new() -> Self {
+        CsvProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: CsvRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<CsvRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn filter_active(&self) -> Vec<CsvRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn calculate_average_value(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        self.calculate_total_value() / self.records.len() as f64
+    }
+
+    pub fn find_max_value_record(&self) -> Option<CsvRecord> {
+        self.records
+            .iter()
+            .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+            .cloned()
+    }
+
+    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<CsvRecord>> {
+        let mut groups = std::collections::HashMap::new();
+        
+        for record in &self.records {
+            groups
+                .entry(record.category.clone())
+                .or_insert_with(Vec::new)
+                .push(record.clone());
+        }
+        
+        groups
+    }
+
+    pub fn count_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn get_all_records(&self) -> &[CsvRecord] {
+        &self.records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,category,value,active").unwrap();
+        writeln!(temp_file, "1,ItemA,Electronics,100.5,true").unwrap();
+        writeln!(temp_file, "2,ItemB,Furniture,75.0,false").unwrap();
+        writeln!(temp_file, "3,ItemC,Electronics,150.0,true").unwrap();
+        writeln!(temp_file, "4,ItemD,Furniture,200.0,true").unwrap();
+        temp_file
+    }
+
+    #[test]
+    fn test_load_and_count() {
+        let temp_file = create_test_csv();
+        let mut processor = CsvProcessor::new();
+        
+        processor.load_from_file(temp_file.path()).unwrap();
+        assert_eq!(processor.count_records(), 4);
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let temp_file = create_test_csv();
+        let mut processor = CsvProcessor::new();
+        
+        processor.load_from_file(temp_file.path()).unwrap();
+        let electronics = processor.filter_by_category("Electronics");
+        
+        assert_eq!(electronics.len(), 2);
+        assert!(electronics.iter().all(|r| r.category == "Electronics"));
+    }
+
+    #[test]
+    fn test_calculate_total() {
+        let temp_file = create_test_csv();
+        let mut processor = CsvProcessor::new();
+        
+        processor.load_from_file(temp_file.path()).unwrap();
+        let total = processor.calculate_total_value();
+        
+        assert_eq!(total, 525.5);
+    }
+
+    #[test]
+    fn test_find_max_value() {
+        let temp_file = create_test_csv();
+        let mut processor = CsvProcessor::new();
+        
+        processor.load_from_file(temp_file.path()).unwrap();
+        let max_record = processor.find_max_value_record().unwrap();
+        
+        assert_eq!(max_record.id, 4);
+        assert_eq!(max_record.value, 200.0);
+    }
+}
