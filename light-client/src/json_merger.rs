@@ -69,3 +69,62 @@ mod tests {
         assert_eq!(result["value"], "second");
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+use std::collections::HashSet;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged: Map<String, Value> = Map::new();
+    let mut conflict_log: Vec<String> = Vec::new();
+    let mut processed_keys: HashSet<String> = HashSet::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)?;
+        let json: Value = serde_json::from_str(&content)?;
+        
+        if let Value::Object(obj) = json {
+            for (key, value) in obj {
+                if processed_keys.contains(&key) {
+                    conflict_log.push(format!("Conflict detected for key '{}' in file: {:?}", key, path.as_ref()));
+                    continue;
+                }
+                merged.insert(key.clone(), value);
+                processed_keys.insert(key);
+            }
+        }
+    }
+
+    let output_json = Value::Object(merged);
+    let pretty_json = serde_json::to_string_pretty(&output_json)?;
+    fs::write(output_path, pretty_json)?;
+
+    if !conflict_log.is_empty() {
+        let log_content = conflict_log.join("\n");
+        fs::write("merge_conflicts.log", log_content)?;
+        eprintln!("Merged with conflicts. See merge_conflicts.log for details.");
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_basic() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+        let output = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": 2}"#).unwrap();
+        fs::write(&file2, r#"{"c": 3, "d": 4}"#).unwrap();
+
+        merge_json_files(&[&file1, &file2], &output).unwrap();
+        let content = fs::read_to_string(output).unwrap();
+        assert!(content.contains("\"a\": 1"));
+        assert!(content.contains("\"d\": 4"));
+    }
+}
