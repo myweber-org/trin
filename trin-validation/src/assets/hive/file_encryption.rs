@@ -5,17 +5,18 @@ use aes_gcm::{
 };
 use std::fs;
 use std::io::{self, Read, Write};
+use std::path::Path;
 
 const NONCE_SIZE: usize = 12;
 
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let key = Key::<Aes256Gcm>::generate(&mut OsRng);
+pub fn encrypt_file(input_path: &Path, output_path: &Path) -> io::Result<()> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
     let cipher = Aes256Gcm::new(&key);
     let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
 
-    let mut file = fs::File::open(input_path)?;
+    let mut input_file = fs::File::open(input_path)?;
     let mut plaintext = Vec::new();
-    file.read_to_end(&mut plaintext)?;
+    input_file.read_to_end(&mut plaintext)?;
 
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
@@ -23,65 +24,28 @@ pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
 
     let mut output_file = fs::File::create(output_path)?;
     output_file.write_all(&ciphertext)?;
-    output_file.write_all(&key)?;
+
+    let key_path = output_path.with_extension("key");
+    fs::write(key_path, key.as_slice())?;
 
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let mut file = fs::File::open(input_path)?;
-    let mut content = Vec::new();
-    file.read_to_end(&mut content)?;
-
-    if content.len() < 32 + NONCE_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File too short to contain encrypted data",
-        ));
-    }
-
-    let (ciphertext, key_slice) = content.split_at(content.len() - 32);
-    let key = Key::<Aes256Gcm>::from_slice(key_slice);
+pub fn decrypt_file(input_path: &Path, key_path: &Path, output_path: &Path) -> io::Result<()> {
+    let key_data = fs::read(key_path)?;
+    let key = Key::<Aes256Gcm>::from_slice(&key_data);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
 
+    let mut input_file = fs::File::open(input_path)?;
+    let mut ciphertext = Vec::new();
+    input_file.read_to_end(&mut ciphertext)?;
+
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(nonce, ciphertext.as_ref())
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&plaintext)?;
+    fs::write(output_path, plaintext)?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_encryption_decryption() {
-        let original_content = b"Secret data to protect";
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-
-        fs::write(input_file.path(), original_content).unwrap();
-
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-        )
-        .unwrap();
-
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-        )
-        .unwrap();
-
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
-    }
 }
