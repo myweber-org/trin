@@ -235,4 +235,109 @@ mod tests {
         assert_eq!(max_record.id, 2);
         assert!((max_record.value - 20.3).abs() < 0.1);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    category: String,
+    value: f64,
+    timestamp: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+    statistics: HashMap<String, f64>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            statistics: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&mut self) {
+        let mut category_sums: HashMap<String, f64> = HashMap::new();
+        let mut category_counts: HashMap<String, u32> = HashMap::new();
+        
+        for record in &self.records {
+            let sum = category_sums.entry(record.category.clone()).or_insert(0.0);
+            *sum += record.value;
+            
+            let count = category_counts.entry(record.category.clone()).or_insert(0);
+            *count += 1;
+        }
+        
+        for (category, sum) in category_sums {
+            if let Some(&count) = category_counts.get(&category) {
+                if count > 0 {
+                    self.statistics.insert(category, sum / count as f64);
+                }
+            }
+        }
+    }
+
+    pub fn get_average(&self, category: &str) -> Option<f64> {
+        self.statistics.get(category).copied()
+    }
+
+    pub fn total_records(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,category,value,timestamp").unwrap();
+        writeln!(temp_file, "1,electronics,299.99,2024-01-15").unwrap();
+        writeln!(temp_file, "2,clothing,49.95,2024-01-16").unwrap();
+        writeln!(temp_file, "3,electronics,599.99,2024-01-17").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(processor.total_records(), 3);
+        
+        processor.calculate_statistics();
+        
+        let electronics_avg = processor.get_average("electronics");
+        assert!(electronics_avg.is_some());
+        assert!((electronics_avg.unwrap() - 449.99).abs() < 0.01);
+        
+        let filtered = processor.filter_by_category("electronics");
+        assert_eq!(filtered.len(), 2);
+    }
 }
