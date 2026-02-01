@@ -544,4 +544,113 @@ mod tests {
         assert_eq!(groups.get("category_a").unwrap().len(), 2);
         assert_eq!(groups.get("category_b").unwrap().len(), 1);
     }
+}use csv::Reader;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug)]
+pub struct DataSet {
+    values: Vec<f64>,
+}
+
+impl DataSet {
+    pub fn new() -> Self {
+        DataSet { values: Vec::new() }
+    }
+
+    pub fn from_csv(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = Reader::from_reader(file);
+        let mut values = Vec::new();
+
+        for result in rdr.records() {
+            let record = result?;
+            if let Some(field) = record.get(0) {
+                if let Ok(num) = field.parse::<f64>() {
+                    values.push(num);
+                }
+            }
+        }
+
+        Ok(DataSet { values })
+    }
+
+    pub fn add_value(&mut self, value: f64) {
+        self.values.push(value);
+    }
+
+    pub fn mean(&self) -> Option<f64> {
+        if self.values.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.values.iter().sum();
+        Some(sum / self.values.len() as f64)
+    }
+
+    pub fn variance(&self) -> Option<f64> {
+        if self.values.len() < 2 {
+            return None;
+        }
+        let mean = self.mean().unwrap();
+        let sum_sq_diff: f64 = self.values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum();
+        Some(sum_sq_diff / (self.values.len() - 1) as f64)
+    }
+
+    pub fn standard_deviation(&self) -> Option<f64> {
+        self.variance().map(|v| v.sqrt())
+    }
+
+    pub fn count(&self) -> usize {
+        self.values.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_empty_dataset() {
+        let ds = DataSet::new();
+        assert_eq!(ds.count(), 0);
+        assert_eq!(ds.mean(), None);
+        assert_eq!(ds.variance(), None);
+    }
+
+    #[test]
+    fn test_basic_statistics() {
+        let mut ds = DataSet::new();
+        ds.add_value(2.0);
+        ds.add_value(4.0);
+        ds.add_value(4.0);
+        ds.add_value(4.0);
+        ds.add_value(5.0);
+        ds.add_value(5.0);
+        ds.add_value(7.0);
+        ds.add_value(9.0);
+
+        assert_eq!(ds.count(), 8);
+        assert_eq!(ds.mean(), Some(5.0));
+        assert_eq!(ds.variance(), Some(4.0));
+        assert_eq!(ds.standard_deviation(), Some(2.0));
+    }
+
+    #[test]
+    fn test_csv_import() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "value")?;
+        writeln!(temp_file, "10.5")?;
+        writeln!(temp_file, "20.3")?;
+        writeln!(temp_file, "15.7")?;
+
+        let ds = DataSet::from_csv(temp_file.path().to_str().unwrap())?;
+        assert_eq!(ds.count(), 3);
+        assert!((ds.mean().unwrap() - 15.5).abs() < 0.001);
+        Ok(())
+    }
 }
