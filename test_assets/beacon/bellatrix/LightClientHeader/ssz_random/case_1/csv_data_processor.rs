@@ -250,4 +250,104 @@ mod tests {
         assert_eq!(records[0].value, 20.0);
         assert_eq!(records[1].value, 40.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        let headers = match lines.next() {
+            Some(Ok(line)) => line.split(',').map(|s| s.trim().to_string()).collect(),
+            _ => return Err("Empty CSV file".into()),
+        };
+        
+        let mut records = Vec::new();
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+            if fields.len() == headers.len() {
+                records.push(fields);
+            }
+        }
+        
+        Ok(CsvProcessor { headers, records })
+    }
+    
+    pub fn filter_by_column(&self, column_name: &str, predicate: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = match self.headers.iter().position(|h| h == column_name) {
+            Some(idx) => idx,
+            None => return Vec::new(),
+        };
+        
+        self.records.iter()
+            .filter(|record| predicate(&record[column_index]))
+            .cloned()
+            .collect()
+    }
+    
+    pub fn aggregate_numeric_column(&self, group_by: &str, aggregate_column: &str) -> HashMap<String, f64> {
+        let group_index = match self.headers.iter().position(|h| h == group_by) {
+            Some(idx) => idx,
+            None => return HashMap::new(),
+        };
+        
+        let agg_index = match self.headers.iter().position(|h| h == aggregate_column) {
+            Some(idx) => idx,
+            None => return HashMap::new(),
+        };
+        
+        let mut result = HashMap::new();
+        for record in &self.records {
+            if let (Some(group_val), Some(agg_val)) = (record.get(group_index), record.get(agg_index)) {
+                if let Ok(num) = agg_val.parse::<f64>() {
+                    *result.entry(group_val.clone()).or_insert(0.0) += num;
+                }
+            }
+        }
+        
+        result
+    }
+    
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+    
+    pub fn get_headers(&self) -> &[String] {
+        &self.headers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_csv_processing() {
+        let csv_data = "name,age,salary\nAlice,30,50000\nBob,25,45000\nAlice,35,55000";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let processor = CsvProcessor::from_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(processor.get_record_count(), 3);
+        assert_eq!(processor.get_headers(), &["name", "age", "salary"]);
+        
+        let filtered = processor.filter_by_column("name", |name| name == "Alice");
+        assert_eq!(filtered.len(), 2);
+        
+        let aggregated = processor.aggregate_numeric_column("name", "salary");
+        assert_eq!(aggregated.get("Alice"), Some(&105000.0));
+        assert_eq!(aggregated.get("Bob"), Some(&45000.0));
+    }
 }
