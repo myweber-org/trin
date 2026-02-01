@@ -1,32 +1,32 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub timeout_seconds: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
-    pub pool_timeout_seconds: u64,
+    pub min_connections: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub level: String,
-    pub file_path: Option<String>,
+    pub file_path: String,
     pub max_file_size_mb: u64,
 }
 
@@ -40,12 +40,12 @@ impl Default for AppConfig {
             },
             database: DatabaseConfig {
                 url: "postgresql://localhost:5432/mydb".to_string(),
-                max_connections: 10,
-                pool_timeout_seconds: 10,
+                max_connections: 20,
+                min_connections: 5,
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
-                file_path: None,
+                file_path: "logs/app.log".to_string(),
                 max_file_size_mb: 100,
             },
         }
@@ -60,27 +60,21 @@ impl AppConfig {
         Ok(config)
     }
 
-    pub fn from_file_or_default<P: AsRef<Path>>(path: P) -> Self {
-        match Self::from_file(path) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!("Failed to load config: {}. Using defaults.", e);
-                Self::default()
-            }
-        }
-    }
-
-    fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         if self.server.port == 0 {
             return Err("Server port cannot be 0".to_string());
         }
         
-        if self.database.max_connections == 0 {
-            return Err("Database max connections cannot be 0".to_string());
+        if self.server.timeout_seconds == 0 {
+            return Err("Timeout must be greater than 0".to_string());
         }
         
-        if self.logging.max_file_size_mb == 0 {
-            return Err("Log file max size cannot be 0".to_string());
+        if self.database.max_connections < self.database.min_connections {
+            return Err("Max connections must be greater than or equal to min connections".to_string());
+        }
+        
+        if self.database.max_connections == 0 {
+            return Err("Database must have at least 1 connection".to_string());
         }
         
         let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
@@ -90,8 +84,10 @@ impl AppConfig {
         
         Ok(())
     }
-}
-
-pub fn get_server_address(config: &AppConfig) -> String {
-    format!("{}:{}", config.server.host, config.server.port)
+    
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let toml_string = toml::to_string_pretty(self)?;
+        fs::write(path, toml_string)?;
+        Ok(())
+    }
 }
