@@ -1,117 +1,128 @@
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-use std::collections::HashMap;
-
-pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
-    validation_rules: Vec<ValidationRule>,
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ValidationRule {
-    pub field_name: String,
-    pub min_value: f64,
-    pub max_value: f64,
-    pub required: bool,
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            cache: HashMap::new(),
-            validation_rules: Vec::new(),
+            records: Vec::new(),
         }
     }
 
-    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
-        self.validation_rules.push(rule);
-    }
-
-    pub fn process_data(&mut self, dataset: &[HashMap<String, f64>]) -> Result<Vec<HashMap<String, f64>>, String> {
-        let mut processed = Vec::new();
-
-        for (index, record) in dataset.iter().enumerate() {
-            match self.validate_record(record) {
-                Ok(validated_record) => {
-                    let transformed = self.transform_record(&validated_record);
-                    self.cache.insert(format!("record_{}", index), transformed.values().cloned().collect());
-                    processed.push(transformed);
-                }
-                Err(err) => return Err(format!("Validation failed at record {}: {}", index, err)),
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut count = 0;
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
             }
-        }
-
-        Ok(processed)
-    }
-
-    fn validate_record(&self, record: &HashMap<String, f64>) -> Result<HashMap<String, f64>, String> {
-        let mut validated = HashMap::new();
-
-        for rule in &self.validation_rules {
-            match record.get(&rule.field_name) {
-                Some(&value) => {
-                    if value < rule.min_value || value > rule.max_value {
-                        return Err(format!("Field '{}' value {} out of range [{}, {}]", 
-                            rule.field_name, value, rule.min_value, rule.max_value));
-                    }
-                    validated.insert(rule.field_name.clone(), value);
-                }
-                None => {
-                    if rule.required {
-                        return Err(format!("Required field '{}' not found", rule.field_name));
-                    }
-                }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
             }
-        }
-
-        Ok(validated)
-    }
-
-    fn transform_record(&self, record: &HashMap<String, f64>) -> HashMap<String, f64> {
-        let mut transformed = HashMap::new();
-
-        for (key, value) in record {
-            let transformed_value = match key.as_str() {
-                "temperature" => (value - 32.0) * 5.0 / 9.0,
-                "pressure" => value * 1000.0,
-                "humidity" => value.min(100.0).max(0.0),
-                _ => *value,
+            
+            let id = match parts[0].parse::<u32>() {
+                Ok(val) => val,
+                Err(_) => continue,
             };
-            transformed.insert(key.clone(), transformed_value);
+            
+            let value = match parts[1].parse::<f64>() {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+            
+            let category = parts[2].to_string();
+            
+            if !self.validate_record(&category, value) {
+                continue;
+            }
+            
+            self.records.push(DataRecord { id, value, category });
+            count += 1;
         }
-
-        transformed
+        
+        Ok(count)
     }
 
-    pub fn get_cached_values(&self, key: &str) -> Option<&Vec<f64>> {
-        self.cache.get(key)
+    fn validate_record(&self, category: &str, value: f64) -> bool {
+        !category.is_empty() && value >= 0.0 && value <= 1000.0
     }
 
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let count = self.records.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = self.records.iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        let max = self.records.iter()
+            .map(|r| r.value)
+            .fold(f64::NEG_INFINITY, f64::max);
+        
+        (mean, std_dev, max)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records.iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn get_total_records(&self) -> usize {
+        self.records.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_data_processing() {
+    fn test_data_processor() {
         let mut processor = DataProcessor::new();
-        processor.add_validation_rule(ValidationRule {
-            field_name: "temperature".to_string(),
-            min_value: -50.0,
-            max_value: 150.0,
-            required: true,
-        });
-
-        let test_data = vec![
-            [("temperature".to_string(), 68.0)].iter().cloned().collect(),
-            [("temperature".to_string(), 32.0)].iter().cloned().collect(),
-        ];
-
-        let result = processor.process_data(&test_data);
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,value,category").unwrap();
+        writeln!(temp_file, "1,100.5,TypeA").unwrap();
+        writeln!(temp_file, "2,200.3,TypeB").unwrap();
+        writeln!(temp_file, "3,150.7,TypeA").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 2);
+        assert_eq!(result.unwrap(), 3);
+        assert_eq!(processor.get_total_records(), 3);
+        
+        let stats = processor.calculate_statistics();
+        assert!(stats.0 > 0.0);
+        
+        let filtered = processor.filter_by_category("TypeA");
+        assert_eq!(filtered.len(), 2);
     }
 }
