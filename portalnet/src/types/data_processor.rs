@@ -107,3 +107,86 @@ mod tests {
         assert_eq!(record.validate(), Err(ValidationError::InvalidId));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for (line_num, line) in lines {
+            let line = line?;
+            let fields: Vec<String> = line.split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.iter().any(|f| f.is_empty()) {
+                return Err(format!("Empty field detected at line {}", line_num + 1).into());
+            }
+
+            records.push(fields);
+        }
+
+        if records.is_empty() {
+            return Err("No valid data records found".into());
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_numeric_fields(&self, records: &[Vec<String>], field_index: usize) -> Result<Vec<f64>, Box<dyn Error>> {
+        let mut numeric_values = Vec::new();
+
+        for (row_num, record) in records.iter().enumerate() {
+            if field_index >= record.len() {
+                return Err(format!("Field index {} out of bounds at row {}", field_index, row_num + 1).into());
+            }
+
+            match record[field_index].parse::<f64>() {
+                Ok(value) => numeric_values.push(value),
+                Err(_) => return Err(format!("Non-numeric value at row {} field {}", row_num + 1, field_index).into()),
+            }
+        }
+
+        Ok(numeric_values)
+    }
+}
+
+pub fn calculate_statistics(values: &[f64]) -> (f64, f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = values.iter().sum();
+    let mean = sum / values.len() as f64;
+    
+    let variance: f64 = values.iter()
+        .map(|&x| (x - mean).powi(2))
+        .sum::<f64>() / values.len() as f64;
+    
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
+}
