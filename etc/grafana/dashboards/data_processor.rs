@@ -1,134 +1,83 @@
 
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
-
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-    pub category: String,
-}
-
-#[derive(Debug)]
-pub enum DataError {
-    InvalidId,
-    InvalidValue,
-    EmptyName,
-    UnknownCategory,
-    TransformationError(String),
-}
-
-impl fmt::Display for DataError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataError::InvalidId => write!(f, "ID must be greater than 0"),
-            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
-            DataError::EmptyName => write!(f, "Name cannot be empty"),
-            DataError::UnknownCategory => write!(f, "Category not recognized"),
-            DataError::TransformationError(msg) => write!(f, "Transformation failed: {}", msg),
-        }
-    }
-}
-
-impl Error for DataError {}
 
 pub struct DataProcessor {
-    records: Vec<DataRecord>,
-    category_weights: HashMap<String, f64>,
+    cache: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            records: Vec::new(),
-            category_weights: HashMap::from([
-                ("standard".to_string(), 1.0),
-                ("premium".to_string(), 1.5),
-                ("economy".to_string(), 0.8),
-            ]),
+            cache: HashMap::new(),
+            validation_rules: Vec::new(),
         }
     }
 
-    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
-        if record.id == 0 {
-            return Err(DataError::InvalidId);
-        }
-        
-        if record.name.trim().is_empty() {
-            return Err(DataError::EmptyName);
-        }
-        
-        if record.value < 0.0 || record.value > 1000.0 {
-            return Err(DataError::InvalidValue);
-        }
-        
-        if !self.category_weights.contains_key(&record.category) {
-            return Err(DataError::UnknownCategory);
-        }
-        
-        Ok(())
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
     }
 
-    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
-        self.validate_record(&record)?;
-        self.records.push(record);
-        Ok(())
-    }
-
-    pub fn calculate_weighted_values(&self) -> Result<Vec<f64>, DataError> {
-        let mut results = Vec::with_capacity(self.records.len());
-        
-        for record in &self.records {
-            let weight = self.category_weights
-                .get(&record.category)
-                .ok_or_else(|| DataError::TransformationError(
-                    format!("Missing weight for category: {}", record.category)
-                ))?;
-            
-            let weighted_value = record.value * weight;
-            results.push(weighted_value);
+    pub fn process_dataset(&mut self, dataset_name: &str, data: Vec<f64>) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
         }
+
+        for rule in &self.validation_rules {
+            if rule.required && data.iter().any(|&x| x.is_nan()) {
+                return Err(format!("Field '{}' contains invalid NaN values", rule.field_name));
+            }
+
+            if let Some(&value) = data.iter().find(|&&x| x < rule.min_value || x > rule.max_value) {
+                return Err(format!(
+                    "Value {} for field '{}' is outside allowed range [{}, {}]",
+                    value, rule.field_name, rule.min_value, rule.max_value
+                ));
+            }
+        }
+
+        let processed_data = self.transform_data(data);
+        self.cache.insert(dataset_name.to_string(), processed_data.clone());
         
-        Ok(results)
+        Ok(processed_data)
     }
 
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|record| record.category == category)
+    fn transform_data(&self, data: Vec<f64>) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let std_dev = (data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64)
+            .sqrt();
+
+        data.into_iter()
+            .map(|x| (x - mean) / std_dev)
             .collect()
     }
 
-    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
-        if self.records.is_empty() {
-            return (0.0, 0.0, 0.0);
-        }
-        
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        let count = self.records.len() as f64;
-        let mean = sum / count;
-        
-        let variance: f64 = self.records
-            .iter()
-            .map(|r| (r.value - mean).powi(2))
-            .sum::<f64>() / count;
-        
-        let std_dev = variance.sqrt();
-        
-        (mean, variance, std_dev)
+    pub fn get_cached_data(&self, dataset_name: &str) -> Option<&Vec<f64>> {
+        self.cache.get(dataset_name)
     }
 
-    pub fn transform_records<F>(&mut self, transform_fn: F) -> Result<(), DataError>
-    where
-        F: Fn(&mut DataRecord) -> Result<(), DataError>,
-    {
-        for record in &mut self.records {
-            transform_fn(record)?;
-            self.validate_record(record)?;
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+impl ValidationRule {
+    pub fn new(field_name: &str, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name: field_name.to_string(),
+            min_value,
+            max_value,
+            required,
         }
-        Ok(())
     }
 }
 
@@ -137,45 +86,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_record() {
-        let processor = DataProcessor::new();
-        let record = DataRecord {
-            id: 1,
-            name: "Test Record".to_string(),
-            value: 100.0,
-            category: "standard".to_string(),
-        };
-        
-        assert!(processor.validate_record(&record).is_ok());
-    }
-
-    #[test]
-    fn test_invalid_id() {
-        let processor = DataProcessor::new();
-        let record = DataRecord {
-            id: 0,
-            name: "Test".to_string(),
-            value: 50.0,
-            category: "standard".to_string(),
-        };
-        
-        assert!(matches!(processor.validate_record(&record), Err(DataError::InvalidId)));
-    }
-
-    #[test]
-    fn test_weighted_calculation() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("temperature", -50.0, 150.0, true));
         
-        let record = DataRecord {
-            id: 1,
-            name: "Premium Item".to_string(),
-            value: 200.0,
-            category: "premium".to_string(),
-        };
+        let test_data = vec![20.5, 25.0, 30.2, 18.7];
+        let result = processor.process_dataset("test_set", test_data);
         
-        processor.add_record(record).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(processor.get_cached_data("test_set").unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        processor.add_validation_rule(ValidationRule::new("pressure", 0.0, 100.0, true));
         
-        let weighted_values = processor.calculate_weighted_values().unwrap();
-        assert_eq!(weighted_values[0], 300.0); // 200 * 1.5
+        let invalid_data = vec![50.0, 75.0, 150.0];
+        let result = processor.process_dataset("invalid_set", invalid_data);
+        
+        assert!(result.is_err());
     }
 }
