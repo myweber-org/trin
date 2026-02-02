@@ -60,3 +60,59 @@ mod tests {
         assert_eq!(clean_data(&input), expected);
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner;
+
+impl DataCleaner {
+    pub fn clean_strings(data: Vec<String>) -> Vec<String> {
+        let mut unique_set: HashSet<String> = HashSet::new();
+        
+        for item in data {
+            unique_set.insert(item);
+        }
+        
+        let mut result: Vec<String> = unique_set.into_iter().collect();
+        result.sort();
+        result
+    }
+    
+    pub fn clean_numbers(data: Vec<i32>) -> Vec<i32> {
+        let mut unique_set: HashSet<i32> = HashSet::new();
+        
+        for item in data {
+            unique_set.insert(item);
+        }
+        
+        let mut result: Vec<i32> = unique_set.into_iter().collect();
+        result.sort();
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_strings() {
+        let input = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+            "cherry".to_string(),
+            "banana".to_string(),
+        ];
+        
+        let result = DataCleaner::clean_strings(input);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn test_clean_numbers() {
+        let input = vec![5, 2, 8, 2, 5, 1, 8];
+        
+        let result = DataCleaner::clean_numbers(input);
+        assert_eq!(result, vec![1, 2, 5, 8]);
+    }
+}
