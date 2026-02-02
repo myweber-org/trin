@@ -392,4 +392,102 @@ mod tests {
         assert_eq!(top_categories[0].0, "A");
         assert_eq!(top_categories[0].1, 2);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    fn filter_by_value(&self, threshold: f64) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.value > threshold && record.active)
+            .collect()
+    }
+
+    fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    fn save_filtered_to_csv(&self, file_path: &str, threshold: f64) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_value(threshold);
+        let file = File::create(file_path)?;
+        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
+
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    fn add_record(&mut self, id: u32, name: String, value: f64, active: bool) {
+        self.records.push(Record {
+            id,
+            name,
+            value,
+            active,
+        });
+    }
+
+    fn remove_inactive(&mut self) {
+        self.records.retain(|record| record.active);
+    }
+}
+
+fn process_data_sample() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.add_record(1, "Alpha".to_string(), 45.6, true);
+    processor.add_record(2, "Beta".to_string(), 23.1, false);
+    processor.add_record(3, "Gamma".to_string(), 67.8, true);
+    processor.add_record(4, "Delta".to_string(), 12.3, true);
+
+    if let Some(avg) = processor.calculate_average() {
+        println!("Average value: {:.2}", avg);
+    }
+
+    let filtered = processor.filter_by_value(30.0);
+    println!("Records with value > 30.0: {}", filtered.len());
+
+    processor.remove_inactive();
+    println!("Active records count: {}", processor.records.len());
+
+    Ok(())
 }
