@@ -149,3 +149,57 @@ mod tests {
         assert!(!validate_record(&invalid_record));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+pub fn clean_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(Path::new(input_path))?;
+    let reader = BufReader::new(input_file);
+    let mut output_file = File::create(Path::new(output_path))?;
+
+    for line in reader.lines() {
+        let original_line = line?;
+        let trimmed_line = original_line.trim();
+
+        if !trimmed_line.is_empty() {
+            let cleaned_columns: Vec<String> = trimmed_line
+                .split(',')
+                .map(|col| col.trim().to_string())
+                .collect();
+
+            writeln!(output_file, "{}", cleaned_columns.join(","))?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn test_clean_csv() {
+        let test_input = "data, value , extra\n\n,test, spaces  \nlast,row,";
+        let temp_input = "test_input.csv";
+        let temp_output = "test_output.csv";
+
+        let mut input_file = File::create(temp_input).unwrap();
+        write!(input_file, "{}", test_input).unwrap();
+
+        clean_csv_file(temp_input, temp_output).unwrap();
+
+        let mut output_file = File::open(temp_output).unwrap();
+        let mut contents = String::new();
+        output_file.read_to_string(&mut contents).unwrap();
+
+        let expected = "data,value,extra\ntest,spaces\nlast,row,\n";
+        assert_eq!(contents, expected);
+
+        std::fs::remove_file(temp_input).unwrap();
+        std::fs::remove_file(temp_output).unwrap();
+    }
+}
