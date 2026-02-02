@@ -1,89 +1,120 @@
 
-use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 pub struct DataProcessor {
-    cache: HashMap<String, Vec<f64>>,
+    data: Vec<f64>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        DataProcessor {
-            cache: HashMap::new(),
-        }
+        DataProcessor { data: Vec::new() }
     }
 
-    pub fn process_numeric_data(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
-        if data.is_empty() {
-            return Err("Empty data provided".to_string());
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        for line in reader.lines() {
+            let line = line?;
+            if let Ok(value) = line.trim().parse::<f64>() {
+                self.data.push(value);
+            }
         }
+        
+        Ok(())
+    }
 
-        if let Some(cached) = self.cache.get(key) {
-            return Ok(cached.clone());
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
         }
+        
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
 
-        let processed: Vec<f64> = data
+    pub fn calculate_standard_deviation(&self) -> Option<f64> {
+        if self.data.len() < 2 {
+            return None;
+        }
+        
+        let mean = self.calculate_mean()?;
+        let variance: f64 = self.data
             .iter()
-            .filter(|&&x| x.is_finite())
-            .map(|&x| x * 2.0)
-            .collect();
-
-        if processed.is_empty() {
-            return Err("All values were invalid".to_string());
-        }
-
-        self.cache.insert(key.to_string(), processed.clone());
-        Ok(processed)
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / (self.data.len() - 1) as f64;
+        
+        Some(variance.sqrt())
     }
 
-    pub fn calculate_statistics(&self, data: &[f64]) -> (f64, f64, f64) {
-        let count = data.len() as f64;
-        let sum: f64 = data.iter().sum();
-        let mean = sum / count;
-
-        let variance: f64 = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / count;
-        let std_dev = variance.sqrt();
-
-        (mean, variance, std_dev)
+    pub fn get_data_count(&self) -> usize {
+        self.data.len()
     }
 
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
+    pub fn add_data_point(&mut self, value: f64) {
+        self.data.push(value);
     }
 
-    pub fn cache_size(&self) -> usize {
-        self.cache.len()
+    pub fn clear_data(&mut self) {
+        self.data.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_process_valid_data() {
-        let mut processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0];
-        let result = processor.process_numeric_data("test", &data).unwrap();
-        assert_eq!(result, vec![2.0, 4.0, 6.0]);
+    fn test_empty_processor() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.get_data_count(), 0);
+        assert_eq!(processor.calculate_mean(), None);
+        assert_eq!(processor.calculate_standard_deviation(), None);
     }
 
     #[test]
-    fn test_process_invalid_data() {
+    fn test_basic_statistics() {
         let mut processor = DataProcessor::new();
-        let data = vec![];
-        let result = processor.process_numeric_data("test", &data);
-        assert!(result.is_err());
+        processor.add_data_point(10.0);
+        processor.add_data_point(20.0);
+        processor.add_data_point(30.0);
+        
+        assert_eq!(processor.get_data_count(), 3);
+        assert_eq!(processor.calculate_mean(), Some(20.0));
+        assert!(processor.calculate_standard_deviation().unwrap() > 0.0);
     }
 
     #[test]
-    fn test_cache_functionality() {
+    fn test_csv_loading() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "10.5")?;
+        writeln!(temp_file, "20.3")?;
+        writeln!(temp_file, "15.7")?;
+        
         let mut processor = DataProcessor::new();
-        let data = vec![1.0, 2.0, 3.0];
+        processor.load_from_csv(temp_file.path())?;
         
-        let result1 = processor.process_numeric_data("test", &data).unwrap();
-        let result2 = processor.process_numeric_data("test", &data).unwrap();
+        assert_eq!(processor.get_data_count(), 3);
+        assert!(processor.calculate_mean().unwrap() > 0.0);
         
-        assert_eq!(result1, result2);
-        assert_eq!(processor.cache_size(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_data_clearing() {
+        let mut processor = DataProcessor::new();
+        processor.add_data_point(5.0);
+        processor.add_data_point(15.0);
+        
+        assert_eq!(processor.get_data_count(), 2);
+        
+        processor.clear_data();
+        assert_eq!(processor.get_data_count(), 0);
+        assert_eq!(processor.calculate_mean(), None);
     }
 }
