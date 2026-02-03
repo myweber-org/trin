@@ -497,3 +497,145 @@ mod tests {
         assert_eq!(max_record.unwrap().id, 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    DuplicateTag,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value must be non-negative"),
+            ValidationError::DuplicateTag => write!(f, "Tags must be unique"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        
+        let mut seen_tags = HashMap::new();
+        for tag in &self.tags {
+            if seen_tags.insert(tag, true).is_some() {
+                return Err(ValidationError::DuplicateTag);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn normalize(&mut self) {
+        self.name = self.name.trim().to_string();
+        self.tags.sort();
+        self.tags.dedup();
+    }
+    
+    pub fn transform_value(&mut self, multiplier: f64) -> Result<(), Box<dyn Error>> {
+        if multiplier <= 0.0 {
+            return Err("Multiplier must be positive".into());
+        }
+        
+        self.value *= multiplier;
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let mut valid_records = Vec::new();
+    
+    for record in records {
+        if let Err(e) = record.validate() {
+            eprintln!("Skipping invalid record {}: {}", record.id, e);
+            continue;
+        }
+        
+        record.normalize();
+        
+        if let Err(e) = record.transform_value(1.5) {
+            eprintln!("Failed to transform record {}: {}", record.id, e);
+            continue;
+        }
+        
+        valid_records.push(record.clone());
+    }
+    
+    if valid_records.is_empty() {
+        return Err("No valid records found after processing".into());
+    }
+    
+    Ok(valid_records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.0,
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        };
+        
+        assert!(record.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 10.0,
+            tags: vec![],
+        };
+        
+        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_normalize() {
+        let mut record = DataRecord {
+            id: 1,
+            name: "  Test  ".to_string(),
+            value: 10.0,
+            tags: vec!["b".to_string(), "a".to_string(), "b".to_string()],
+        };
+        
+        record.normalize();
+        
+        assert_eq!(record.name, "Test");
+        assert_eq!(record.tags, vec!["a", "b"]);
+    }
+}
