@@ -118,3 +118,105 @@ mod tests {
         assert_eq!(processor.calculate_mean(), None);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data provided".to_string());
+        }
+
+        if values.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Invalid numeric values detected".to_string());
+        }
+
+        let processed: Vec<f64> = values
+            .iter()
+            .map(|&x| x * 2.0)
+            .filter(|&x| x > 0.0)
+            .collect();
+
+        if processed.is_empty() {
+            return Err("All values filtered out".to_string());
+        }
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
+        self.cache.get(key).map(|data| {
+            let sum: f64 = data.iter().sum();
+            let count = data.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = data.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            let std_dev = variance.sqrt();
+            
+            (mean, variance, std_dev)
+        })
+    }
+}
+
+pub fn validate_input(input: &str) -> Result<Vec<f64>, String> {
+    let numbers: Result<Vec<f64>, _> = input
+        .split(',')
+        .map(|s| s.trim().parse::<f64>())
+        .collect();
+
+    match numbers {
+        Ok(nums) if !nums.is_empty() => Ok(nums),
+        Ok(_) => Err("No valid numbers found".to_string()),
+        Err(_) => Err("Failed to parse input as numbers".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_data_valid() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_data("test", &[1.0, 2.0, 3.0]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_process_data_invalid() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_data("test", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.process_data("stats", &[1.0, 2.0, 3.0]).unwrap();
+        let stats = processor.calculate_statistics("stats");
+        assert!(stats.is_some());
+        
+        let (mean, variance, std_dev) = stats.unwrap();
+        assert_eq!(mean, 4.0);
+        assert_eq!(variance, 8.0);
+        assert_eq!(std_dev, 2.8284271247461903);
+    }
+}
