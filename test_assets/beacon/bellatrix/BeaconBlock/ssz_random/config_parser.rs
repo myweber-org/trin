@@ -1,27 +1,17 @@
 use std::collections::HashMap;
+use std::env;
 use std::fs;
-use std::path::Path;
 
-#[derive(Debug, Clone)]
 pub struct Config {
-    pub settings: HashMap<String, String>,
-    pub defaults: HashMap<String, String>,
+    values: HashMap<String, String>,
 }
 
 impl Config {
-    pub fn new() -> Self {
-        Config {
-            settings: HashMap::new(),
-            defaults: HashMap::new(),
-        }
-    }
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
 
-    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
-        let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
-        self.parse_content(&content)
-    }
-
-    pub fn parse_content(&mut self, content: &str) -> Result<(), String> {
+        let mut values = HashMap::new();
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -30,46 +20,55 @@ impl Config {
 
             let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
             if parts.len() != 2 {
-                return Err(format!("Invalid line format: {}", line));
+                return Err(format!("Invalid line format: {}", trimmed));
             }
 
             let key = parts[0].trim().to_string();
-            let value = parts[1].trim().to_string();
+            let raw_value = parts[1].trim().to_string();
+            let value = Self::resolve_env_vars(&raw_value);
 
-            if value.is_empty() {
-                return Err(format!("Empty value for key: {}", key));
-            }
-
-            self.settings.insert(key, value);
+            values.insert(key, value);
         }
-        Ok(())
+
+        Ok(Config { values })
     }
 
-    pub fn set_default(&mut self, key: &str, value: &str) {
-        self.defaults.insert(key.to_string(), value.to_string());
+    fn resolve_env_vars(input: &str) -> String {
+        let mut result = String::new();
+        let mut chars = input.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // Skip '{'
+                let mut var_name = String::new();
+                while let Some(ch) = chars.next() {
+                    if ch == '}' {
+                        break;
+                    }
+                    var_name.push(ch);
+                }
+                
+                match env::var(&var_name) {
+                    Ok(val) => result.push_str(&val),
+                    Err(_) => result.push_str(&format!("${{{}}}", var_name)),
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        
+        result
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
-        self.settings.get(key).or_else(|| self.defaults.get(key))
+        self.values.get(key)
     }
 
     pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
-    }
-
-    pub fn validate_required(&self, keys: &[&str]) -> Result<(), Vec<String>> {
-        let mut missing = Vec::new();
-        for key in keys {
-            if !self.settings.contains_key(*key) && !self.defaults.contains_key(*key) {
-                missing.push(key.to_string());
-            }
-        }
-
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(missing)
-        }
+        self.values.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
     }
 }
 
@@ -80,44 +79,30 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_config_parsing() {
-        let mut config = Config::new();
-        let content = "server=localhost\nport=8080\n";
-        config.parse_content(content).unwrap();
-
-        assert_eq!(config.get("server"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("port"), Some(&"8080".to_string()));
-        assert_eq!(config.get("missing"), None);
-    }
-
-    #[test]
-    fn test_default_values() {
-        let mut config = Config::new();
-        config.set_default("timeout", "30");
-        config.set_default("retries", "3");
-
-        assert_eq!(config.get_or_default("timeout", "60"), "30");
-        assert_eq!(config.get_or_default("missing", "default"), "default");
-    }
-
-    #[test]
-    fn test_file_loading() {
+    fn test_basic_parsing() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "host=127.0.0.1\nport=5432").unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
 
-        let mut config = Config::new();
-        config.load_from_file(file.path()).unwrap();
-
-        assert_eq!(config.get("host"), Some(&"127.0.0.1".to_string()));
-        assert_eq!(config.get("port"), Some(&"5432".to_string()));
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST").unwrap(), "localhost");
+        assert_eq!(config.get("PORT").unwrap(), "8080");
+        assert_eq!(config.get("TIMEOUT").unwrap(), "30");
+        assert!(config.get("MISSING").is_none());
     }
 
     #[test]
-    fn test_validation() {
-        let mut config = Config::new();
-        config.parse_content("key1=value1\nkey2=value2").unwrap();
+    fn test_env_substitution() {
+        env::set_var("APP_SECRET", "super-secret-value");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "SECRET=${{APP_SECRET}}").unwrap();
+        writeln!(file, "PATH=/home/${{USER}}/data").unwrap();
 
-        assert!(config.validate_required(&["key1", "key2"]).is_ok());
-        assert!(config.validate_required(&["key1", "key3"]).is_err());
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("SECRET").unwrap(), "super-secret-value");
+        assert!(config.get("PATH").unwrap().contains("/home/"));
     }
 }
