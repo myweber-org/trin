@@ -100,4 +100,59 @@ fn derive_key(password: &str) -> Key<Aes256Gcm> {
     }
     
     *Key::<Aes256Gcm>::from_slice(&key_bytes)
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+/// Encrypts or decrypts a file using XOR with a given key.
+///
+/// # Arguments
+///
+/// * `input_path` - Path to the input file.
+/// * `output_path` - Path where the processed file will be saved.
+/// * `key` - The byte used as the XOR key.
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success, or an `io::Error` on failure.
+pub fn xor_file(input_path: &Path, output_path: &Path, key: u8) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    for byte in &mut buffer {
+        *byte ^= key;
+    }
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&buffer)?;
+
+    Ok(())
+}
+
+/// Example usage of the XOR file encryption function.
+fn main() -> io::Result<()> {
+    let input_path = Path::new("plaintext.txt");
+    let encrypted_path = Path::new("encrypted.bin");
+    let decrypted_path = Path::new("decrypted.txt");
+    let key = 0xAA;
+
+    // Simulate creating a dummy input file if it doesn't exist for demonstration.
+    if !input_path.exists() {
+        fs::write(input_path, b"This is a secret message.")?;
+        println!("Created dummy input file: {:?}", input_path);
+    }
+
+    println!("Encrypting file...");
+    xor_file(input_path, encrypted_path, key)?;
+    println!("File encrypted to: {:?}", encrypted_path);
+
+    println!("Decrypting file...");
+    xor_file(encrypted_path, decrypted_path, key)?;
+    println!("File decrypted to: {:?}", decrypted_path);
+
+    let decrypted_content = fs::read_to_string(decrypted_path)?;
+    println!("Decrypted content: {}", decrypted_content);
+
+    Ok(())
 }
