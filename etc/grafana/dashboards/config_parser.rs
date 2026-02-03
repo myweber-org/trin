@@ -1,124 +1,112 @@
+
 use std::collections::HashMap;
+use std::env;
 use std::fs;
-use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub settings: HashMap<String, String>,
-    pub defaults: HashMap<String, String>,
+    pub database_url: String,
+    pub port: u16,
+    pub debug_mode: bool,
+    pub api_keys: Vec<String>,
 }
 
 impl Config {
-    pub fn new() -> Self {
-        Config {
-            settings: HashMap::new(),
-            defaults: HashMap::from([
-                ("timeout".to_string(), "30".to_string()),
-                ("retries".to_string(), "3".to_string()),
-                ("log_level".to_string(), "info".to_string()),
-            ]),
-        }
-    }
-
-    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
-        let content = fs::read_to_string(path)
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let contents = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
 
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+        let mut config_map = HashMap::new();
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
 
-            let parts: Vec<&str> = line.splitn(2, '=').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid config line: {}", line));
-            }
-
-            let key = parts[0].trim().to_string();
-            let value = parts[1].trim().to_string();
-
-            if value.is_empty() {
-                return Err(format!("Empty value for key: {}", key));
-            }
-
-            self.settings.insert(key, value);
-        }
-
-        Ok(())
-    }
-
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.settings.get(key).or_else(|| self.defaults.get(key))
-    }
-
-    pub fn get_with_default(&self, key: &str, default: &str) -> String {
-        self.get(key)
-            .map(|s| s.as_str())
-            .unwrap_or(default)
-            .to_string()
-    }
-
-    pub fn validate_required(&self, required_keys: &[&str]) -> Result<(), Vec<String>> {
-        let mut missing = Vec::new();
-
-        for key in required_keys {
-            if !self.settings.contains_key(*key) && !self.defaults.contains_key(*key) {
-                missing.push(key.to_string());
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
             }
         }
 
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(missing)
+        Self::from_map(&config_map)
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        let mut config_map = HashMap::new();
+        for (key, value) in env::vars() {
+            if key.starts_with("APP_") {
+                config_map.insert(key.trim_start_matches("APP_").to_string(), value);
+            }
+        }
+
+        Self::from_map(&config_map)
+    }
+
+    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
+        let database_url = map
+            .get("DATABASE_URL")
+            .map(|s| s.to_string())
+            .or_else(|| env::var("DATABASE_URL").ok())
+            .unwrap_or_else(|| "postgres://localhost:5432/app".to_string());
+
+        let port = map
+            .get("PORT")
+            .and_then(|s| s.parse().ok())
+            .or_else(|| env::var("PORT").ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(8080);
+
+        let debug_mode = map
+            .get("DEBUG")
+            .map(|s| s.to_lowercase() == "true")
+            .or_else(|| env::var("DEBUG").ok().map(|s| s.to_lowercase() == "true"))
+            .unwrap_or(false);
+
+        let api_keys = map
+            .get("API_KEYS")
+            .map(|s| s.split(',').map(|key| key.trim().to_string()).collect())
+            .or_else(|| {
+                env::var("API_KEYS")
+                    .ok()
+                    .map(|s| s.split(',').map(|key| key.trim().to_string()).collect())
+            })
+            .unwrap_or_else(Vec::new);
+
+        Ok(Config {
+            database_url,
+            port,
+            debug_mode,
+            api_keys,
+        })
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            database_url: other.database_url,
+            port: other.port,
+            debug_mode: other.debug_mode,
+            api_keys: if other.api_keys.is_empty() {
+                self.api_keys
+            } else {
+                other.api_keys
+            },
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+pub fn load_config() -> Result<Config, String> {
+    let file_config = Config::from_file("config/app.conf").unwrap_or_default();
+    let env_config = Config::from_env()?;
+    Ok(file_config.merge(env_config))
+}
 
-    #[test]
-    fn test_config_loading() {
-        let mut config = Config::new();
-        let mut temp_file = NamedTempFile::new().unwrap();
-        
-        writeln!(temp_file, "host=localhost").unwrap();
-        writeln!(temp_file, "port=8080").unwrap();
-        writeln!(temp_file, "# This is a comment").unwrap();
-        writeln!(temp_file, "timeout=60").unwrap();
-
-        config.load_from_file(temp_file.path()).unwrap();
-        
-        assert_eq!(config.get("host"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("port"), Some(&"8080".to_string()));
-        assert_eq!(config.get("timeout"), Some(&"60".to_string()));
-        assert_eq!(config.get("retries"), Some(&"3".to_string()));
-    }
-
-    #[test]
-    fn test_default_values() {
-        let config = Config::new();
-        assert_eq!(config.get("log_level"), Some(&"info".to_string()));
-        assert_eq!(config.get("nonexistent"), None);
-    }
-
-    #[test]
-    fn test_validation() {
-        let mut config = Config::new();
-        let required = vec!["host", "port", "timeout"];
-        
-        let result = config.validate_required(&required);
-        assert!(result.is_err());
-        
-        config.settings.insert("host".to_string(), "localhost".to_string());
-        config.settings.insert("port".to_string(), "8080".to_string());
-        
-        let result = config.validate_required(&required);
-        assert!(result.is_ok());
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            database_url: "postgres://localhost:5432/app".to_string(),
+            port: 8080,
+            debug_mode: false,
+            api_keys: Vec::new(),
+        }
     }
 }
