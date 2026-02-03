@@ -258,4 +258,142 @@ mod tests {
         assert_eq!(processor.filter_by_category("type_a").len(), 2);
         assert_eq!(processor.validate_records().len(), 3);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut writer = Writer::from_path(path)?;
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    pub fn validate_records(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (index, record) in self.records.iter().enumerate() {
+            if record.name.is_empty() {
+                errors.push(format!("Record {}: Name cannot be empty", index));
+            }
+            if record.value < 0.0 {
+                errors.push(format!("Record {}: Value cannot be negative", index));
+            }
+            if record.category.is_empty() {
+                errors.push(format!("Record {}: Category cannot be empty", index));
+            }
+        }
+        errors
+    }
+
+    pub fn get_records(&self) -> &[Record] {
+        &self.records
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            category: "A".to_string(),
+        };
+        
+        processor.add_record(record.clone());
+        assert_eq!(processor.get_records().len(), 1);
+        
+        let filtered = processor.filter_by_category("A");
+        assert_eq!(filtered.len(), 1);
+        
+        let avg = processor.calculate_average();
+        assert_eq!(avg, 42.5);
+        
+        let errors = processor.validate_records();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_csv_operations() {
+        let mut processor = DataProcessor::new();
+        let record = Record {
+            id: 1,
+            name: "CSV Test".to_string(),
+            value: 100.0,
+            category: "B".to_string(),
+        };
+        
+        processor.add_record(record);
+        
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        
+        processor.save_to_csv(path).unwrap();
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path).unwrap();
+        
+        assert_eq!(new_processor.get_records().len(), 1);
+    }
 }
