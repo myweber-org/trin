@@ -1,46 +1,52 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    age: u8,
-    active: bool,
-}
-
-fn clean_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+pub fn clean_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     let input_file = File::open(input_path)?;
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(input_file);
+    let reader = BufReader::new(input_file);
+    let mut output_file = File::create(output_path)?;
 
-    let output_file = File::create(output_path)?;
-    let mut writer = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
+    for line_result in reader.lines() {
+        let line = line_result?;
+        let trimmed_line = line.trim();
 
-    for result in reader.deserialize() {
-        let mut record: Record = result?;
-        
-        record.name = record.name.trim().to_string();
-        record.age = record.age.clamp(0, 120);
-        
-        if record.name.is_empty() {
-            continue;
+        if !trimmed_line.is_empty() {
+            let cleaned_columns: Vec<String> = trimmed_line
+                .split(',')
+                .map(|col| col.trim().to_string())
+                .collect();
+
+            if cleaned_columns.iter().any(|col| !col.is_empty()) {
+                writeln!(output_file, "{}", cleaned_columns.join(","))?;
+            }
         }
-
-        writer.serialize(&record)?;
     }
 
-    writer.flush()?;
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    clean_data("input.csv", "cleaned_output.csv")?;
-    println!("Data cleaning completed successfully");
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_clean_csv() {
+        let test_input = "test_input.csv";
+        let test_output = "test_output.csv";
+
+        let test_data = "  col1, col2 , col3  \n\nvalue1, value2 , value3\n  ,,  \nlast1,last2,last3  ";
+        fs::write(test_input, test_data).unwrap();
+
+        clean_csv_file(test_input, test_output).unwrap();
+
+        let result = fs::read_to_string(test_output).unwrap();
+        let expected = "col1,col2,col3\nvalue1,value2,value3\nlast1,last2,last3\n";
+
+        assert_eq!(result, expected);
+
+        fs::remove_file(test_input).unwrap();
+        fs::remove_file(test_output).unwrap();
+    }
 }
