@@ -1,46 +1,58 @@
 
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0x55;
+const NONCE_SIZE: usize = 12;
 
-fn xor_crypt(data: &mut [u8], key: u8) {
-    for byte in data.iter_mut() {
-        *byte ^= key;
-    }
-}
+pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let key = Key::<Aes256Gcm>::generate(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
 
-fn process_file(input_path: &Path, output_path: &Path, key: u8) -> io::Result<()> {
-    let mut file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+    let mut input_file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    input_file.read_to_end(&mut plaintext)?;
 
-    xor_crypt(&mut buffer, key);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&buffer)?;
+    output_file.write_all(&ciphertext)?;
+    output_file.write_all(&key)?;
 
     Ok(())
 }
 
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        eprintln!("Usage: {} <input_file> <output_file>", args[0]);
-        std::process::exit(1);
+pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut encrypted_data = Vec::new();
+    input_file.read_to_end(&mut encrypted_data)?;
+
+    if encrypted_data.len() < 32 + NONCE_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "File too short to contain key and ciphertext",
+        ));
     }
 
-    let input_path = Path::new(&args[1]);
-    let output_path = Path::new(&args[2]);
+    let key_slice = &encrypted_data[encrypted_data.len() - 32..];
+    let ciphertext = &encrypted_data[..encrypted_data.len() - 32];
 
-    if !input_path.exists() {
-        eprintln!("Error: Input file does not exist");
-        std::process::exit(1);
-    }
+    let key = Key::<Aes256Gcm>::from_slice(key_slice);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
 
-    process_file(input_path, output_path, DEFAULT_KEY)?;
-    println!("File processed successfully with XOR key 0x{:02X}", DEFAULT_KEY);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&plaintext)?;
 
     Ok(())
 }
