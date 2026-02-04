@@ -160,3 +160,74 @@ mod tests {
         assert_eq!(result, vec!["a", "b", "c", "d"]);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataCleaner {
+    pub remove_nulls: bool,
+    pub trim_whitespace: bool,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            remove_nulls: true,
+            trim_whitespace: true,
+        }
+    }
+
+    pub fn clean_string(&self, input: Option<String>) -> Option<String> {
+        match input {
+            Some(mut s) => {
+                if self.trim_whitespace {
+                    s = s.trim().to_string();
+                }
+                if s.is_empty() && self.remove_nulls {
+                    None
+                } else {
+                    Some(s)
+                }
+            }
+            None => None,
+        }
+    }
+
+    pub fn clean_hashmap(&self, data: HashMap<String, Option<String>>) -> HashMap<String, String> {
+        data.into_iter()
+            .filter_map(|(key, value)| {
+                self.clean_string(value).map(|clean_value| (key, clean_value))
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_clean_string() {
+        let cleaner = DataCleaner::new();
+        
+        assert_eq!(cleaner.clean_string(Some("  hello  ".to_string())), Some("hello".to_string()));
+        assert_eq!(cleaner.clean_string(Some("".to_string())), None);
+        assert_eq!(cleaner.clean_string(Some("   ".to_string())), None);
+        assert_eq!(cleaner.clean_string(None), None);
+    }
+
+    #[test]
+    fn test_clean_hashmap() {
+        let cleaner = DataCleaner::new();
+        let mut input = HashMap::new();
+        input.insert("name".to_string(), Some("  john  ".to_string()));
+        input.insert("email".to_string(), Some("".to_string()));
+        input.insert("age".to_string(), None);
+        input.insert("city".to_string(), Some("new york".to_string()));
+
+        let result = cleaner.clean_hashmap(input);
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("name"), Some(&"john".to_string()));
+        assert_eq!(result.get("city"), Some(&"new york".to_string()));
+    }
+}
