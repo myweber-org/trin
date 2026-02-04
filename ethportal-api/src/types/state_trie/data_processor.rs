@@ -235,4 +235,146 @@ mod tests {
         
         assert!(result.is_err());
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_csv<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line.split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn validate_records(&self, records: &[Vec<String>]) -> Result<(), String> {
+        if records.is_empty() {
+            return Err("No records found".to_string());
+        }
+
+        let expected_len = records[0].len();
+        for (i, record) in records.iter().enumerate() {
+            if record.len() != expected_len {
+                return Err(format!("Record {} has {} fields, expected {}", 
+                    i + 1, record.len(), expected_len));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_column_averages(&self, records: &[Vec<String>]) -> Vec<f64> {
+        if records.is_empty() {
+            return Vec::new();
+        }
+
+        let num_columns = records[0].len();
+        let mut sums = vec![0.0; num_columns];
+        let mut counts = vec![0; num_columns];
+
+        for record in records {
+            for (i, field) in record.iter().enumerate() {
+                if let Ok(value) = field.parse::<f64>() {
+                    sums[i] += value;
+                    counts[i] += 1;
+                }
+            }
+        }
+
+        sums.iter().enumerate()
+            .map(|(i, &sum)| {
+                if counts[i] > 0 {
+                    sum / counts[i] as f64
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,salary").unwrap();
+        writeln!(temp_file, "Alice,30,50000.5").unwrap();
+        writeln!(temp_file, "Bob,25,45000.0").unwrap();
+        writeln!(temp_file, "Charlie,35,55000.75").unwrap();
+
+        let processor = DataProcessor::new(',', true);
+        let records = processor.process_csv(temp_file.path()).unwrap();
+        
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["Alice", "30", "50000.5"]);
+    }
+
+    #[test]
+    fn test_validation() {
+        let valid_records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+        ];
+        
+        let invalid_records = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string()],
+        ];
+
+        let processor = DataProcessor::new(',', false);
+        
+        assert!(processor.validate_records(&valid_records).is_ok());
+        assert!(processor.validate_records(&invalid_records).is_err());
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let records = vec![
+            vec!["10".to_string(), "20".to_string()],
+            vec!["20".to_string(), "30".to_string()],
+            vec!["30".to_string(), "40".to_string()],
+        ];
+
+        let processor = DataProcessor::new(',', false);
+        let averages = processor.calculate_column_averages(&records);
+        
+        assert_eq!(averages.len(), 2);
+        assert!((averages[0] - 20.0).abs() < 0.001);
+        assert!((averages[1] - 30.0).abs() < 0.001);
+    }
 }
