@@ -1,96 +1,85 @@
 
 use std::collections::HashMap;
-use std::error::Error;
 
-#[derive(Debug, Clone)]
-pub struct DataRecord {
-    id: u32,
-    values: Vec<f64>,
-    metadata: HashMap<String, String>,
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
 }
 
-impl DataRecord {
-    pub fn new(id: u32, values: Vec<f64>) -> Self {
-        Self {
-            id,
-            values,
-            metadata: HashMap::new(),
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
         }
     }
 
-    pub fn add_metadata(&mut self, key: String, value: String) {
-        self.metadata.insert(key, value);
-    }
-
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.id == 0 {
-            return Err("Invalid record ID".into());
+    pub fn process_numeric_data(&mut self, key: &str, data: Vec<f64>) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty data provided".to_string());
         }
 
-        if self.values.is_empty() {
-            return Err("Empty values vector".into());
+        if data.iter().any(|&x| x.is_nan() || x.is_infinite()) {
+            return Err("Invalid numeric values detected".to_string());
         }
 
-        for value in &self.values {
-            if value.is_nan() || value.is_infinite() {
-                return Err("Invalid numeric value detected".into());
-            }
+        let processed: Vec<f64> = data
+            .iter()
+            .map(|&x| x * 2.0)
+            .filter(|&x| x > 0.0)
+            .collect();
+
+        if processed.is_empty() {
+            return Err("All values filtered out".to_string());
         }
 
-        Ok(())
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
     }
 
-    pub fn normalize(&mut self) {
-        if let Some(max) = self.values.iter().copied().reduce(f64::max) {
-            if max != 0.0 {
-                for value in &mut self.values {
-                    *value /= max;
-                }
-            }
-        }
-    }
-}
-
-pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, Box<dyn Error>> {
-    let mut processed = Vec::new();
-
-    for record in records {
-        record.validate()?;
-        let mut processed_record = record.clone();
-        processed_record.normalize();
-        processed.push(processed_record);
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
     }
 
-    Ok(processed)
-}
-
-pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
-    let mut stats = HashMap::new();
-
-    if records.is_empty() {
-        return stats;
-    }
-
-    let value_count = records[0].values.len();
-    let mut sums = vec![0.0; value_count];
-    let mut squares = vec![0.0; value_count];
-
-    for record in records {
-        for (i, &value) in record.values.iter().enumerate() {
-            sums[i] += value;
-            squares[i] += value * value;
-        }
-    }
-
-    let n = records.len() as f64;
-    for i in 0..value_count {
-        let mean = sums[i] / n;
-        let variance = (squares[i] / n) - (mean * mean);
+    pub fn calculate_statistics(data: &[f64]) -> (f64, f64, f64) {
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+        
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        
         let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
 
-        stats.insert(format!("mean_{}", i), mean);
-        stats.insert(format!("std_dev_{}", i), std_dev);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_valid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0];
+        let result = processor.process_numeric_data("test", data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0]);
     }
 
-    stats
+    #[test]
+    fn test_process_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![f64::NAN, 1.0];
+        let result = processor.process_numeric_data("test", data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = DataProcessor::calculate_statistics(&data);
+        assert_eq!(mean, 3.0);
+        assert_eq!(variance, 2.0);
+        assert_eq!(std_dev, 2.0_f64.sqrt());
+    }
 }
