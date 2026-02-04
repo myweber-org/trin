@@ -507,3 +507,191 @@ mod tests {
         assert_eq!(filtered.len(), 3);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub struct DataProcessor {
+    validation_rules: Vec<ValidationRule>,
+    transformation_pipeline: Vec<Transformation>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_pipeline: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn add_transformation(&mut self, transformation: Transformation) {
+        self.transformation_pipeline.push(transformation);
+    }
+
+    pub fn process(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        for rule in &self.validation_rules {
+            rule.validate(record)?;
+        }
+
+        for transformation in &self.transformation_pipeline {
+            transformation.apply(record)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn batch_process(&self, records: &mut [DataRecord]) -> Vec<Result<(), ProcessingError>> {
+        records
+            .iter_mut()
+            .map(|record| self.process(record))
+            .collect()
+    }
+}
+
+pub trait ValidationRule {
+    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError>;
+}
+
+pub trait Transformation {
+    fn apply(&self, record: &mut DataRecord) -> Result<(), ProcessingError>;
+}
+
+pub struct RangeValidation {
+    pub min_value: f64,
+    pub max_value: f64,
+    pub value_index: usize,
+}
+
+impl ValidationRule for RangeValidation {
+    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if let Some(&value) = record.values.get(self.value_index) {
+            if value >= self.min_value && value <= self.max_value {
+                Ok(())
+            } else {
+                Err(ProcessingError::ValidationFailed(format!(
+                    "Value {} at index {} is outside range [{}, {}]",
+                    value, self.value_index, self.min_value, self.max_value
+                )))
+            }
+        } else {
+            Err(ProcessingError::ValidationFailed(format!(
+                "Index {} out of bounds for values array",
+                self.value_index
+            )))
+        }
+    }
+}
+
+pub struct NormalizationTransformation {
+    pub mean: f64,
+    pub std_dev: f64,
+    pub value_index: usize,
+}
+
+impl Transformation for NormalizationTransformation {
+    fn apply(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        if let Some(value) = record.values.get_mut(self.value_index) {
+            *value = (*value - self.mean) / self.std_dev;
+            Ok(())
+        } else {
+            Err(ProcessingError::TransformationError(format!(
+                "Cannot normalize value at index {}: index out of bounds",
+                self.value_index
+            )))
+        }
+    }
+}
+
+pub struct MetadataEnricher {
+    pub key: String,
+    pub value: String,
+}
+
+impl Transformation for MetadataEnricher {
+    fn apply(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        record.metadata.insert(self.key.clone(), self.value.clone());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing_pipeline() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_validation_rule(RangeValidation {
+            min_value: 0.0,
+            max_value: 100.0,
+            value_index: 0,
+        });
+
+        processor.add_transformation(NormalizationTransformation {
+            mean: 50.0,
+            std_dev: 25.0,
+            value_index: 0,
+        });
+
+        processor.add_transformation(MetadataEnricher {
+            key: "processed".to_string(),
+            value: "true".to_string(),
+        });
+
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![75.0],
+            metadata: HashMap::new(),
+        };
+
+        let result = processor.process(&mut record);
+        assert!(result.is_ok());
+        assert_eq!(record.values[0], 1.0);
+        assert_eq!(record.metadata.get("processed"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_validation_rule(RangeValidation {
+            min_value: 0.0,
+            max_value: 100.0,
+            value_index: 0,
+        });
+
+        let mut record = DataRecord {
+            id: 2,
+            timestamp: 1234567890,
+            values: vec![150.0],
+            metadata: HashMap::new(),
+        };
+
+        let result = processor.process(&mut record);
+        assert!(result.is_err());
+    }
+}
