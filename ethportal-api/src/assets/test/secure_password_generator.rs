@@ -1,43 +1,98 @@
+use rand::Rng;
+use std::io;
 
-use rand::rngs::OsRng;
-use rand::RngCore;
-use std::fmt::Write;
+const DEFAULT_LENGTH: usize = 16;
+const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
+const NUMBERS: &str = "0123456789";
+const SYMBOLS: &str = "!@#$%^&*()_+-=[]{}|;:,.<>?";
 
-const PASSWORD_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                                 abcdefghijklmnopqrstuvwxyz\
-                                 0123456789\
-                                 !@#$%^&*()_+-=[]{}|;:,.<>?";
-
-pub fn generate_secure_password(length: usize) -> Result<String, &'static str> {
-    if length < 8 {
-        return Err("Password length must be at least 8 characters");
-    }
-    
-    let mut rng = OsRng;
-    let mut password = String::with_capacity(length);
-    
-    for _ in 0..length {
-        let mut random_bytes = [0u8; 4];
-        rng.fill_bytes(&mut random_bytes);
-        
-        let index = u32::from_le_bytes(random_bytes) as usize % PASSWORD_CHARSET.len();
-        password.push(PASSWORD_CHARSET[index] as char);
-    }
-    
-    Ok(password)
+struct PasswordConfig {
+    length: usize,
+    use_uppercase: bool,
+    use_lowercase: bool,
+    use_numbers: bool,
+    use_symbols: bool,
 }
 
-pub fn validate_password_strength(password: &str) -> bool {
-    if password.len() < 8 {
-        return false;
+impl Default for PasswordConfig {
+    fn default() -> Self {
+        Self {
+            length: DEFAULT_LENGTH,
+            use_uppercase: true,
+            use_lowercase: true,
+            use_numbers: true,
+            use_symbols: true,
+        }
+    }
+}
+
+fn generate_password(config: &PasswordConfig) -> String {
+    let mut character_pool = String::new();
+    
+    if config.use_uppercase {
+        character_pool.push_str(UPPERCASE);
+    }
+    if config.use_lowercase {
+        character_pool.push_str(LOWERCASE);
+    }
+    if config.use_numbers {
+        character_pool.push_str(NUMBERS);
+    }
+    if config.use_symbols {
+        character_pool.push_str(SYMBOLS);
     }
     
-    let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
-    let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
-    let has_digit = password.chars().any(|c| c.is_ascii_digit());
-    let has_special = password.chars().any(|c| 
-        PASSWORD_CHARSET[62..].contains(&(c as u8))
-    );
+    if character_pool.is_empty() {
+        return String::from("Error: No character sets selected");
+    }
     
-    has_upper && has_lower && has_digit && has_special
+    let mut rng = rand::thread_rng();
+    let password: String = (0..config.length)
+        .map(|_| {
+            let idx = rng.gen_range(0..character_pool.len());
+            character_pool.chars().nth(idx).unwrap()
+        })
+        .collect();
+    
+    password
+}
+
+fn get_user_input(prompt: &str) -> String {
+    println!("{}", prompt);
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).expect("Failed to read line");
+    input.trim().to_string()
+}
+
+fn parse_bool_input(input: &str) -> bool {
+    match input.to_lowercase().as_str() {
+        "y" | "yes" | "true" | "1" => true,
+        _ => false,
+    }
+}
+
+fn main() {
+    println!("=== Secure Password Generator ===");
+    
+    let length_input = get_user_input(&format!("Password length (default: {}):", DEFAULT_LENGTH));
+    let length = if length_input.is_empty() {
+        DEFAULT_LENGTH
+    } else {
+        length_input.parse().unwrap_or(DEFAULT_LENGTH)
+    };
+    
+    let mut config = PasswordConfig {
+        length,
+        ..Default::default()
+    };
+    
+    config.use_uppercase = parse_bool_input(&get_user_input("Include uppercase letters? (Y/n):"));
+    config.use_lowercase = parse_bool_input(&get_user_input("Include lowercase letters? (Y/n):"));
+    config.use_numbers = parse_bool_input(&get_user_input("Include numbers? (Y/n):"));
+    config.use_symbols = parse_bool_input(&get_user_input("Include symbols? (Y/n):"));
+    
+    let password = generate_password(&config);
+    println!("\nGenerated Password: {}", password);
+    println!("Password Length: {}", password.len());
 }
