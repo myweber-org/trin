@@ -478,3 +478,175 @@ mod tests {
         assert_eq!(processor.record_count(), 0);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+pub struct ValidationRule {
+    min_value: Option<f64>,
+    max_value: Option<f64>,
+    required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: &str, values: Vec<f64>) {
+        self.data.insert(key.to_string(), values);
+    }
+
+    pub fn set_validation_rule(&mut self, key: &str, rule: ValidationRule) {
+        self.validation_rules.insert(key.to_string(), rule);
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for (key, rule) in &self.validation_rules {
+            if rule.required {
+                if !self.data.contains_key(key) {
+                    return Err(format!("Required dataset '{}' is missing", key));
+                }
+            }
+
+            if let Some(values) = self.data.get(key) {
+                for &value in values {
+                    if let Some(min) = rule.min_value {
+                        if value < min {
+                            return Err(format!("Value {} in dataset '{}' is below minimum {}", value, key, min));
+                        }
+                    }
+                    
+                    if let Some(max) = rule.max_value {
+                        if value > max {
+                            return Err(format!("Value {} in dataset '{}' exceeds maximum {}", value, key, max));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn normalize(&mut self, key: &str) -> Result<Vec<f64>, String> {
+        let values = self.data.get(key)
+            .ok_or_else(|| format!("Dataset '{}' not found", key))?;
+        
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        
+        if (max - min).abs() < f64::EPSILON {
+            return Ok(vec![0.0; values.len()]);
+        }
+
+        let normalized: Vec<f64> = values.iter()
+            .map(|&v| (v - min) / (max - min))
+            .collect();
+
+        Ok(normalized)
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Result<Statistics, String> {
+        let values = self.data.get(key)
+            .ok_or_else(|| format!("Dataset '{}' not found", key))?;
+
+        if values.is_empty() {
+            return Err("Dataset is empty".to_string());
+        }
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / values.len() as f64;
+        
+        Ok(Statistics {
+            count: values.len(),
+            mean,
+            variance,
+            std_dev: variance.sqrt(),
+        })
+    }
+}
+
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+impl ValidationRule {
+    pub fn new() -> Self {
+        ValidationRule {
+            min_value: None,
+            max_value: None,
+            required: false,
+        }
+    }
+
+    pub fn with_min(mut self, min: f64) -> Self {
+        self.min_value = Some(min);
+        self
+    }
+
+    pub fn with_max(mut self, max: f64) -> Self {
+        self.max_value = Some(max);
+        self
+    }
+
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("temperatures", vec![20.5, 22.1, 19.8, 25.3]);
+        
+        let rule = ValidationRule::new()
+            .with_min(15.0)
+            .with_max(30.0)
+            .required();
+        
+        processor.set_validation_rule("temperatures", rule);
+        
+        assert!(processor.validate().is_ok());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("scores", vec![10.0, 20.0, 30.0, 40.0]);
+        
+        let normalized = processor.normalize("scores").unwrap();
+        assert_eq!(normalized, vec![0.0, 0.3333333333333333, 0.6666666666666666, 1.0]);
+    }
+
+    #[test]
+    fn test_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("values", vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        
+        let stats = processor.calculate_statistics("values").unwrap();
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.variance, 2.0);
+        assert_eq!(stats.std_dev, 2.0f64.sqrt());
+    }
+}
