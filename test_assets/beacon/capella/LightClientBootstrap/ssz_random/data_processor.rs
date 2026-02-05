@@ -73,3 +73,88 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let processed = Self::normalize_data(values);
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    fn normalize_data(values: &[f64]) -> Vec<f64> {
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max - min;
+
+        if range.abs() < f64::EPSILON {
+            return vec![0.0; values.len()];
+        }
+
+        values
+            .iter()
+            .map(|&v| (v - min) / range)
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<(f64, f64, f64)> {
+        self.cache.get(key).map(|values| {
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            let variance = values.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64;
+            let std_dev = variance.sqrt();
+            (mean, variance, std_dev)
+        })
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_data() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = DataProcessor::normalize_data(&data);
+        assert_eq!(normalized, vec![0.0, 0.25, 0.5, 0.75, 1.0]);
+    }
+
+    #[test]
+    fn test_empty_data_error() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_numeric_data("test", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_functionality() {
+        let mut processor = DataProcessor::new();
+        let data = vec![10.0, 20.0, 30.0];
+        
+        let first_result = processor.process_numeric_data("dataset1", &data).unwrap();
+        let second_result = processor.process_numeric_data("dataset1", &data).unwrap();
+        
+        assert_eq!(first_result, second_result);
+    }
+}
