@@ -625,3 +625,150 @@ mod tests {
         assert_eq!(normalized[3], 1.0);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new(rules: ValidationRules) -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: rules,
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if !self.validation_rules.required_keys.contains(&key) {
+            return Err(format!("Key '{}' is not in required keys list", key));
+        }
+
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} is outside allowed range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
+        }
+
+        self.data.insert(key, values);
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> HashMap<String, Statistics> {
+        let mut stats = HashMap::new();
+        
+        for (key, values) in &self.data {
+            if values.is_empty() {
+                stats.insert(key.clone(), Statistics::default());
+                continue;
+            }
+
+            let sum: f64 = values.iter().sum();
+            let mean = sum / values.len() as f64;
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / values.len() as f64;
+            let std_dev = variance.sqrt();
+
+            let sorted_values = {
+                let mut sorted = values.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                sorted
+            };
+
+            let median = if sorted_values.len() % 2 == 0 {
+                let mid = sorted_values.len() / 2;
+                (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
+            } else {
+                sorted_values[sorted_values.len() / 2]
+            };
+
+            stats.insert(key.clone(), Statistics {
+                count: values.len(),
+                mean,
+                median,
+                std_dev,
+                min: *values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+                max: *values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            });
+        }
+        
+        stats
+    }
+
+    pub fn normalize_data(&mut self) {
+        for values in self.data.values_mut() {
+            if values.is_empty() {
+                continue;
+            }
+
+            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            
+            if (max - min).abs() > f64::EPSILON {
+                for value in values.iter_mut() {
+                    *value = (*value - min) / (max - min);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub median: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl ValidationRules {
+    pub fn new(min_value: f64, max_value: f64, required_keys: Vec<String>) -> Self {
+        ValidationRules {
+            min_value,
+            max_value,
+            required_keys,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let rules = ValidationRules::new(
+            0.0,
+            100.0,
+            vec!["temperature".to_string(), "humidity".to_string()]
+        );
+        
+        let mut processor = DataProcessor::new(rules);
+        
+        assert!(processor.add_dataset(
+            "temperature".to_string(),
+            vec![20.5, 22.3, 19.8, 25.1]
+        ).is_ok());
+        
+        assert!(processor.add_dataset(
+            "pressure".to_string(),
+            vec![1013.25, 1012.8]
+        ).is_err());
+        
+        let stats = processor.calculate_statistics();
+        assert!(stats.contains_key("temperature"));
+        
+        processor.normalize_data();
+    }
+}
