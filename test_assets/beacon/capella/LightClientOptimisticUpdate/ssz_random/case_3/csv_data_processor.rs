@@ -147,3 +147,127 @@ mod tests {
         assert_eq!(filtered[1][0], "Charlie");
     }
 }
+use std::error::Error;
+use std::fs::File;
+use csv::{ReaderBuilder, WriterBuilder};
+
+#[derive(Debug, Clone)]
+struct DataRecord {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+impl DataRecord {
+    fn new(id: u32, name: &str, category: &str, value: f64, active: bool) -> Self {
+        Self {
+            id,
+            name: name.to_string(),
+            category: category.to_string(),
+            value,
+            active,
+        }
+    }
+}
+
+struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    fn filter_by_category(&self, category: &str) -> Vec<DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category && r.active)
+            .cloned()
+            .collect()
+    }
+
+    fn calculate_average_value(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    fn find_max_value_record(&self) -> Option<DataRecord> {
+        self.records
+            .iter()
+            .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+            .cloned()
+    }
+
+    fn save_filtered_to_csv(&self, category: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let filtered = self.filter_by_category(category);
+        let file = File::create(output_path)?;
+        let mut wtr = WriterBuilder::new().from_writer(file);
+
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
+
+    fn remove_inactive_records(&mut self) {
+        self.records.retain(|r| r.active);
+    }
+}
+
+fn process_sample_data() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+
+    processor.add_record(DataRecord::new(1, "ItemA", "Electronics", 299.99, true));
+    processor.add_record(DataRecord::new(2, "ItemB", "Books", 24.50, true));
+    processor.add_record(DataRecord::new(3, "ItemC", "Electronics", 159.75, false));
+    processor.add_record(DataRecord::new(4, "ItemD", "Clothing", 45.00, true));
+    processor.add_record(DataRecord::new(5, "ItemE", "Electronics", 399.99, true));
+
+    let electronics = processor.filter_by_category("Electronics");
+    println!("Found {} electronics items", electronics.len());
+
+    let avg_value = processor.calculate_average_value();
+    println!("Average value: {:.2}", avg_value);
+
+    if let Some(max_record) = processor.find_max_value_record() {
+        println!("Max value record: {:?}", max_record);
+    }
+
+    processor.remove_inactive_records();
+    println!("Active records count: {}", processor.records.len());
+
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = process_sample_data() {
+        eprintln!("Processing error: {}", e);
+    }
+}
