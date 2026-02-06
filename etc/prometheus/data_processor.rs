@@ -295,3 +295,173 @@ mod tests {
         assert!(output_content.contains("ItemC"));
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    EmptyName,
+    UnknownCategory,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::EmptyName => write!(f, "Name cannot be empty"),
+            DataError::UnknownCategory => write!(f, "Category not recognized"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    valid_categories: Vec<String>,
+    records: HashMap<u32, DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new(categories: Vec<String>) -> Self {
+        DataProcessor {
+            valid_categories: categories,
+            records: HashMap::new(),
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if record.name.trim().is_empty() {
+            return Err(DataError::EmptyName);
+        }
+        
+        if record.value < 0.0 || record.value > 1000.0 {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if !self.valid_categories.contains(&record.category) {
+            return Err(DataError::UnknownCategory);
+        }
+        
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        self.validate_record(&record)?;
+        
+        if self.records.contains_key(&record.id) {
+            return Err(DataError::InvalidId);
+        }
+        
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn calculate_average(&self, category: &str) -> Option<f64> {
+        let filtered_records: Vec<&DataRecord> = self.records
+            .values()
+            .filter(|r| r.category == category)
+            .collect();
+        
+        if filtered_records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = filtered_records.iter().map(|r| r.value).sum();
+        Some(sum / filtered_records.len() as f64)
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F) 
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in self.records.values_mut() {
+            record.value = transform_fn(record.value);
+        }
+    }
+
+    pub fn get_records_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn total_records(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let categories = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let processor = DataProcessor::new(categories);
+        
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let categories = vec!["A".to_string()];
+        let processor = DataProcessor::new(categories);
+        
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+        
+        assert!(matches!(processor.validate_record(&record), Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let categories = vec!["A".to_string(), "B".to_string()];
+        let mut processor = DataProcessor::new(categories);
+        
+        let records = vec![
+            DataRecord { id: 1, name: "R1".to_string(), value: 50.0, category: "A".to_string() },
+            DataRecord { id: 2, name: "R2".to_string(), value: 100.0, category: "A".to_string() },
+            DataRecord { id: 3, name: "R3".to_string(), value: 150.0, category: "B".to_string() },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        assert_eq!(processor.calculate_average("A"), Some(75.0));
+        assert_eq!(processor.calculate_average("B"), Some(150.0));
+        assert_eq!(processor.calculate_average("C"), None);
+    }
+}
