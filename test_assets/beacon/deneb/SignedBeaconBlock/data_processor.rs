@@ -170,3 +170,157 @@ mod tests {
         assert_eq!(new_processor.calculate_average(), Some(15.0));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid timestamp: {0}")]
+    InvalidTimestamp(i64),
+    #[error("Empty values array")]
+    EmptyValues,
+    #[error("NaN value detected at index {0}")]
+    NaNValue(usize),
+    #[error("Duplicate record ID: {0}")]
+    DuplicateId(u64),
+}
+
+pub struct DataProcessor {
+    processed_ids: std::collections::HashSet<u64>,
+    stats: ProcessingStats,
+}
+
+#[derive(Debug, Default)]
+pub struct ProcessingStats {
+    pub total_records: u64,
+    pub valid_records: u64,
+    pub invalid_records: u64,
+    pub total_values: u64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            processed_ids: std::collections::HashSet::new(),
+            stats: ProcessingStats::default(),
+        }
+    }
+
+    pub fn process_record(&mut self, record: &DataRecord) -> Result<(), DataError> {
+        self.stats.total_records += 1;
+
+        if self.processed_ids.contains(&record.id) {
+            self.stats.invalid_records += 1;
+            return Err(DataError::DuplicateId(record.id));
+        }
+
+        self.validate_record(record)?;
+
+        self.processed_ids.insert(record.id);
+        self.stats.valid_records += 1;
+        self.stats.total_values += record.values.len() as u64;
+
+        Ok(())
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.timestamp < 0 {
+            return Err(DataError::InvalidTimestamp(record.timestamp));
+        }
+
+        if record.values.is_empty() {
+            return Err(DataError::EmptyValues);
+        }
+
+        for (index, &value) in record.values.iter().enumerate() {
+            if value.is_nan() {
+                return Err(DataError::NaNValue(index));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, values: &[f64]) -> Vec<f64> {
+        if values.is_empty() {
+            return Vec::new();
+        }
+
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max - min;
+
+        if range.abs() < f64::EPSILON {
+            return vec![0.0; values.len()];
+        }
+
+        values
+            .iter()
+            .map(|&v| (v - min) / range)
+            .collect()
+    }
+
+    pub fn get_stats(&self) -> &ProcessingStats {
+        &self.stats
+    }
+
+    pub fn reset(&mut self) {
+        self.processed_ids.clear();
+        self.stats = ProcessingStats::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_processing() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.process_record(&record).is_ok());
+        assert_eq!(processor.get_stats().valid_records, 1);
+        assert_eq!(processor.get_stats().total_values, 3);
+    }
+
+    #[test]
+    fn test_duplicate_id() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.process_record(&record).is_ok());
+        assert!(processor.process_record(&record).is_err());
+        assert_eq!(processor.get_stats().invalid_records, 1);
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let processor = DataProcessor::new();
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = processor.normalize_values(&values);
+
+        assert_eq!(normalized[0], 0.0);
+        assert_eq!(normalized[4], 1.0);
+        assert!(normalized[2] > 0.4 && normalized[2] < 0.6);
+    }
+}
