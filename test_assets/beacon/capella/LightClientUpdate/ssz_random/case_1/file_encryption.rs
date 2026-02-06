@@ -200,4 +200,50 @@ mod tests {
         
         assert_eq!(plaintext.to_vec(), decrypted);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce,
+};
+use rand::rngs::OsRng;
+use rand::RngCore;
+
+pub fn encrypt_file(data: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes for AES-256".to_string());
+    }
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+
+    cipher
+        .encrypt(Nonce::from_slice(&nonce), data)
+        .map(|mut ciphertext| {
+            ciphertext.extend_from_slice(&nonce);
+            ciphertext
+        })
+        .map_err(|e| format!("Encryption failed: {}", e))
+}
+
+pub fn decrypt_file(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes for AES-256".to_string());
+    }
+
+    if ciphertext.len() < 12 {
+        return Err("Ciphertext too short".to_string());
+    }
+
+    let (data, nonce_bytes) = ciphertext.split_at(ciphertext.len() - 12);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+
+    cipher
+        .decrypt(Nonce::from_slice(nonce_bytes), data)
+        .map_err(|e| format!("Decryption failed: {}", e))
+}
+
+pub fn generate_key() -> Vec<u8> {
+    let mut key = vec![0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
 }
