@@ -1,62 +1,69 @@
-use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::fs;
+use serde_json::{Value, from_reader, to_writer_pretty};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Result};
 use std::path::Path;
 
-pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn merge_json_files(input_paths: &[&str], output_path: &str) -> Result<()> {
     let mut merged_array = Vec::new();
-    let mut seen_ids = HashMap::new();
 
-    for file_path in file_paths {
-        let content = fs::read_to_string(file_path)?;
-        let json_value: Value = serde_json::from_str(&content)?;
+    for input_path in input_paths {
+        let path = Path::new(input_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} does not exist, skipping.", input_path);
+            continue;
+        }
 
-        if let Value::Array(arr) = json_value {
-            for item in arr {
-                if let Some(obj) = item.as_object() {
-                    if let Some(id_value) = obj.get("id") {
-                        if let Some(id_str) = id_value.as_str() {
-                            if seen_ids.contains_key(id_str) {
-                                eprintln!("Duplicate ID '{}' found in {}", id_str, file_path);
-                                continue;
-                            }
-                            seen_ids.insert(id_str.to_string(), ());
-                        }
-                    }
-                }
-                merged_array.push(item);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = from_reader(reader)?;
+
+        match json_value {
+            Value::Array(arr) => {
+                merged_array.extend(arr);
             }
-        } else {
-            return Err("Each JSON file must contain a JSON array".into());
+            _ => {
+                merged_array.push(json_value);
+            }
         }
     }
 
-    let output_json = json!(merged_array);
-    fs::write(output_path, output_json.to_string())?;
-    println!("Successfully merged {} files into {}", file_paths.len(), output_path);
+    let output_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(output_path)?;
+
+    to_writer_pretty(output_file, &merged_array)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
+    use serde_json::json;
+    use std::fs;
 
     #[test]
     fn test_merge_json_files() {
-        let file1 = NamedTempFile::new().unwrap();
-        let file2 = NamedTempFile::new().unwrap();
-        let output_file = NamedTempFile::new().unwrap();
+        let file1_content = json!([{"id": 1}, {"id": 2}]);
+        let file2_content = json!([{"id": 3}, {"id": 4}]);
+        let file3_content = json!({"id": 5});
 
-        fs::write(file1.path(), r#"[{"id": "1", "name": "Alice"}, {"id": "2", "name": "Bob"}]"#).unwrap();
-        fs::write(file2.path(), r#"[{"id": "3", "name": "Charlie"}]"#).unwrap();
+        fs::write("test1.json", file1_content.to_string()).unwrap();
+        fs::write("test2.json", file2_content.to_string()).unwrap();
+        fs::write("test3.json", file3_content.to_string()).unwrap();
 
-        let paths = vec![file1.path().to_str().unwrap(), file2.path().to_str().unwrap()];
-        let result = merge_json_files(&paths, output_file.path().to_str().unwrap());
+        let inputs = ["test1.json", "test2.json", "test3.json"];
+        merge_json_files(&inputs, "merged_output.json").unwrap();
 
-        assert!(result.is_ok());
-        let output_content = fs::read_to_string(output_file.path()).unwrap();
-        let parsed: Value = serde_json::from_str(&output_content).unwrap();
-        assert_eq!(parsed.as_array().unwrap().len(), 3);
+        let merged_content: Value = from_reader(File::open("merged_output.json").unwrap()).unwrap();
+        let expected = json!([{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}]);
+
+        assert_eq!(merged_content, expected);
+
+        fs::remove_file("test1.json").unwrap();
+        fs::remove_file("test2.json").unwrap();
+        fs::remove_file("test3.json").unwrap();
+        fs::remove_file("merged_output.json").unwrap();
     }
 }
