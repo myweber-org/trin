@@ -310,3 +310,85 @@ mod tests {
         assert!(matches!(result, Err(ProcessingError::DuplicateId(1))));
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
+}
+
+pub fn process_csv_file(input_path: &str, output_path: &str) -> Result<usize, Box<dyn Error>> {
+    let path = Path::new(input_path);
+    if !path.exists() {
+        return Err("Input file does not exist".into());
+    }
+
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(input_path)?;
+
+    let mut valid_records = Vec::new();
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        if record.is_valid() {
+            valid_records.push(record);
+        }
+    }
+
+    if valid_records.is_empty() {
+        return Err("No valid records found".into());
+    }
+
+    let mut writer = WriterBuilder::new()
+        .has_headers(true)
+        .from_path(output_path)?;
+
+    let mut processed_count = 0;
+    for record in valid_records {
+        writer.serialize(&record)?;
+        processed_count += 1;
+    }
+
+    writer.flush()?;
+    Ok(processed_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -50.0,
+            category: "".to_string(),
+        };
+        assert!(!record.is_valid());
+    }
+}
