@@ -272,3 +272,81 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0xAA;
+
+fn xor_cipher(data: &mut [u8], key: u8) {
+    for byte in data.iter_mut() {
+        *byte ^= key;
+    }
+}
+
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let mut content = fs::read(input_path)?;
+    xor_cipher(&mut content, key);
+    fs::write(output_path, content)
+}
+
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 4 {
+        eprintln!("Usage: {} <encrypt|decrypt> <input> <output> [key]", args[0]);
+        std::process::exit(1);
+    }
+
+    let operation = &args[1];
+    let input_path = Path::new(&args[2]);
+    let output_path = Path::new(&args[3]);
+    let key = args.get(4).and_then(|k| k.parse::<u8>().ok());
+
+    match operation.as_str() {
+        "encrypt" => encrypt_file(input_path, output_path, key),
+        "decrypt" => decrypt_file(input_path, output_path, key),
+        _ => {
+            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'.");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher() {
+        let mut data = vec![0x00, 0xFF, 0x55, 0xAA];
+        xor_cipher(&mut data, 0xAA);
+        assert_eq!(data, vec![0xAA, 0x55, 0xFF, 0x00]);
+        xor_cipher(&mut data, 0xAA);
+        assert_eq!(data, vec![0x00, 0xFF, 0x55, 0xAA]);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_cycle() -> io::Result<()> {
+        let original_content = b"Secret data for testing";
+        let mut input_file = NamedTempFile::new()?;
+        input_file.write_all(original_content)?;
+
+        let encrypted_file = NamedTempFile::new()?;
+        let decrypted_file = NamedTempFile::new()?;
+
+        encrypt_file(input_file.path(), encrypted_file.path(), Some(0xCC))?;
+        decrypt_file(encrypted_file.path(), decrypted_file.path(), Some(0xCC))?;
+
+        let restored_content = fs::read(decrypted_file.path())?;
+        assert_eq!(original_content.as_slice(), restored_content.as_slice());
+        Ok(())
+    }
+}
