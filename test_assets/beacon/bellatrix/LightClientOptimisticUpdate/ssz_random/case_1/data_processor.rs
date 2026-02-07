@@ -345,4 +345,82 @@ mod tests {
         let updated = processor.get_record(1).unwrap();
         assert_eq!(updated.value, 20.0);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    age: u8,
+    active: bool,
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    fn load_from_csv(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    fn filter_by_age(&self, min_age: u8) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.age >= min_age)
+            .collect()
+    }
+
+    fn save_filtered_to_csv(&self, filtered: Vec<&Record>, output_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(output_path)?;
+        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
+
+        for record in filtered {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    fn calculate_average_age(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let total: u32 = self.records.iter().map(|r| r.age as u32).sum();
+        Some(total as f64 / self.records.len() as f64)
+    }
+}
+
+fn process_data() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.load_from_csv("input.csv")?;
+    
+    let filtered = processor.filter_by_age(25);
+    processor.save_filtered_to_csv(filtered, "output.csv")?;
+    
+    if let Some(avg_age) = processor.calculate_average_age() {
+        println!("Average age: {:.2}", avg_age);
+    }
+    
+    Ok(())
 }
