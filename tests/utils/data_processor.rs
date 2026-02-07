@@ -797,3 +797,255 @@ mod tests {
         assert!(processor.find_by_id(999).is_none());
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+    #[error("Transformation failed: {0}")]
+    TransformationFailed(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::InvalidFormat);
+        }
+        
+        if self.timestamp < 0 {
+            return Err(ProcessingError::OutOfRange("timestamp".to_string()));
+        }
+        
+        if self.values.is_empty() {
+            return Err(ProcessingError::MissingField("values".to_string()));
+        }
+        
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(ProcessingError::InvalidFormat);
+            }
+            
+            if !value.is_finite() {
+                return Err(ProcessingError::OutOfRange(format!("value for {}", key)));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        if !multiplier.is_finite() || multiplier == 0.0 {
+            return Err(ProcessingError::TransformationFailed(
+                "Invalid multiplier".to_string()
+            ));
+        }
+        
+        for value in self.values.values_mut() {
+            *value *= multiplier;
+            
+            if !value.is_finite() {
+                return Err(ProcessingError::TransformationFailed(
+                    "Result is not finite".to_string()
+                ));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn calculate_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if self.values.is_empty() {
+            return stats;
+        }
+        
+        let count = self.values.len() as f64;
+        let sum: f64 = self.values.values().sum();
+        let avg = sum / count;
+        
+        let variance: f64 = self.values.values()
+            .map(|v| (v - avg).powi(2))
+            .sum::<f64>() / count;
+        
+        stats.insert("count".to_string(), count);
+        stats.insert("sum".to_string(), sum);
+        stats.insert("average".to_string(), avg);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("std_dev".to_string(), variance.sqrt());
+        
+        if let Some(min) = self.values.values().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+            stats.insert("min".to_string(), *min);
+        }
+        
+        if let Some(max) = self.values.values().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+            stats.insert("max".to_string(), *max);
+        }
+        
+        stats
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    transformation_history: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            transformation_history: Vec::new(),
+        }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+    
+    pub fn process_all(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        for record in &mut self.records {
+            record.transform(multiplier)?;
+        }
+        
+        self.transformation_history.push(
+            format!("Applied multiplier: {}", multiplier)
+        );
+        
+        Ok(())
+    }
+    
+    pub fn get_summary(&self) -> HashMap<String, f64> {
+        let mut summary = HashMap::new();
+        
+        if self.records.is_empty() {
+            return summary;
+        }
+        
+        let total_records = self.records.len() as f64;
+        let mut total_values = 0.0;
+        let mut all_stats = Vec::new();
+        
+        for record in &self.records {
+            let stats = record.calculate_statistics();
+            total_values += stats.get("count").unwrap_or(&0.0);
+            all_stats.push(stats);
+        }
+        
+        summary.insert("total_records".to_string(), total_records);
+        summary.insert("total_values".to_string(), total_values);
+        summary.insert("avg_values_per_record".to_string(), total_values / total_records);
+        
+        if !all_stats.is_empty() {
+            let avg_avg: f64 = all_stats.iter()
+                .filter_map(|s| s.get("average"))
+                .sum::<f64>() / all_stats.len() as f64;
+            
+            summary.insert("overall_average".to_string(), avg_avg);
+        }
+        
+        summary
+    }
+    
+    pub fn get_transformation_history(&self) -> &[String] {
+        &self.transformation_history
+    }
+    
+    pub fn clear(&mut self) {
+        self.records.clear();
+        self.transformation_history.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([
+                ("temperature".to_string(), 25.5),
+                ("humidity".to_string(), 60.0),
+            ]),
+            metadata: None,
+        };
+        
+        assert!(record.validate().is_ok());
+        
+        record.id = 0;
+        assert!(record.validate().is_err());
+        
+        record.id = 1;
+        record.values.clear();
+        assert!(record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::from([
+                ("value1".to_string(), 10.0),
+                ("value2".to_string(), 20.0),
+            ]),
+            metadata: None,
+        };
+        
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.values.get("value1"), Some(&20.0));
+        assert_eq!(record.values.get("value2"), Some(&40.0));
+        
+        assert!(record.transform(0.0).is_err());
+        assert!(record.transform(f64::NAN).is_err());
+    }
+    
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: HashMap::from([("a".to_string(), 1.0)]),
+            metadata: None,
+        };
+        
+        let record2 = DataRecord {
+            id: 2,
+            timestamp: 2000,
+            values: HashMap::from([("b".to_string(), 2.0)]),
+            metadata: None,
+        };
+        
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        
+        assert!(processor.process_all(3.0).is_ok());
+        
+        let summary = processor.get_summary();
+        assert_eq!(summary.get("total_records"), Some(&2.0));
+        
+        assert_eq!(processor.get_transformation_history().len(), 1);
+    }
+}
