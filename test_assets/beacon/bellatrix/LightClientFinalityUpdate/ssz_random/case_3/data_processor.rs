@@ -291,3 +291,140 @@ mod tests {
         assert_eq!(found.unwrap().name, "ItemB");
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    EmptyCategory,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::EmptyCategory => write!(f, "Category cannot be empty"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: &str) -> Result<Self, ValidationError> {
+        if id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if value < 0.0 || value > 1000.0 {
+            return Err(ValidationError::InvalidValue);
+        }
+        
+        if category.trim().is_empty() {
+            return Err(ValidationError::EmptyCategory);
+        }
+        
+        Ok(DataRecord {
+            id,
+            value,
+            category: category.to_string(),
+        })
+    }
+    
+    pub fn transform(&self, multiplier: f64) -> Option<f64> {
+        if multiplier <= 0.0 {
+            return None;
+        }
+        
+        let transformed_value = self.value * multiplier;
+        
+        if transformed_value.is_nan() || transformed_value.is_infinite() {
+            return None;
+        }
+        
+        Some(transformed_value)
+    }
+    
+    pub fn normalize(&self, max_value: f64) -> Option<f64> {
+        if max_value <= 0.0 || self.value > max_value {
+            return None;
+        }
+        
+        Some(self.value / max_value)
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Vec<f64> {
+    records
+        .iter()
+        .filter_map(|record| record.normalize(1000.0))
+        .collect()
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = records
+        .iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 500.0, "analytics").unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 500.0);
+        assert_eq!(record.category, "analytics");
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let result = DataRecord::new(0, 500.0, "analytics");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ValidationError::InvalidId));
+    }
+    
+    #[test]
+    fn test_transform_valid() {
+        let record = DataRecord::new(1, 100.0, "test").unwrap();
+        let transformed = record.transform(2.5);
+        assert_eq!(transformed, Some(250.0));
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord::new(1, 200.0, "a").unwrap(),
+            DataRecord::new(2, 400.0, "b").unwrap(),
+            DataRecord::new(3, 600.0, "c").unwrap(),
+        ];
+        
+        let normalized = process_records(&records);
+        assert_eq!(normalized, vec![0.2, 0.4, 0.6]);
+    }
+}
