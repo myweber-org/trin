@@ -420,4 +420,100 @@ mod tests {
         assert_eq!(*max, 20.0);
         assert_eq!(*avg, 15.0);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        let mut count = 0;
+
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.validate_record(&record)?;
+            self.records.push(record);
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    fn validate_record(&self, record: &Record) -> Result<(), String> {
+        if record.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
+        }
+        if record.value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.active)
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|r| r.value)
+            .sum()
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records
+            .iter()
+            .find(|r| r.id == id)
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,active").unwrap();
+        writeln!(temp_file, "1,Test1,100.5,true").unwrap();
+        writeln!(temp_file, "2,Test2,200.0,false").unwrap();
+        
+        let count = processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(processor.record_count(), 2);
+        assert_eq!(processor.filter_active().len(), 1);
+        assert_eq!(processor.calculate_total(), 300.5);
+        assert!(processor.find_by_id(1).is_some());
+        assert!(processor.find_by_id(3).is_none());
+    }
 }
