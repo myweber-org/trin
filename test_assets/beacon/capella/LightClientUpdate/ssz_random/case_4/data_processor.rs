@@ -1,98 +1,256 @@
 
+use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue(f64),
+    InvalidTimestamp(i64),
+    EmptyCategory,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            ProcessingError::InvalidTimestamp(t) => write!(f, "Invalid timestamp: {}", t),
+            ProcessingError::EmptyCategory => write!(f, "Category cannot be empty"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
 
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    min_value: f64,
+    max_value: f64,
+    allowed_categories: Vec<String>,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
+    pub fn new(min_value: f64, max_value: f64, allowed_categories: Vec<String>) -> Self {
         DataProcessor {
-            delimiter,
-            has_header,
+            min_value,
+            max_value,
+            allowed_categories,
         }
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
-
-        if self.has_header {
-            lines.next();
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value < self.min_value || record.value > self.max_value {
+            return Err(ProcessingError::InvalidValue(record.value));
         }
 
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
-                records.push(fields);
-            }
+        if record.timestamp < 0 {
+            return Err(ProcessingError::InvalidTimestamp(record.timestamp));
         }
 
-        Ok(records)
+        if record.category.is_empty() {
+            return Err(ProcessingError::EmptyCategory);
+        }
+
+        if !self.allowed_categories.contains(&record.category) {
+            return Err(ProcessingError::ValidationFailed(format!(
+                "Category '{}' not allowed",
+                record.category
+            )));
+        }
+
+        Ok(())
     }
 
-    pub fn validate_record(&self, record: &[String], expected_fields: usize) -> bool {
-        record.len() == expected_fields && 
-        record.iter().all(|field| !field.is_empty())
+    pub fn normalize_value(&self, value: f64) -> f64 {
+        (value - self.min_value) / (self.max_value - self.min_value)
     }
 
-    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
-        data.iter()
-            .filter_map(|record| record.get(column_index).cloned())
+    pub fn process_records(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut processed = Vec::with_capacity(records.len());
+
+        for record in records {
+            self.validate_record(&record)?;
+
+            let normalized_value = self.normalize_value(record.value);
+            let processed_record = DataRecord {
+                value: normalized_value,
+                ..record
+            };
+
+            processed.push(processed_record);
+        }
+
+        Ok(processed)
+    }
+
+    pub fn filter_by_category(&self, records: Vec<DataRecord>, category: &str) -> Vec<DataRecord> {
+        records
+            .into_iter()
+            .filter(|record| record.category == category)
             .collect()
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> (f64, f64, f64) {
+        if records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = records.iter().map(|r| r.value).sum();
+        let count = records.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = records
+            .iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>()
+            / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_process_csv() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "Alice,30,New York").unwrap();
-        writeln!(temp_file, "Bob,25,London").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+    fn create_test_processor() -> DataProcessor {
+        DataProcessor::new(
+            0.0,
+            100.0,
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        )
     }
 
     #[test]
-    fn test_validate_record() {
-        let processor = DataProcessor::new(',', false);
-        let valid_record = vec!["test".to_string(), "data".to_string()];
-        let invalid_record = vec!["".to_string(), "data".to_string()];
-        
-        assert!(processor.validate_record(&valid_record, 2));
-        assert!(!processor.validate_record(&invalid_record, 2));
+    fn test_validate_record_valid() {
+        let processor = create_test_processor();
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 1234567890,
+            category: "A".to_string(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
     }
 
     #[test]
-    fn test_extract_column() {
-        let processor = DataProcessor::new(',', false);
-        let data = vec![
-            vec!["a".to_string(), "b".to_string()],
-            vec!["c".to_string(), "d".to_string()],
+    fn test_validate_record_invalid_value() {
+        let processor = create_test_processor();
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 1234567890,
+            category: "A".to_string(),
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_normalize_value() {
+        let processor = create_test_processor();
+        assert_eq!(processor.normalize_value(50.0), 0.5);
+        assert_eq!(processor.normalize_value(0.0), 0.0);
+        assert_eq!(processor.normalize_value(100.0), 1.0);
+    }
+
+    #[test]
+    fn test_process_records() {
+        let processor = create_test_processor();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 25.0,
+                timestamp: 1234567890,
+                category: "A".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                value: 75.0,
+                timestamp: 1234567891,
+                category: "B".to_string(),
+            },
         ];
-        
-        let column = processor.extract_column(&data, 0);
-        assert_eq!(column, vec!["a".to_string(), "c".to_string()]);
+
+        let result = processor.process_records(records);
+        assert!(result.is_ok());
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].value, 0.25);
+        assert_eq!(processed[1].value, 0.75);
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let processor = create_test_processor();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 1234567890,
+                category: "A".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                timestamp: 1234567891,
+                category: "B".to_string(),
+            },
+            DataRecord {
+                id: 3,
+                value: 30.0,
+                timestamp: 1234567892,
+                category: "A".to_string(),
+            },
+        ];
+
+        let filtered = processor.filter_by_category(records, "A");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.category == "A"));
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = create_test_processor();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 1,
+                category: "A".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                timestamp: 2,
+                category: "A".to_string(),
+            },
+            DataRecord {
+                id: 3,
+                value: 30.0,
+                timestamp: 3,
+                category: "A".to_string(),
+            },
+        ];
+
+        let (mean, variance, std_dev) = processor.calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
     }
 }
