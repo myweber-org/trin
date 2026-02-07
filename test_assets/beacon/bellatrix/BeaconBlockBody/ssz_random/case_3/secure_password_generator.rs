@@ -120,3 +120,137 @@ mod tests {
         assert!(generator.generate().is_err());
     }
 }
+use rand::Rng;
+use std::error::Error;
+
+#[derive(Debug, Clone)]
+pub struct PasswordConfig {
+    length: usize,
+    use_uppercase: bool,
+    use_lowercase: bool,
+    use_digits: bool,
+    use_special: bool,
+}
+
+impl Default for PasswordConfig {
+    fn default() -> Self {
+        Self {
+            length: 16,
+            use_uppercase: true,
+            use_lowercase: true,
+            use_digits: true,
+            use_special: true,
+        }
+    }
+}
+
+impl PasswordConfig {
+    pub fn new(
+        length: usize,
+        use_uppercase: bool,
+        use_lowercase: bool,
+        use_digits: bool,
+        use_special: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        if length < 8 {
+            return Err("Password length must be at least 8 characters".into());
+        }
+        
+        if !use_uppercase && !use_lowercase && !use_digits && !use_special {
+            return Err("At least one character set must be enabled".into());
+        }
+
+        Ok(Self {
+            length,
+            use_uppercase,
+            use_lowercase,
+            use_digits,
+            use_special,
+        })
+    }
+
+    pub fn generate_password(&self) -> String {
+        let mut rng = rand::thread_rng();
+        let mut character_pool = Vec::new();
+        
+        if self.use_uppercase {
+            character_pool.extend(b'A'..=b'Z');
+        }
+        if self.use_lowercase {
+            character_pool.extend(b'a'..=b'z');
+        }
+        if self.use_digits {
+            character_pool.extend(b'0'..=b'9');
+        }
+        if self.use_special {
+            character_pool.extend(b"!@#$%^&*()_+-=[]{}|;:,.<>?");
+        }
+
+        let password: String = (0..self.length)
+            .map(|_| {
+                let idx = rng.gen_range(0..character_pool.len());
+                character_pool[idx] as char
+            })
+            .collect();
+
+        password
+    }
+
+    pub fn validate_strength(&self, password: &str) -> bool {
+        if password.len() < self.length {
+            return false;
+        }
+
+        let mut has_upper = !self.use_uppercase;
+        let mut has_lower = !self.use_lowercase;
+        let mut has_digit = !self.use_digits;
+        let mut has_special = !self.use_special;
+
+        for ch in password.chars() {
+            if ch.is_ascii_uppercase() {
+                has_upper = true;
+            } else if ch.is_ascii_lowercase() {
+                has_lower = true;
+            } else if ch.is_ascii_digit() {
+                has_digit = true;
+            } else if ch.is_ascii_punctuation() {
+                has_special = true;
+            }
+        }
+
+        has_upper && has_lower && has_digit && has_special
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = PasswordConfig::default();
+        let password = config.generate_password();
+        assert_eq!(password.len(), 16);
+        assert!(config.validate_strength(&password));
+    }
+
+    #[test]
+    fn test_custom_config() {
+        let config = PasswordConfig::new(12, true, true, true, false).unwrap();
+        let password = config.generate_password();
+        assert_eq!(password.len(), 12);
+        assert!(config.validate_strength(&password));
+    }
+
+    #[test]
+    fn test_invalid_length() {
+        let result = PasswordConfig::new(6, true, true, true, true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_no_character_sets() {
+        let result = PasswordConfig::new(10, false, false, false, false);
+        assert!(result.is_err());
+    }
+}
