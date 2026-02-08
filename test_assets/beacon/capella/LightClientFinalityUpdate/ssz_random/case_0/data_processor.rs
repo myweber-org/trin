@@ -440,3 +440,175 @@ mod tests {
         assert!(record.tags.contains(&"truncated".to_string()));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub struct DataProcessor {
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+    transformation_pipeline: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_pipeline: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn add_transformation<F>(&mut self, transform: F)
+    where
+        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
+    {
+        self.transformation_pipeline.push(Box::new(transform));
+    }
+
+    pub fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(record)?;
+        }
+        Ok(())
+    }
+
+    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate(&record)?;
+
+        for transform in &self.transformation_pipeline {
+            record = transform(record)?;
+        }
+
+        Ok(record)
+    }
+
+    pub fn batch_process(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, ProcessingError>> {
+        records.into_iter().map(|record| self.process(record)).collect()
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        let mut processor = DataProcessor::new();
+
+        processor.add_validation_rule(|record| {
+            if record.values.is_empty() {
+                Err(ProcessingError::ValidationFailed("Empty values array".to_string()))
+            } else {
+                Ok(())
+            }
+        });
+
+        processor.add_validation_rule(|record| {
+            if record.timestamp < 0 {
+                Err(ProcessingError::ValidationFailed("Negative timestamp".to_string()))
+            } else {
+                Ok(())
+            }
+        });
+
+        processor.add_transformation(|mut record| {
+            let sum: f64 = record.values.iter().sum();
+            record.metadata.insert("values_sum".to_string(), sum.to_string());
+            Ok(record)
+        });
+
+        processor.add_transformation(|mut record| {
+            let avg = record.values.iter().sum::<f64>() / record.values.len() as f64;
+            record.metadata.insert("values_avg".to_string(), avg.to_string());
+            Ok(record)
+        });
+
+        processor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor_validation() {
+        let processor = DataProcessor::default();
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate(&valid_record).is_ok());
+
+        let invalid_record = DataRecord {
+            id: 2,
+            timestamp: -1,
+            values: vec![1.0, 2.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate(&invalid_record).is_err());
+    }
+
+    #[test]
+    fn test_data_processor_transformation() {
+        let processor = DataProcessor::default();
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+
+        let processed = processor.process(record).unwrap();
+        assert_eq!(processed.metadata.get("values_sum").unwrap(), "6");
+        assert_eq!(processed.metadata.get("values_avg").unwrap(), "2");
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::default();
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1625097600,
+                values: vec![1.0, 2.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1625097600,
+                values: vec![3.0, 4.0, 5.0],
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let results = processor.batch_process(records);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+    }
+}
