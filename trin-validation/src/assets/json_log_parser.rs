@@ -1,111 +1,164 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use chrono::{DateTime, Utc};
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
-pub enum LogLevel {
-    ERROR,
-    WARN,
-    INFO,
-    DEBUG,
-    TRACE,
+#[derive(Debug, Serialize, Deserialize)]
+struct LogEntry {
+    timestamp: DateTime<Utc>,
+    level: String,
+    message: String,
+    #[serde(flatten)]
+    extra_fields: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct LogEntry {
-    pub timestamp: String,
-    pub level: LogLevel,
-    pub message: String,
-    pub component: String,
+struct LogFilter {
+    min_level: Option<String>,
+    contains_text: Option<String>,
+    start_time: Option<DateTime<Utc>>,
+    end_time: Option<DateTime<Utc>>,
 }
 
-pub struct LogParser {
-    file_path: String,
-    min_level: LogLevel,
-}
-
-impl LogParser {
-    pub fn new(file_path: &str, min_level: LogLevel) -> Self {
-        LogParser {
-            file_path: file_path.to_string(),
-            min_level,
-        }
-    }
-
-    pub fn parse(&self) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
-        let file = File::open(&self.file_path)?;
-        let reader = BufReader::new(file);
-        let mut entries = Vec::new();
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let entry: LogEntry = serde_json::from_str(&line)?;
-            if self.should_include(&entry.level) {
-                entries.push(entry);
+impl LogFilter {
+    fn matches(&self, entry: &LogEntry) -> bool {
+        if let Some(min_level) = &self.min_level {
+            let level_order = |lvl: &str| match lvl.to_lowercase().as_str() {
+                "error" => 4,
+                "warn" => 3,
+                "info" => 2,
+                "debug" => 1,
+                "trace" => 0,
+                _ => 0,
+            };
+            
+            if level_order(&entry.level) < level_order(min_level) {
+                return false;
             }
         }
-
-        Ok(entries)
-    }
-
-    fn should_include(&self, level: &LogLevel) -> bool {
-        let priority = |l: &LogLevel| match l {
-            LogLevel::ERROR => 4,
-            LogLevel::WARN => 3,
-            LogLevel::INFO => 2,
-            LogLevel::DEBUG => 1,
-            LogLevel::TRACE => 0,
-        };
-
-        priority(level) >= priority(&self.min_level)
-    }
-
-    pub fn count_by_level(&self) -> Result<std::collections::HashMap<LogLevel, usize>, Box<dyn std::error::Error>> {
-        let entries = self.parse()?;
-        let mut counts = std::collections::HashMap::new();
-
-        for entry in entries {
-            *counts.entry(entry.level).or_insert(0) += 1;
+        
+        if let Some(text) = &self.contains_text {
+            if !entry.message.contains(text) {
+                return false;
+            }
         }
-
-        Ok(counts)
+        
+        if let Some(start) = &self.start_time {
+            if &entry.timestamp < start {
+                return false;
+            }
+        }
+        
+        if let Some(end) = &self.end_time {
+            if &entry.timestamp > end {
+                return false;
+            }
+        }
+        
+        true
     }
+}
+
+fn parse_log_file(path: &str, filter: Option<LogFilter>) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+    
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        
+        match serde_json::from_str::<LogEntry>(&line) {
+            Ok(entry) => {
+                if let Some(ref filter) = filter {
+                    if filter.matches(&entry) {
+                        entries.push(entry);
+                    }
+                } else {
+                    entries.push(entry);
+                }
+            }
+            Err(e) => eprintln!("Failed to parse line: {}, error: {}", line, e),
+        }
+    }
+    
+    Ok(entries)
+}
+
+fn format_entry(entry: &LogEntry, show_extra: bool) -> String {
+    let mut output = format!(
+        "[{}] {}: {}",
+        entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
+        entry.level.to_uppercase(),
+        entry.message
+    );
+    
+    if show_extra && !entry.extra_fields.is_empty() {
+        output.push_str(&format!(" | Extra: {:?}", entry.extra_fields));
+    }
+    
+    output
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let filter = LogFilter {
+        min_level: Some("info".to_string()),
+        contains_text: Some("error".to_string()),
+        start_time: None,
+        end_time: None,
+    };
+    
+    let entries = parse_log_file("application.log", Some(filter))?;
+    
+    for entry in entries {
+        println!("{}", format_entry(&entry, true));
+    }
+    
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
+    use chrono::TimeZone;
+    
     #[test]
-    fn test_log_parsing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        let log_data = r#"{"timestamp":"2023-10-01T12:00:00Z","level":"ERROR","message":"Failed to connect","component":"network"}
-{"timestamp":"2023-10-01T12:01:00Z","level":"INFO","message":"Connection established","component":"network"}
-{"timestamp":"2023-10-01T12:02:00Z","level":"DEBUG","message":"Processing request","component":"api"}"#;
+    fn test_filter_matches() {
+        let entry = LogEntry {
+            timestamp: Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap(),
+            level: "error".to_string(),
+            message: "Database connection failed".to_string(),
+            extra_fields: HashMap::new(),
+        };
         
-        write!(temp_file, "{}", log_data).unwrap();
+        let filter = LogFilter {
+            min_level: Some("warn".to_string()),
+            contains_text: Some("connection".to_string()),
+            start_time: None,
+            end_time: None,
+        };
         
-        let parser = LogParser::new(temp_file.path().to_str().unwrap(), LogLevel::INFO);
-        let entries = parser.parse().unwrap();
-        
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].level, LogLevel::ERROR);
-        assert_eq!(entries[1].level, LogLevel::INFO);
+        assert!(filter.matches(&entry));
     }
-
+    
     #[test]
-    fn test_level_filtering() {
-        let parser = LogParser::new("dummy", LogLevel::WARN);
+    fn test_filter_rejects_lower_level() {
+        let entry = LogEntry {
+            timestamp: Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap(),
+            level: "info".to_string(),
+            message: "Application started".to_string(),
+            extra_fields: HashMap::new(),
+        };
         
-        assert!(parser.should_include(&LogLevel::ERROR));
-        assert!(parser.should_include(&LogLevel::WARN));
-        assert!(!parser.should_include(&LogLevel::INFO));
-        assert!(!parser.should_include(&LogLevel::DEBUG));
+        let filter = LogFilter {
+            min_level: Some("warn".to_string()),
+            contains_text: None,
+            start_time: None,
+            end_time: None,
+        };
+        
+        assert!(!filter.matches(&entry));
     }
 }
