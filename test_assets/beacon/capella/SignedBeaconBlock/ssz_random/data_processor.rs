@@ -651,3 +651,151 @@ mod tests {
         assert_eq!(stats.average_value, 100.0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+pub struct DataSet {
+    values: Vec<f64>,
+}
+
+impl DataSet {
+    pub fn new() -> Self {
+        DataSet { values: Vec::new() }
+    }
+
+    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+        let mut values = Vec::new();
+
+        for result in rdr.records() {
+            let record = result?;
+            for field in record.iter() {
+                if let Ok(num) = field.parse::<f64>() {
+                    values.push(num);
+                }
+            }
+        }
+
+        Ok(DataSet { values })
+    }
+
+    pub fn add_value(&mut self, value: f64) {
+        self.values.push(value);
+    }
+
+    pub fn mean(&self) -> Option<f64> {
+        if self.values.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.values.iter().sum();
+        Some(sum / self.values.len() as f64)
+    }
+
+    pub fn variance(&self) -> Option<f64> {
+        if self.values.len() < 2 {
+            return None;
+        }
+        let mean = self.mean().unwrap();
+        let sum_sq_diff: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum();
+        Some(sum_sq_diff / (self.values.len() - 1) as f64)
+    }
+
+    pub fn standard_deviation(&self) -> Option<f64> {
+        self.variance().map(|v| v.sqrt())
+    }
+
+    pub fn min(&self) -> Option<f64> {
+        self.values.iter().copied().reduce(f64::min)
+    }
+
+    pub fn max(&self) -> Option<f64> {
+        self.values.iter().copied().reduce(f64::max)
+    }
+
+    pub fn count(&self) -> usize {
+        self.values.len()
+    }
+}
+
+pub fn calculate_correlation(x: &DataSet, y: &DataSet) -> Option<f64> {
+    if x.count() != y.count() || x.count() < 2 {
+        return None;
+    }
+
+    let x_mean = x.mean().unwrap();
+    let y_mean = y.mean().unwrap();
+
+    let mut numerator = 0.0;
+    let mut x_variance = 0.0;
+    let mut y_variance = 0.0;
+
+    for i in 0..x.count() {
+        let x_diff = x.values[i] - x_mean;
+        let y_diff = y.values[i] - y_mean;
+        numerator += x_diff * y_diff;
+        x_variance += x_diff * x_diff;
+        y_variance += y_diff * y_diff;
+    }
+
+    if x_variance == 0.0 || y_variance == 0.0 {
+        return None;
+    }
+
+    Some(numerator / (x_variance * y_variance).sqrt())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_basic_statistics() {
+        let mut dataset = DataSet::new();
+        dataset.add_value(10.0);
+        dataset.add_value(20.0);
+        dataset.add_value(30.0);
+        dataset.add_value(40.0);
+
+        assert_eq!(dataset.mean(), Some(25.0));
+        assert_eq!(dataset.min(), Some(10.0));
+        assert_eq!(dataset.max(), Some(40.0));
+        assert_eq!(dataset.count(), 4);
+    }
+
+    #[test]
+    fn test_csv_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "value\n10.5\n20.3\n30.7\n40.1").unwrap();
+
+        let dataset = DataSet::from_csv(temp_file.path()).unwrap();
+        assert_eq!(dataset.count(), 4);
+        assert_eq!(dataset.mean(), Some(25.4));
+    }
+
+    #[test]
+    fn test_correlation() {
+        let mut x = DataSet::new();
+        let mut y = DataSet::new();
+
+        x.add_value(1.0);
+        x.add_value(2.0);
+        x.add_value(3.0);
+        x.add_value(4.0);
+        x.add_value(5.0);
+
+        y.add_value(2.0);
+        y.add_value(4.0);
+        y.add_value(6.0);
+        y.add_value(8.0);
+        y.add_value(10.0);
+
+        let correlation = calculate_correlation(&x, &y).unwrap();
+        assert!((correlation - 1.0).abs() < 1e-10);
+    }
+}
