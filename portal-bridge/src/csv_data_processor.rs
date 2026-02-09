@@ -127,4 +127,136 @@ mod tests {
         assert_eq!(max_record.id, 3);
         assert_eq!(max_record.value, 150.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn read_and_validate(&self, file_path: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut line_number = 0;
+
+        for line in reader.lines() {
+            line_number += 1;
+            let line_content = line?;
+            let fields: Vec<String> = line_content
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if fields.is_empty() {
+                return Err(format!("Empty line at line {}", line_number).into());
+            }
+
+            if fields.iter().any(|field| field.is_empty()) {
+                return Err(format!("Empty field detected at line {}", line_number).into());
+            }
+
+            records.push(fields);
+        }
+
+        if self.has_headers && !records.is_empty() {
+            records.remove(0);
+        }
+
+        Ok(records)
+    }
+
+    pub fn transform_numeric_fields(
+        &self,
+        data: &[Vec<String>],
+        column_index: usize,
+        multiplier: f64,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let mut transformed = Vec::with_capacity(data.len());
+
+        for (row_index, row) in data.iter().enumerate() {
+            if column_index >= row.len() {
+                return Err(format!(
+                    "Column index {} out of bounds at row {}",
+                    column_index,
+                    row_index + 1
+                )
+                .into());
+            }
+
+            let mut new_row = row.clone();
+            let value = &row[column_index];
+
+            match value.parse::<f64>() {
+                Ok(num) => {
+                    let transformed_value = (num * multiplier).to_string();
+                    new_row[column_index] = transformed_value;
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "Non-numeric value '{}' at row {}, column {}",
+                        value,
+                        row_index + 1,
+                        column_index
+                    )
+                    .into());
+                }
+            }
+
+            transformed.push(new_row);
+        }
+
+        Ok(transformed)
+    }
+
+    pub fn filter_records(
+        &self,
+        data: &[Vec<String>],
+        column_index: usize,
+        predicate: impl Fn(&str) -> bool,
+    ) -> Vec<Vec<String>> {
+        data.iter()
+            .filter(|row| column_index < row.len() && predicate(&row[column_index]))
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,score").unwrap();
+        writeln!(temp_file, "Alice,25,85.5").unwrap();
+        writeln!(temp_file, "Bob,30,92.0").unwrap();
+        writeln!(temp_file, "Charlie,35,78.5").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let data = processor.read_and_validate(temp_file.path().to_str().unwrap());
+        assert!(data.is_ok());
+
+        let records = data.unwrap();
+        assert_eq!(records.len(), 3);
+
+        let transformed = processor.transform_numeric_fields(&records, 2, 1.1);
+        assert!(transformed.is_ok());
+
+        let filtered = processor.filter_records(&records, 1, |age| age.parse::<i32>().unwrap() > 28);
+        assert_eq!(filtered.len(), 2);
+    }
 }
