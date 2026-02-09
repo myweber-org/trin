@@ -1,131 +1,99 @@
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use thiserror::Error;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-#[derive(Error, Debug)]
-pub enum ProcessingError {
-    #[error("Invalid data format")]
-    InvalidFormat,
-    #[error("Missing required field: {0}")]
-    MissingField(String),
-    #[error("Value out of range: {0}")]
-    OutOfRange(String),
+pub struct DataProcessor {
+    delimiter: char,
+    has_header: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
-}
-
-impl DataRecord {
-    pub fn new(id: u64, timestamp: i64) -> Self {
-        Self {
-            id,
-            timestamp,
-            values: Vec::new(),
-            metadata: HashMap::new(),
+impl DataProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        DataProcessor {
+            delimiter,
+            has_header,
         }
     }
 
-    pub fn validate(&self) -> Result<(), ProcessingError> {
-        if self.id == 0 {
-            return Err(ProcessingError::InvalidFormat);
+    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
         }
 
-        if self.timestamp < 0 {
-            return Err(ProcessingError::OutOfRange("timestamp".to_string()));
-        }
-
-        if self.values.is_empty() {
-            return Err(ProcessingError::MissingField("values".to_string()));
-        }
-
-        Ok(())
-    }
-
-    pub fn add_value(&mut self, value: f64) {
-        self.values.push(value);
-    }
-
-    pub fn add_metadata(&mut self, key: String, value: String) {
-        self.metadata.insert(key, value);
-    }
-
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.values.is_empty() {
-            return None;
-        }
-
-        let sum: f64 = self.values.iter().sum();
-        Some(sum / self.values.len() as f64)
-    }
-
-    pub fn normalize_values(&mut self) {
-        if let Some(avg) = self.calculate_average() {
-            if avg != 0.0 {
-                for value in self.values.iter_mut() {
-                    *value /= avg;
-                }
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
+                records.push(fields);
             }
         }
-    }
-}
 
-pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, ProcessingError> {
-    let mut processed = Vec::with_capacity(records.len());
-
-    for record in records.iter_mut() {
-        record.validate()?;
-        record.normalize_values();
-        processed.push(record.clone());
+        Ok(records)
     }
 
-    Ok(processed)
+    pub fn validate_record(&self, record: &[String]) -> bool {
+        !record.is_empty() && record.iter().all(|field| !field.is_empty())
+    }
+
+    pub fn extract_column(&self, data: &[Vec<String>], column_index: usize) -> Vec<String> {
+        data.iter()
+            .filter_map(|record| record.get(column_index).cloned())
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_record_validation() {
-        let mut record = DataRecord::new(1, 1625097600);
-        record.add_value(10.0);
-        record.add_value(20.0);
+    fn test_process_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "John,30,New York").unwrap();
+        writeln!(temp_file, "Jane,25,London").unwrap();
 
-        assert!(record.validate().is_ok());
-    }
-
-    #[test]
-    fn test_invalid_record() {
-        let record = DataRecord::new(0, -1);
-        assert!(record.validate().is_err());
-    }
-
-    #[test]
-    fn test_average_calculation() {
-        let mut record = DataRecord::new(1, 1625097600);
-        record.add_value(10.0);
-        record.add_value(20.0);
-        record.add_value(30.0);
-
-        assert_eq!(record.calculate_average(), Some(20.0));
-    }
-
-    #[test]
-    fn test_normalization() {
-        let mut record = DataRecord::new(1, 1625097600);
-        record.add_value(10.0);
-        record.add_value(20.0);
-        record.add_value(30.0);
-
-        record.normalize_values();
-        let normalized: Vec<f64> = record.values.iter().map(|v| (v * 100.0).round() / 100.0).collect();
+        let processor = DataProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path()).unwrap();
         
-        assert_eq!(normalized, vec![0.5, 1.0, 1.5]);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["John", "30", "New York"]);
+        assert_eq!(result[1], vec!["Jane", "25", "London"]);
+    }
+
+    #[test]
+    fn test_validate_record() {
+        let processor = DataProcessor::new(',', false);
+        let valid_record = vec!["data".to_string(), "value".to_string()];
+        let invalid_record = vec!["".to_string(), "value".to_string()];
+        
+        assert!(processor.validate_record(&valid_record));
+        assert!(!processor.validate_record(&invalid_record));
+    }
+
+    #[test]
+    fn test_extract_column() {
+        let data = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["d".to_string(), "e".to_string(), "f".to_string()],
+        ];
+        
+        let processor = DataProcessor::new(',', false);
+        let column = processor.extract_column(&data, 1);
+        
+        assert_eq!(column, vec!["b".to_string(), "e".to_string()]);
     }
 }
