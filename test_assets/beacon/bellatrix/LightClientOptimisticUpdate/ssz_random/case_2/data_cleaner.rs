@@ -107,4 +107,87 @@ mod tests {
 
         Ok(())
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    deduplication_cache: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            deduplication_cache: HashSet::new(),
+        }
+    }
+
+    pub fn normalize_text(&self, input: &str) -> String {
+        input
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect()
+    }
+
+    pub fn is_duplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_text(item);
+        if self.deduplication_cache.contains(&normalized) {
+            true
+        } else {
+            self.deduplication_cache.insert(normalized);
+            false
+        }
+    }
+
+    pub fn clean_dataset(&mut self, data: Vec<String>) -> Vec<String> {
+        let mut cleaned = Vec::new();
+        for item in data {
+            if !self.is_duplicate(&item) {
+                cleaned.push(self.normalize_text(&item));
+            }
+        }
+        cleaned
+    }
+
+    pub fn reset_cache(&mut self) {
+        self.deduplication_cache.clear();
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.deduplication_cache.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.normalize_text("  Hello WORLD!  "), "hello world");
+        assert_eq!(cleaner.normalize_text("Data@2024"), "data2024");
+    }
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(!cleaner.is_duplicate("test"));
+        assert!(cleaner.is_duplicate("TEST"));
+        assert!(!cleaner.is_duplicate("another"));
+    }
+
+    #[test]
+    fn test_clean_dataset() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![
+            "Apple".to_string(),
+            "apple".to_string(),
+            "Banana".to_string(),
+            "  banana  ".to_string(),
+        ];
+        let cleaned = cleaner.clean_dataset(data);
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaner.get_unique_count(), 2);
+    }
 }
