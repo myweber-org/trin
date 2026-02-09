@@ -438,4 +438,159 @@ mod tests {
         assert!((variance - 8.0).abs() < 0.001);
         assert!((std_dev - 2.828).abs() < 0.001);
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum DataError {
+    #[error("Invalid input data")]
+    InvalidInput,
+    #[error("Transformation failed")]
+    TransformationFailed,
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, key: String, value: f64) -> Result<(), DataError> {
+        if value.is_nan() || value.is_infinite() {
+            return Err(DataError::InvalidInput);
+        }
+        self.values.insert(key, value);
+        Ok(())
+    }
+
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.values.is_empty() {
+            return Err(DataError::ValidationError(
+                "Record must contain at least one value".to_string(),
+            ));
+        }
+
+        if self.timestamp < 0 {
+            return Err(DataError::ValidationError(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), DataError> {
+        if multiplier <= 0.0 || multiplier.is_nan() || multiplier.is_infinite() {
+            return Err(DataError::TransformationFailed);
+        }
+
+        for value in self.values.values_mut() {
+            *value *= multiplier;
+        }
+
+        Ok(())
+    }
+}
+
+pub fn process_records(
+    records: Vec<DataRecord>,
+    multiplier: f64,
+) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for mut record in records {
+        record.validate()?;
+        record.transform(multiplier)?;
+        processed.push(record);
+    }
+
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 1234567890);
+        assert_eq!(record.id, 1);
+        assert_eq!(record.timestamp, 1234567890);
+        assert!(record.values.is_empty());
+        assert!(record.tags.is_empty());
+    }
+
+    #[test]
+    fn test_add_valid_value() {
+        let mut record = DataRecord::new(1, 1234567890);
+        assert!(record.add_value("temperature".to_string(), 25.5).is_ok());
+        assert_eq!(record.values.get("temperature"), Some(&25.5));
+    }
+
+    #[test]
+    fn test_add_invalid_value() {
+        let mut record = DataRecord::new(1, 1234567890);
+        assert!(record.add_value("invalid".to_string(), f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_record_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        assert!(record.validate().is_err());
+
+        record.add_value("test".to_string(), 1.0).unwrap();
+        assert!(record.validate().is_ok());
+
+        let mut invalid_record = DataRecord::new(2, -1);
+        invalid_record.add_value("test".to_string(), 1.0).unwrap();
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_record_transformation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value("value1".to_string(), 10.0).unwrap();
+        record.add_value("value2".to_string(), 20.0).unwrap();
+
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.values.get("value1"), Some(&20.0));
+        assert_eq!(record.values.get("value2"), Some(&40.0));
+    }
+
+    #[test]
+    fn test_process_records() {
+        let mut record1 = DataRecord::new(1, 1234567890);
+        record1.add_value("temp".to_string(), 10.0).unwrap();
+
+        let mut record2 = DataRecord::new(2, 1234567891);
+        record2.add_value("temp".to_string(), 20.0).unwrap();
+
+        let records = vec![record1, record2];
+        let processed = process_records(records, 3.0).unwrap();
+
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].values.get("temp"), Some(&30.0));
+        assert_eq!(processed[1].values.get("temp"), Some(&60.0));
+    }
 }
