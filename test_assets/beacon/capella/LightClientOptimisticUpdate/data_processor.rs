@@ -466,3 +466,140 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidTimestamp,
+    ValidationFailed(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid numeric value"),
+            ProcessingError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            ProcessingError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+    max_age: i64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64, max_age: i64) -> Self {
+        DataProcessor { threshold, max_age }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value.is_nan() || record.value.is_infinite() {
+            return Err(ProcessingError::InvalidValue);
+        }
+
+        if record.timestamp < 0 {
+            return Err(ProcessingError::InvalidTimestamp);
+        }
+
+        if record.value > self.threshold {
+            return Err(ProcessingError::ValidationFailed(
+                format!("Value {} exceeds threshold {}", record.value, self.threshold)
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_records(&self, records: Vec<DataRecord>) -> Vec<DataRecord> {
+        let current_time = chrono::Utc::now().timestamp();
+        
+        records
+            .into_iter()
+            .filter(|record| current_time - record.timestamp <= self.max_age)
+            .map(|mut record| {
+                record.value = record.value * 1.1;
+                record
+            })
+            .collect()
+    }
+
+    pub fn process_batch(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut valid_records = Vec::new();
+        
+        for record in records {
+            match self.validate_record(&record) {
+                Ok(_) => valid_records.push(record),
+                Err(e) => eprintln!("Skipping invalid record: {}", e),
+            }
+        }
+        
+        if valid_records.is_empty() {
+            return Err(ProcessingError::ValidationFailed("No valid records in batch".to_string()));
+        }
+        
+        Ok(self.transform_records(valid_records))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_valid_record() {
+        let processor = DataProcessor::new(100.0, 86400);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 1609459200,
+        };
+        
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_exceeds_threshold() {
+        let processor = DataProcessor::new(100.0, 86400);
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 1609459200,
+        };
+        
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_records() {
+        let processor = DataProcessor::new(100.0, 86400);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 1609459200,
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                timestamp: 1609459200,
+            },
+        ];
+        
+        let transformed = processor.transform_records(records);
+        assert_eq!(transformed[0].value, 11.0);
+        assert_eq!(transformed[1].value, 22.0);
+    }
+}
