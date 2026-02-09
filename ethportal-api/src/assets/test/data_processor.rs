@@ -474,3 +474,178 @@ mod tests {
         assert_eq!(groups.get("Beta").unwrap().len(), 1);
     }
 }
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, value: f64) -> &mut Self {
+        self.values.push(value);
+        self
+    }
+
+    pub fn add_metadata(&mut self, key: &str, value: &str) -> &mut Self {
+        self.metadata.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 {
+            return Err("ID cannot be zero".to_string());
+        }
+        
+        if self.timestamp < 0 {
+            return Err("Timestamp cannot be negative".to_string());
+        }
+        
+        if self.values.is_empty() {
+            return Err("Values cannot be empty".to_string());
+        }
+        
+        for value in &self.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err("Invalid numeric value detected".to_string());
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+    let all_values: Vec<f64> = records.iter()
+        .flat_map(|r| r.values.iter())
+        .copied()
+        .collect();
+    
+    if !all_values.is_empty() {
+        let sum: f64 = all_values.iter().sum();
+        let count = all_values.len() as f64;
+        let mean = sum / count;
+        
+        let variance: f64 = all_values.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("total_records".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+        
+        if let Some(max) = all_values.iter().copied().reduce(f64::max) {
+            stats.insert("max".to_string(), max);
+        }
+        
+        if let Some(min) = all_values.iter().copied().reduce(f64::min) {
+            stats.insert("min".to_string(), min);
+        }
+    }
+    
+    stats
+}
+
+pub fn filter_records<F>(records: Vec<DataRecord>, predicate: F) -> Vec<DataRecord>
+where
+    F: Fn(&DataRecord) -> bool,
+{
+    records.into_iter().filter(predicate).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value(42.5)
+            .add_value(37.2)
+            .add_metadata("source", "sensor_a");
+        
+        assert_eq!(record.id, 1);
+        assert_eq!(record.timestamp, 1234567890);
+        assert_eq!(record.values.len(), 2);
+        assert_eq!(record.metadata.get("source"), Some(&"sensor_a".to_string()));
+    }
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 0,
+            timestamp: 1000,
+            values: vec![1.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1000,
+                values: vec![1.0, 2.0, 3.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 2000,
+                values: vec![4.0, 5.0],
+                metadata: HashMap::new(),
+            },
+        ];
+        
+        let stats = calculate_statistics(&records);
+        
+        assert_eq!(stats.get("mean"), Some(&3.0));
+        assert_eq!(stats.get("total_records"), Some(&2.0));
+        assert_eq!(stats.get("total_values"), Some(&5.0));
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let records = vec![
+            DataRecord::new(1, 1000),
+            DataRecord::new(2, 2000),
+            DataRecord::new(3, 3000),
+        ];
+        
+        let filtered = filter_records(records, |r| r.id > 1);
+        
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.id > 1));
+    }
+}
