@@ -362,3 +362,178 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Validation failed: {0}")]
+    ValidationFailed(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+pub struct DataProcessor {
+    validation_rules: Vec<ValidationRule>,
+    transformation_pipeline: Vec<Transformation>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: Vec::new(),
+            transformation_pipeline: Vec::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn add_transformation(&mut self, transformation: Transformation) {
+        self.transformation_pipeline.push(transformation);
+    }
+
+    pub fn process(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        for rule in &self.validation_rules {
+            rule.validate(record)?;
+        }
+
+        for transformation in &self.transformation_pipeline {
+            transformation.apply(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn batch_process(&self, records: &mut [DataRecord]) -> Vec<Result<(), ProcessingError>> {
+        records
+            .iter_mut()
+            .map(|record| self.process(record))
+            .collect()
+    }
+}
+
+pub trait ValidationRule {
+    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError>;
+}
+
+pub trait Transformation {
+    fn apply(&self, record: &mut DataRecord);
+}
+
+pub struct RequiredFieldRule {
+    field_name: String,
+}
+
+impl RequiredFieldRule {
+    pub fn new(field_name: &str) -> Self {
+        RequiredFieldRule {
+            field_name: field_name.to_string(),
+        }
+    }
+}
+
+impl ValidationRule for RequiredFieldRule {
+    fn validate(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if !record.values.contains_key(&self.field_name) {
+            return Err(ProcessingError::MissingField(self.field_name.clone()));
+        }
+        Ok(())
+    }
+}
+
+pub struct NormalizeTransformation {
+    target_field: String,
+}
+
+impl NormalizeTransformation {
+    pub fn new(target_field: &str) -> Self {
+        NormalizeTransformation {
+            target_field: target_field.to_string(),
+        }
+    }
+}
+
+impl Transformation for NormalizeTransformation {
+    fn apply(&self, record: &mut DataRecord) {
+        if let Some(value) = record.values.get_mut(&self.target_field) {
+            if *value != 0.0 {
+                *value = value.clamp(-1.0, 1.0);
+            }
+        }
+    }
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    for record in records {
+        for (key, value) in &record.values {
+            let entry = stats.entry(key.clone()).or_insert((0, 0.0, f64::MIN, f64::MAX));
+            entry.0 += 1;
+            entry.1 += value;
+            entry.2 = entry.2.max(*value);
+            entry.3 = entry.3.min(*value);
+        }
+    }
+
+    stats
+        .into_iter()
+        .map(|(key, (count, sum, max, min))| {
+            let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+            (key, mean)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_required_field_validation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: HashMap::new(),
+            tags: vec![],
+        };
+
+        let rule = RequiredFieldRule::new("temperature");
+        assert!(rule.validate(&record).is_err());
+
+        record.values.insert("temperature".to_string(), 25.5);
+        assert!(rule.validate(&record).is_ok());
+    }
+
+    #[test]
+    fn test_normalize_transformation() {
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: {
+                let mut map = HashMap::new();
+                map.insert("value".to_string(), 5.0);
+                map
+            },
+            tags: vec![],
+        };
+
+        let transform = NormalizeTransformation::new("value");
+        transform.apply(&mut record);
+
+        assert_eq!(record.values.get("value"), Some(&1.0));
+    }
+}
