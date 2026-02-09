@@ -1,126 +1,74 @@
-use serde_json::{json, Value};
-use std::collections::HashSet;
-use std::fs;
 
-pub fn merge_json_files(file_paths: &[String], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged_array = Vec::new();
-    let mut seen_ids = HashSet::new();
-
-    for file_path in file_paths {
-        let content = fs::read_to_string(file_path)?;
-        let json_value: Value = serde_json::from_str(&content)?;
-
-        match json_value {
-            Value::Array(arr) => {
-                for item in arr {
-                    if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-                        if !seen_ids.contains(id) {
-                            seen_ids.insert(id.to_string());
-                            merged_array.push(item);
-                        }
-                    } else {
-                        merged_array.push(item);
-                    }
-                }
-            }
-            Value::Object(obj) => {
-                if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
-                    if !seen_ids.contains(id) {
-                        seen_ids.insert(id.to_string());
-                        merged_array.push(json!(obj));
-                    }
-                } else {
-                    merged_array.push(json!(obj));
-                }
-            }
-            _ => return Err("Unsupported JSON structure".into()),
-        }
-    }
-
-    let output_json = json!(merged_array);
-    fs::write(output_path, output_json.to_string())?;
-    Ok(())
-}
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
-pub enum MergeStrategy {
+pub enum ConflictResolution {
     PreferFirst,
     PreferSecond,
-    CombineArrays,
+    MergeArrays,
     FailOnConflict,
 }
 
-pub fn merge_json(
-    mut base: Value,
-    overlay: Value,
-    strategy: MergeStrategy,
-) -> Result<Value, String> {
-    if !base.is_object() || !overlay.is_object() {
-        return Err("Both inputs must be JSON objects".to_string());
-    }
+pub fn merge_json_objects(
+    first: &Map<String, Value>,
+    second: &Map<String, Value>,
+    resolution: ConflictResolution,
+) -> Result<Map<String, Value>, String> {
+    let mut result = Map::new();
+    let mut all_keys: HashSet<&String> = first.keys().chain(second.keys()).collect();
 
-    let base_obj = base.as_object_mut().unwrap();
-    let overlay_obj = overlay.as_object().unwrap();
+    for key in all_keys {
+        let first_val = first.get(key);
+        let second_val = second.get(key);
 
-    for (key, overlay_value) in overlay_obj {
-        match base_obj.get_mut(key) {
-            Some(base_value) => {
-                if base_value.is_object() && overlay_value.is_object() {
-                    let merged = merge_json(
-                        base_value.clone(),
-                        overlay_value.clone(),
-                        strategy.clone(),
-                    )?;
-                    *base_value = merged;
-                } else if base_value.is_array() && overlay_value.is_array() {
-                    if let MergeStrategy::CombineArrays = strategy {
-                        let mut combined = base_value.as_array().unwrap().clone();
-                        combined.extend(overlay_value.as_array().unwrap().iter().cloned());
-                        *base_value = Value::Array(combined);
-                    } else {
-                        return handle_conflict(key, base_value, overlay_value, &strategy)?;
-                    }
-                } else if base_value != overlay_value {
-                    return handle_conflict(key, base_value, overlay_value, &strategy)?;
-                }
+        match (first_val, second_val) {
+            (Some(f), None) => {
+                result.insert(key.clone(), f.clone());
             }
-            None => {
-                base_obj.insert(key.clone(), overlay_value.clone());
+            (None, Some(s)) => {
+                result.insert(key.clone(), s.clone());
             }
+            (Some(f), Some(s)) => {
+                let merged_value = merge_values(f, s, &resolution)?;
+                result.insert(key.clone(), merged_value);
+            }
+            _ => unreachable!(),
         }
     }
 
-    Ok(Value::Object(base_obj.clone()))
+    Ok(result)
 }
 
-fn handle_conflict(
-    key: &str,
-    base_value: &Value,
-    overlay_value: &Value,
-    strategy: &MergeStrategy,
+fn merge_values(
+    first: &Value,
+    second: &Value,
+    resolution: &ConflictResolution,
 ) -> Result<Value, String> {
-    match strategy {
-        MergeStrategy::PreferFirst => Ok(base_value.clone()),
-        MergeStrategy::PreferSecond => Ok(overlay_value.clone()),
-        MergeStrategy::FailOnConflict => Err(format!(
-            "Conflict at key '{}': {:?} vs {:?}",
-            key, base_value, overlay_value
+    match (first, second) {
+        (Value::Object(f_obj), Value::Object(s_obj)) => {
+            let merged_map = merge_json_objects(f_obj, s_obj, resolution.clone())?;
+            Ok(Value::Object(merged_map))
+        }
+        (Value::Array(f_arr), Value::Array(s_arr)) => match resolution {
+            ConflictResolution::MergeArrays => {
+                let mut merged = f_arr.clone();
+                merged.extend(s_arr.clone());
+                Ok(Value::Array(merged))
+            }
+            _ => resolve_conflict(first, second, resolution),
+        },
+        _ => resolve_conflict(first, second, resolution),
+    }
+}
+
+fn resolve_conflict(first: &Value, second: &Value, resolution: &ConflictResolution) -> Result<Value, String> {
+    match resolution {
+        ConflictResolution::PreferFirst => Ok(first.clone()),
+        ConflictResolution::PreferSecond => Ok(second.clone()),
+        ConflictResolution::FailOnConflict => Err(format!(
+            "Conflict detected between values: {:?} and {:?}",
+            first, second
         )),
-        MergeStrategy::CombineArrays => Err("Cannot combine non-array values".to_string()),
+        ConflictResolution::MergeArrays => Err("Cannot merge non-array values with MergeArrays strategy".to_string()),
     }
-}
-
-pub fn find_common_keys(a: &Value, b: &Value) -> HashSet<String> {
-    let mut common = HashSet::new();
-    
-    if let (Some(a_obj), Some(b_obj)) = (a.as_object(), b.as_object()) {
-        for key in a_obj.keys() {
-            if b_obj.contains_key(key) {
-                common.insert(key.clone());
-            }
-        }
-    }
-    
-    common
 }
