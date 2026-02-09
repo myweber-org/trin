@@ -147,4 +147,98 @@ mod tests {
         
         assert!(analyzer.parse_log_line(line).is_none());
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use regex::Regex;
+
+#[derive(Debug)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+}
+
+struct LogAnalyzer {
+    entries: Vec<LogEntry>,
+    level_counts: HashMap<String, usize>,
+    error_patterns: HashMap<String, usize>,
+}
+
+impl LogAnalyzer {
+    fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+            level_counts: HashMap::new(),
+            error_patterns: HashMap::new(),
+        }
+    }
+
+    fn parse_log_file(&mut self, file_path: &str) -> io::Result<()> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let log_pattern = Regex::new(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (\w+): (.+)").unwrap();
+        let error_pattern = Regex::new(r"error|failed|exception|timeout",).unwrap();
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Some(captures) = log_pattern.captures(&line) {
+                let timestamp = captures[1].to_string();
+                let level = captures[2].to_string();
+                let message = captures[3].to_string();
+
+                let entry = LogEntry {
+                    timestamp,
+                    level: level.clone(),
+                    message: message.clone(),
+                };
+
+                self.entries.push(entry);
+                *self.level_counts.entry(level).or_insert(0) += 1;
+
+                if error_pattern.is_match(&message.to_lowercase()) {
+                    let error_key = message.split_whitespace().next().unwrap_or("unknown").to_string();
+                    *self.error_patterns.entry(error_key).or_insert(0) += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn generate_report(&self) {
+        println!("Log Analysis Report");
+        println!("===================");
+        println!("Total entries: {}", self.entries.len());
+        println!("\nLog Level Distribution:");
+        for (level, count) in &self.level_counts {
+            println!("  {}: {}", level, count);
+        }
+        println!("\nCommon Error Patterns:");
+        let mut sorted_errors: Vec<_> = self.error_patterns.iter().collect();
+        sorted_errors.sort_by(|a, b| b.1.cmp(a.1));
+        for (pattern, count) in sorted_errors.iter().take(5) {
+            println!("  {}: {}", pattern, count);
+        }
+        println!("\nRecent Critical Entries:");
+        let critical_entries: Vec<_> = self.entries
+            .iter()
+            .filter(|e| e.level == "ERROR" || e.level == "FATAL")
+            .rev()
+            .take(3)
+            .collect();
+        for entry in critical_entries {
+            println!("  [{}] {}: {}", entry.timestamp, entry.level, entry.message);
+        }
+    }
+}
+
+fn main() {
+    let mut analyzer = LogAnalyzer::new();
+    
+    if let Err(e) = analyzer.parse_log_file("application.log") {
+        eprintln!("Failed to parse log file: {}", e);
+        return;
+    }
+    
+    analyzer.generate_report();
 }
