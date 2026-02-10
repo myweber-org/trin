@@ -230,4 +230,55 @@ mod tests {
         assert_eq!(result.get("name"), Some(&"john".to_string()));
         assert_eq!(result.get("city"), Some(&"new york".to_string()));
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    age: u8,
+    active: bool,
+}
+
+fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(input_file);
+
+    let output_file = File::create(output_path)?;
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    for result in rdr.deserialize() {
+        let record: Record = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Skipping invalid record: {}", e);
+                continue;
+            }
+        };
+
+        if record.age > 120 {
+            eprintln!("Invalid age {} for record {}, skipping", record.age, record.id);
+            continue;
+        }
+
+        wtr.serialize(&record)?;
+    }
+
+    wtr.flush()?;
+    println!("Cleaned data written to {}", output_path);
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = clean_csv("input.csv", "output.csv") {
+        eprintln!("Error cleaning CSV: {}", e);
+        std::process::exit(1);
+    }
 }
