@@ -255,3 +255,92 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0x55;
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let key_value = key.unwrap_or(DEFAULT_KEY);
+    let input_data = fs::read(input_path)?;
+    
+    let encrypted_data: Vec<u8> = input_data
+        .into_iter()
+        .map(|byte| byte ^ key_value)
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
+}
+
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    
+    if args.len() < 4 {
+        eprintln!("Usage: {} <encrypt|decrypt> <input_file> <output_file> [key]", args[0]);
+        std::process::exit(1);
+    }
+    
+    let operation = &args[1];
+    let input_file = &args[2];
+    let output_file = &args[3];
+    let key = if args.len() > 4 {
+        args[4].parse::<u8>().ok()
+    } else {
+        None
+    };
+    
+    if !Path::new(input_file).exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Input file '{}' not found", input_file)
+        ));
+    }
+    
+    match operation.as_str() {
+        "encrypt" => xor_encrypt_file(input_file, output_file, key),
+        "decrypt" => xor_decrypt_file(input_file, output_file, key),
+        _ => {
+            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_xor_encryption() {
+        let original_data = b"Hello, World!";
+        let mut input_file = NamedTempFile::new().unwrap();
+        let mut output_file = NamedTempFile::new().unwrap();
+        
+        input_file.write_all(original_data).unwrap();
+        
+        xor_encrypt_file(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        let encrypted_data = fs::read(output_file.path()).unwrap();
+        assert_ne!(encrypted_data, original_data);
+        
+        xor_decrypt_file(
+            output_file.path().to_str().unwrap(),
+            input_file.path().to_str().unwrap(),
+            Some(0x42)
+        ).unwrap();
+        
+        let decrypted_data = fs::read(input_file.path()).unwrap();
+        assert_eq!(decrypted_data, original_data);
+    }
+}
