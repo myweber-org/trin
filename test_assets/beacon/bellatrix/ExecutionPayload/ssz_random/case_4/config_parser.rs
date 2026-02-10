@@ -1,111 +1,115 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AppConfig {
-    pub server_address: String,
-    pub server_port: u16,
-    pub max_connections: usize,
-    pub enable_logging: bool,
-    pub log_level: String,
+#[derive(Debug, PartialEq)]
+pub struct Config {
+    pub settings: HashMap<String, String>,
+    pub thresholds: HashMap<String, f64>,
+    pub enabled: bool,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        AppConfig {
-            server_address: String::from("127.0.0.1"),
-            server_port: 8080,
-            max_connections: 100,
-            enable_logging: true,
-            log_level: String::from("info"),
-        }
-    }
-}
+impl Config {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
 
-impl AppConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let config: AppConfig = toml::from_str(&content)?;
-        config.validate()?;
-        Ok(config)
+        Self::parse(&content)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
-        if self.server_port == 0 {
-            return Err(String::from("Server port cannot be zero"));
+    fn parse(content: &str) -> Result<Self, String> {
+        let mut settings = HashMap::new();
+        let mut thresholds = HashMap::new();
+        let mut enabled = false;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid line format: {}", line));
+            }
+
+            let key = parts[0].trim().to_string();
+            let value = parts[1].trim().to_string();
+
+            match key.as_str() {
+                "enabled" => {
+                    enabled = value.parse()
+                        .map_err(|_| format!("Invalid boolean value for 'enabled': {}", value))?;
+                }
+                key if key.starts_with("threshold_") => {
+                    let threshold_value: f64 = value.parse()
+                        .map_err(|_| format!("Invalid float value for '{}': {}", key, value))?;
+                    thresholds.insert(key, threshold_value);
+                }
+                _ => {
+                    settings.insert(key, value);
+                }
+            }
         }
-        
-        if self.max_connections == 0 {
-            return Err(String::from("Max connections must be greater than zero"));
-        }
-        
-        let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_log_levels.contains(&self.log_level.as_str()) {
-            return Err(format!(
-                "Invalid log level '{}'. Must be one of: {:?}",
-                self.log_level, valid_log_levels
-            ));
-        }
-        
-        Ok(())
+
+        Ok(Config {
+            settings,
+            thresholds,
+            enabled,
+        })
     }
-    
-    pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
-        let toml_string = toml::to_string_pretty(self)?;
-        fs::write(path, toml_string)?;
-        Ok(())
+
+    pub fn get_setting(&self, key: &str) -> Option<&String> {
+        self.settings.get(key)
+    }
+
+    pub fn get_threshold(&self, key: &str) -> Option<&f64> {
+        self.thresholds.get(key)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_default_config() {
-        let config = AppConfig::default();
-        assert_eq!(config.server_address, "127.0.0.1");
-        assert_eq!(config.server_port, 8080);
-        assert_eq!(config.max_connections, 100);
-        assert_eq!(config.enable_logging, true);
-        assert_eq!(config.log_level, "info");
+    fn test_parse_valid_config() {
+        let content = r#"
+            enabled = true
+            server_host = 127.0.0.1
+            server_port = 8080
+            threshold_cpu = 80.5
+            threshold_memory = 90.0
+        "#;
+
+        let config = Config::parse(content).unwrap();
+        assert_eq!(config.enabled, true);
+        assert_eq!(config.get_setting("server_host"), Some(&"127.0.0.1".to_string()));
+        assert_eq!(config.get_setting("server_port"), Some(&"8080".to_string()));
+        assert_eq!(config.get_threshold("threshold_cpu"), Some(&80.5));
+        assert_eq!(config.get_threshold("threshold_memory"), Some(&90.0));
     }
 
     #[test]
-    fn test_config_validation() {
-        let mut config = AppConfig::default();
-        
-        config.server_port = 0;
-        assert!(config.validate().is_err());
-        
-        config.server_port = 8080;
-        config.max_connections = 0;
-        assert!(config.validate().is_err());
-        
-        config.max_connections = 100;
-        config.log_level = String::from("invalid");
-        assert!(config.validate().is_err());
-        
-        config.log_level = String::from("debug");
-        assert!(config.validate().is_ok());
+    fn test_parse_invalid_boolean() {
+        let content = "enabled = not_a_bool";
+        let result = Config::parse(content);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_config_serialization() -> Result<(), Box<dyn std::error::Error>> {
-        let config = AppConfig::default();
-        let temp_file = NamedTempFile::new()?;
-        
-        config.to_file(temp_file.path())?;
-        let loaded_config = AppConfig::from_file(temp_file.path())?;
-        
-        assert_eq!(config.server_address, loaded_config.server_address);
-        assert_eq!(config.server_port, loaded_config.server_port);
-        assert_eq!(config.max_connections, loaded_config.max_connections);
-        assert_eq!(config.enable_logging, loaded_config.enable_logging);
-        assert_eq!(config.log_level, loaded_config.log_level);
-        
-        Ok(())
+    fn test_parse_invalid_float() {
+        let content = "threshold_cpu = not_a_number";
+        let result = Config::parse(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_config() {
+        let content = "";
+        let config = Config::parse(content).unwrap();
+        assert_eq!(config.enabled, false);
+        assert!(config.settings.is_empty());
+        assert!(config.thresholds.is_empty());
     }
 }
