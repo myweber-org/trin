@@ -1,62 +1,91 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
+
+use std::collections::HashSet;
 use std::error::Error;
-use std::fs::File;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
 }
 
-fn clean_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let file = File::open(input_path)?;
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(file);
-
-    let output_file = File::create(output_path)?;
-    let mut wtr = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(output_file);
-
-    for result in rdr.deserialize() {
-        let mut record: Record = result?;
-        
-        record.name = record.name.trim().to_string();
-        record.category = record.category.trim().to_lowercase();
-        
-        if record.value < 0.0 {
-            record.value = 0.0;
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
         }
-        
-        if record.name.is_empty() {
-            continue;
-        }
-        
-        wtr.serialize(&record)?;
     }
 
-    wtr.flush()?;
-    Ok(())
-}
-
-fn validate_record(record: &Record) -> bool {
-    !record.name.is_empty() && 
-    record.value >= 0.0 && 
-    !record.category.is_empty()
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let input = "data/raw.csv";
-    let output = "data/cleaned.csv";
-    
-    match clean_data(input, output) {
-        Ok(_) => println!("Data cleaning completed successfully"),
-        Err(e) => eprintln!("Error cleaning data: {}", e),
+    pub fn normalize_text(&self, text: &str) -> String {
+        text.trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect()
     }
-    
-    Ok(())
+
+    pub fn deduplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_text(item);
+        if self.dedupe_set.contains(&normalized) {
+            false
+        } else {
+            self.dedupe_set.insert(normalized);
+            true
+        }
+    }
+
+    pub fn clean_dataset(&mut self, data: Vec<String>) -> Result<Vec<String>, Box<dyn Error>> {
+        let mut cleaned = Vec::new();
+        
+        for item in data {
+            if self.deduplicate(&item) {
+                cleaned.push(item);
+            }
+        }
+        
+        if cleaned.is_empty() {
+            return Err("All items were duplicates".into());
+        }
+        
+        Ok(cleaned)
+    }
+
+    pub fn reset(&mut self) {
+        self.dedupe_set.clear();
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.dedupe_set.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        let result = cleaner.normalize_text("  Hello WORLD!  ");
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("test"));
+        assert!(!cleaner.deduplicate("TEST"));
+        assert!(cleaner.deduplicate("different"));
+    }
+
+    #[test]
+    fn test_clean_dataset() {
+        let mut cleaner = DataCleaner::new();
+        let data = vec![
+            "apple".to_string(),
+            "APPLE".to_string(),
+            "banana".to_string(),
+        ];
+        
+        let result = cleaner.clean_dataset(data).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(cleaner.get_unique_count(), 2);
+    }
 }
