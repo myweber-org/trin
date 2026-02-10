@@ -379,3 +379,164 @@ mod tests {
         assert_eq!(average, Some(20.0));
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    DuplicateTag,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value must be non-negative"),
+            ValidationError::DuplicateTag => write!(f, "Tags must be unique"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        
+        let mut seen_tags = HashMap::new();
+        for tag in &self.tags {
+            if seen_tags.insert(tag, true).is_some() {
+                return Err(ValidationError::DuplicateTag);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    pub fn normalize(&mut self) {
+        self.name = self.name.trim().to_string();
+        self.tags.sort();
+        self.tags.dedup();
+    }
+    
+    pub fn calculate_score(&self) -> f64 {
+        let base_score = self.value * 100.0;
+        let tag_bonus = self.tags.len() as f64 * 10.0;
+        base_score + tag_bonus
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ValidationError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+    
+    pub fn process_all(&mut self) {
+        for record in &mut self.records {
+            record.normalize();
+        }
+    }
+    
+    pub fn get_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if self.records.is_empty() {
+            return stats;
+        }
+        
+        let total_records = self.records.len() as f64;
+        let total_value: f64 = self.records.iter().map(|r| r.value).sum();
+        let max_score = self.records.iter()
+            .map(|r| r.calculate_score())
+            .fold(f64::MIN, f64::max);
+        
+        stats.insert("total_records".to_string(), total_records);
+        stats.insert("average_value".to_string(), total_value / total_records);
+        stats.insert("max_score".to_string(), max_score);
+        
+        stats
+    }
+    
+    pub fn filter_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records.iter()
+            .filter(|record| record.tags.contains(&tag.to_string()))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test Record".to_string(),
+            value: 42.5,
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        };
+        
+        assert!(record.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 10.0,
+            tags: vec![],
+        };
+        
+        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_calculate_score() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 2.5,
+            tags: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        };
+        
+        let score = record.calculate_score();
+        assert_eq!(score, 2.5 * 100.0 + 3.0 * 10.0);
+    }
+}
