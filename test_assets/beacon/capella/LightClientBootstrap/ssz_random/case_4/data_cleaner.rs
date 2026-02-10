@@ -66,4 +66,52 @@ mod tests {
         assert_eq!(result.len(), 3);
         assert_eq!(cleaner.get_unique_count(), 3);
     }
+}use std::collections::HashSet;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+
+pub fn remove_duplicates(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let reader = BufReader::new(file);
+    let mut seen = HashSet::new();
+    let mut unique_lines = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if seen.insert(line.clone()) {
+            unique_lines.push(line);
+        }
+    }
+
+    let mut output_file = File::create(output_path)?;
+    for line in unique_lines {
+        writeln!(output_file, "{}", line)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn test_remove_duplicates() {
+        let input = "test_input.csv";
+        let output = "test_output.csv";
+        let test_data = "id,name\n1,alice\n2,bob\n1,alice\n3,charlie\n";
+
+        std::fs::write(input, test_data).unwrap();
+        remove_duplicates(input, output).unwrap();
+
+        let mut content = String::new();
+        File::open(output).unwrap().read_to_string(&mut content).unwrap();
+        let expected = "id,name\n1,alice\n2,bob\n3,charlie\n";
+        assert_eq!(content, expected);
+
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(output).unwrap();
+    }
 }
