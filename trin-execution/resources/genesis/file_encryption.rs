@@ -131,3 +131,67 @@ pub fn generate_key_file(password: &str, key_path: &str) -> Result<(), Box<dyn s
     
     Ok(())
 }
+use aes::Aes256;
+use block_modes::{BlockMode, Cbc};
+use block_modes::block_padding::Pkcs7;
+use rand::{RngCore, rngs::OsRng};
+use std::fs;
+use std::io::{Read, Write};
+
+type Aes256Cbc = Cbc<Aes256, Pkcs7>;
+
+const KEY_SIZE: usize = 32;
+const IV_SIZE: usize = 16;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    if key.len() != KEY_SIZE {
+        return Err("Invalid key length".into());
+    }
+
+    let mut file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)?;
+
+    let mut iv = [0u8; IV_SIZE];
+    OsRng.fill_bytes(&mut iv);
+
+    let cipher = Aes256Cbc::new_from_slices(key, &iv)?;
+    let ciphertext = cipher.encrypt_vec(&plaintext);
+
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&iv)?;
+    output.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    if key.len() != KEY_SIZE {
+        return Err("Invalid key length".into());
+    }
+
+    let mut file = fs::File::open(input_path)?;
+    let mut ciphertext = Vec::new();
+    file.read_to_end(&mut ciphertext)?;
+
+    if ciphertext.len() < IV_SIZE {
+        return Err("File too short".into());
+    }
+
+    let iv = &ciphertext[..IV_SIZE];
+    let ciphertext = &ciphertext[IV_SIZE..];
+
+    let cipher = Aes256Cbc::new_from_slices(key, iv)?;
+    let plaintext = cipher.decrypt_vec(ciphertext)?;
+
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&plaintext)?;
+
+    Ok(())
+}
+
+pub fn generate_key() -> [u8; KEY_SIZE] {
+    let mut key = [0u8; KEY_SIZE];
+    OsRng.fill_bytes(&mut key);
+    key
+}
