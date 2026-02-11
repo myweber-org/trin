@@ -129,3 +129,99 @@ mod tests {
         assert!(obj.get("d").unwrap().is_array());
     }
 }
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+
+pub fn merge_json(base: &mut Value, extension: &Value, conflict_strategy: ConflictStrategy) -> Result<(), String> {
+    match (base, extension) {
+        (Value::Object(base_map), Value::Object(ext_map)) => {
+            merge_objects(base_map, ext_map, conflict_strategy)
+        }
+        _ => Err("Both values must be JSON objects".to_string()),
+    }
+}
+
+fn merge_objects(base: &mut Map<String, Value>, extension: &Map<String, Value>, strategy: ConflictStrategy) -> Result<(), String> {
+    let base_keys: HashSet<_> = base.keys().collect();
+    let ext_keys: HashSet<_> = extension.keys().collect();
+    let conflicts: Vec<_> = base_keys.intersection(&ext_keys).collect();
+
+    if !conflicts.is_empty() {
+        match strategy {
+            ConflictStrategy::PreferBase => return Ok(()),
+            ConflictStrategy::PreferExtension => {
+                for key in conflicts {
+                    base.remove(*key);
+                }
+            }
+            ConflictStrategy::MergeRecursive => {
+                for key in conflicts {
+                    let base_val = base.get_mut(*key).unwrap();
+                    let ext_val = extension.get(*key).unwrap();
+                    if let (Value::Object(_), Value::Object(_)) = (base_val, ext_val) {
+                        merge_json(base_val, ext_val, strategy.clone())?;
+                    } else {
+                        base.insert((*key).clone(), ext_val.clone());
+                    }
+                }
+            }
+            ConflictStrategy::FailOnConflict => {
+                return Err(format!("Conflict detected on keys: {:?}", conflicts));
+            }
+        }
+    }
+
+    for (key, value) in extension {
+        if !base.contains_key(key) {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub enum ConflictStrategy {
+    PreferBase,
+    PreferExtension,
+    MergeRecursive,
+    FailOnConflict,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_merge_no_conflict() {
+        let mut base = json!({"a": 1});
+        let extension = json!({"b": 2});
+        merge_json(&mut base, &extension, ConflictStrategy::PreferBase).unwrap();
+        assert_eq!(base, json!({"a": 1, "b": 2}));
+    }
+
+    #[test]
+    fn test_merge_prefer_base() {
+        let mut base = json!({"a": 1});
+        let extension = json!({"a": 99, "b": 2});
+        merge_json(&mut base, &extension, ConflictStrategy::PreferBase).unwrap();
+        assert_eq!(base, json!({"a": 1, "b": 2}));
+    }
+
+    #[test]
+    fn test_merge_prefer_extension() {
+        let mut base = json!({"a": 1});
+        let extension = json!({"a": 99, "b": 2});
+        merge_json(&mut base, &extension, ConflictStrategy::PreferExtension).unwrap();
+        assert_eq!(base, json!({"a": 99, "b": 2}));
+    }
+
+    #[test]
+    fn test_merge_fail_on_conflict() {
+        let mut base = json!({"a": 1});
+        let extension = json!({"a": 99});
+        let result = merge_json(&mut base, &extension, ConflictStrategy::FailOnConflict);
+        assert!(result.is_err());
+    }
+}
