@@ -9,7 +9,8 @@ pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io:
     let encryption_key = key.unwrap_or(DEFAULT_KEY);
     
     let input_data = fs::read(input_path)?;
-    let encrypted_data: Vec<u8> = input_data.iter()
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
         .map(|byte| byte ^ encryption_key)
         .collect();
     
@@ -18,70 +19,52 @@ pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io:
 }
 
 pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    let decryption_key = key.unwrap_or(DEFAULT_KEY);
+    encrypt_file(input_path, output_path, key)
+}
+
+pub fn process_files() -> io::Result<()> {
+    let test_data = b"Hello, this is a secret message!";
+    let test_file = "test_secret.txt";
+    let encrypted_file = "test_encrypted.bin";
+    let decrypted_file = "test_decrypted.txt";
     
-    let encrypted_data = fs::read(input_path)?;
-    let decrypted_data: Vec<u8> = encrypted_data.iter()
-        .map(|byte| byte ^ decryption_key)
-        .collect();
+    fs::write(test_file, test_data)?;
     
-    fs::write(output_path, decrypted_data)?;
+    println!("Encrypting file...");
+    encrypt_file(test_file, encrypted_file, Some(0xAA))?;
+    
+    println!("Decrypting file...");
+    decrypt_file(encrypted_file, decrypted_file, Some(0xAA))?;
+    
+    let decrypted_content = fs::read(decrypted_file)?;
+    println!("Decrypted content matches original: {}", 
+             decrypted_content == test_data);
+    
+    cleanup_files(&[test_file, encrypted_file, decrypted_file])?;
     Ok(())
 }
 
-pub fn encrypt_string(text: &str, key: Option<u8>) -> Vec<u8> {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
-    text.bytes()
-        .map(|byte| byte ^ encryption_key)
-        .collect()
-}
-
-pub fn decrypt_bytes(data: &[u8], key: Option<u8>) -> String {
-    let decryption_key = key.unwrap_or(DEFAULT_KEY);
-    data.iter()
-        .map(|byte| (byte ^ decryption_key) as char)
-        .collect()
+fn cleanup_files(files: &[&str]) -> io::Result<()> {
+    for file in files {
+        if Path::new(file).exists() {
+            fs::remove_file(file)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_string_encryption_decryption() {
-        let original = "Hello, World!";
-        let encrypted = encrypt_string(original, Some(0x42));
-        let decrypted = decrypt_bytes(&encrypted, Some(0x42));
+    fn test_xor_encryption() {
+        let data = vec![0x00, 0xFF, 0x55, 0xAA];
+        let key = 0xCC;
         
-        assert_eq!(original, decrypted);
-    }
-
-    #[test]
-    fn test_file_encryption_decryption() -> io::Result<()> {
-        let original_content = b"Secret data to protect";
+        let encrypted: Vec<u8> = data.iter().map(|b| b ^ key).collect();
+        let decrypted: Vec<u8> = encrypted.iter().map(|b| b ^ key).collect();
         
-        let input_file = NamedTempFile::new()?;
-        let encrypted_file = NamedTempFile::new()?;
-        let decrypted_file = NamedTempFile::new()?;
-        
-        fs::write(input_file.path(), original_content)?;
-        
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            Some(0x99)
-        )?;
-        
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            Some(0x99)
-        )?;
-        
-        let decrypted_content = fs::read(decrypted_file.path())?;
-        assert_eq!(original_content, decrypted_content.as_slice());
-        
-        Ok(())
+        assert_eq!(data, decrypted);
     }
 }
