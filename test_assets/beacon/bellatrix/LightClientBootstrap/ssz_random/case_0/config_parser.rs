@@ -219,3 +219,178 @@ mod tests {
         assert_eq!(config.get_or_default("MISSING", "default"), "default");
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub address: String,
+    pub port: u16,
+    pub workers: usize,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub features: HashMap<String, bool>,
+    pub log_level: String,
+}
+
+pub struct ConfigParser;
+
+impl ConfigParser {
+    pub fn load_from_file(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut config: AppConfig = serde_yaml::from_str(&content)?;
+        
+        Self::substitute_env_vars(&mut config);
+        Ok(config)
+    }
+    
+    fn substitute_env_vars(config: &mut AppConfig) {
+        config.database.host = Self::get_env_or_default("DB_HOST", &config.database.host);
+        config.database.port = Self::get_env_u16_or_default("DB_PORT", config.database.port);
+        config.database.username = Self::get_env_or_default("DB_USER", &config.database.username);
+        config.database.password = Self::get_env_or_default("DB_PASS", &config.database.password);
+        config.database.database = Self::get_env_or_default("DB_NAME", &config.database.database);
+        
+        config.server.address = Self::get_env_or_default("SERVER_ADDR", &config.server.address);
+        config.server.port = Self::get_env_u16_or_default("SERVER_PORT", config.server.port);
+        config.server.workers = Self::get_env_usize_or_default("SERVER_WORKERS", config.server.workers);
+        
+        config.log_level = Self::get_env_or_default("LOG_LEVEL", &config.log_level);
+    }
+    
+    fn get_env_or_default(key: &str, default: &str) -> String {
+        env::var(key).unwrap_or_else(|_| default.to_string())
+    }
+    
+    fn get_env_u16_or_default(key: &str, default: u16) -> u16 {
+        env::var(key)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+    
+    fn get_env_usize_or_default(key: &str, default: usize) -> usize {
+        env::var(key)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+    
+    pub fn validate_config(config: &AppConfig) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        
+        if config.server.port == 0 {
+            errors.push("Server port cannot be zero".to_string());
+        }
+        
+        if config.server.workers == 0 {
+            errors.push("Number of workers cannot be zero".to_string());
+        }
+        
+        if config.database.host.is_empty() {
+            errors.push("Database host cannot be empty".to_string());
+        }
+        
+        if config.database.port == 0 {
+            errors.push("Database port cannot be zero".to_string());
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_config_loading() {
+        let yaml_content = r#"
+server:
+  address: "127.0.0.1"
+  port: 8080
+  workers: 4
+  timeout_seconds: 30
+
+database:
+  host: "localhost"
+  port: 5432
+  username: "postgres"
+  password: "secret"
+  database: "app_db"
+
+features:
+  caching: true
+  metrics: false
+
+log_level: "info"
+"#;
+        
+        let mut file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), yaml_content).unwrap();
+        
+        let config = ConfigParser::load_from_file(file.path().to_str().unwrap());
+        assert!(config.is_ok());
+        
+        let config = config.unwrap();
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.database.host, "localhost");
+        assert_eq!(config.features.get("caching"), Some(&true));
+    }
+    
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("DB_HOST", "env-host");
+        env::set_var("SERVER_PORT", "9090");
+        
+        let yaml_content = r#"
+server:
+  address: "127.0.0.1"
+  port: 8080
+  workers: 4
+  timeout_seconds: 30
+
+database:
+  host: "default-host"
+  port: 5432
+  username: "postgres"
+  password: "secret"
+  database: "app_db"
+
+features: {}
+
+log_level: "info"
+"#;
+        
+        let mut file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), yaml_content).unwrap();
+        
+        let config = ConfigParser::load_from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.database.host, "env-host");
+        assert_eq!(config.server.port, 9090);
+        
+        env::remove_var("DB_HOST");
+        env::remove_var("SERVER_PORT");
+    }
+}
