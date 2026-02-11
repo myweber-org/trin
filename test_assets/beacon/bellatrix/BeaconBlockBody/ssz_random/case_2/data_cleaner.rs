@@ -59,4 +59,71 @@ mod tests {
         let result = DataCleaner::remove_empty_lines(input);
         assert_eq!(result, "line1\nline2\nline3\nline4");
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    deduplication_cache: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            deduplication_cache: HashSet::new(),
+        }
+    }
+
+    pub fn normalize_string(&self, input: &str) -> String {
+        input.trim().to_lowercase()
+    }
+
+    pub fn is_duplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_string(item);
+        !self.deduplication_cache.insert(normalized)
+    }
+
+    pub fn clean_dataset(&mut self, dataset: Vec<String>) -> Vec<String> {
+        let mut cleaned = Vec::new();
+        
+        for item in dataset {
+            if !self.is_duplicate(&item) {
+                cleaned.push(item);
+            }
+        }
+        
+        cleaned
+    }
+
+    pub fn reset_cache(&mut self) {
+        self.deduplication_cache.clear();
+    }
+
+    pub fn get_unique_count(&self) -> usize {
+        self.deduplication_cache.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.normalize_string("  HELLO World  "), "hello world");
+    }
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        let dataset = vec![
+            "Apple".to_string(),
+            "apple".to_string(),
+            "Banana".to_string(),
+            "  apple  ".to_string(),
+        ];
+        
+        let cleaned = cleaner.clean_dataset(dataset);
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaner.get_unique_count(), 2);
+    }
 }
