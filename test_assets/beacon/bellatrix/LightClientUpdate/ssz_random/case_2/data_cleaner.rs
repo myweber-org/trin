@@ -1,54 +1,98 @@
-use std::collections::HashSet;
-use std::hash::Hash;
+use csv::{ReaderBuilder, WriterBuilder};
+use std::error::Error;
+use std::fs::File;
 
-pub fn deduplicate<T: Eq + Hash + Clone>(items: Vec<T>) -> Vec<T> {
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    
-    for item in items {
-        if seen.insert(item.clone()) {
-            result.push(item);
+pub struct DataCleaner {
+    input_path: String,
+    output_path: String,
+}
+
+impl DataCleaner {
+    pub fn new(input_path: &str, output_path: &str) -> Self {
+        Self {
+            input_path: input_path.to_string(),
+            output_path: output_path.to_string(),
         }
     }
-    result
-}
 
-pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
-    strings
-        .into_iter()
-        .map(|s| s.trim().to_lowercase())
-        .collect()
-}
+    pub fn clean_numeric_columns(&self) -> Result<(), Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(input_file);
+        let output_file = File::create(&self.output_path)?;
+        let mut wtr = WriterBuilder::new().from_writer(output_file);
 
-pub fn filter_by_length(strings: Vec<String>, min_len: usize) -> Vec<String> {
-    strings
-        .into_iter()
-        .filter(|s| s.len() >= min_len)
-        .collect()
+        let headers = rdr.headers()?.clone();
+        wtr.write_record(&headers)?;
+
+        for result in rdr.records() {
+            let record = result?;
+            let mut cleaned_record = Vec::new();
+
+            for field in record.iter() {
+                let cleaned_field = field.trim();
+                if cleaned_field.is_empty() {
+                    cleaned_record.push("0".to_string());
+                } else if let Ok(num) = cleaned_field.parse::<f64>() {
+                    cleaned_record.push(num.to_string());
+                } else {
+                    cleaned_record.push(cleaned_field.to_string());
+                }
+            }
+
+            wtr.write_record(&cleaned_record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_duplicate_rows(&self) -> Result<(), Box<dyn Error>> {
+        let input_file = File::open(&self.input_path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(input_file);
+        let output_file = File::create(&self.output_path)?;
+        let mut wtr = WriterBuilder::new().from_writer(output_file);
+
+        let headers = rdr.headers()?.clone();
+        wtr.write_record(&headers)?;
+
+        let mut seen_records = std::collections::HashSet::new();
+
+        for result in rdr.records() {
+            let record = result?;
+            let record_str = record.iter().collect::<Vec<&str>>().join(",");
+            
+            if !seen_records.contains(&record_str) {
+                wtr.write_record(&record)?;
+                seen_records.insert(record_str);
+            }
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_deduplicate() {
-        let input = vec![1, 2, 2, 3, 4, 4, 5];
-        let result = deduplicate(input);
-        assert_eq!(result, vec![1, 2, 3, 4, 5]);
-    }
+    fn test_clean_numeric_columns() {
+        let mut input_file = NamedTempFile::new().unwrap();
+        writeln!(input_file, "id,value,notes").unwrap();
+        writeln!(input_file, "1, 42.5 ,test").unwrap();
+        writeln!(input_file, "2,,").unwrap();
+        writeln!(input_file, "3,invalid,data").unwrap();
 
-    #[test]
-    fn test_normalize_strings() {
-        let input = vec!["  HELLO  ".to_string(), "World".to_string()];
-        let result = normalize_strings(input);
-        assert_eq!(result, vec!["hello".to_string(), "world".to_string()]);
-    }
-
-    #[test]
-    fn test_filter_by_length() {
-        let input = vec!["a".to_string(), "ab".to_string(), "abc".to_string()];
-        let result = filter_by_length(input, 2);
-        assert_eq!(result, vec!["ab".to_string(), "abc".to_string()]);
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let cleaner = DataCleaner::new(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        );
+        
+        assert!(cleaner.clean_numeric_columns().is_ok());
     }
 }
