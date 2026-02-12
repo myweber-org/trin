@@ -124,3 +124,70 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufReader, Write};
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged = Map::new();
+    let mut conflict_log = Vec::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json: Map<String, Value> = serde_json::from_reader(reader)?;
+
+        for (key, value) in json {
+            if merged.contains_key(&key) {
+                let existing = merged.get(&key).unwrap();
+                if existing != &value {
+                    conflict_log.push(format!(
+                        "Conflict for key '{}': existing {:?}, new {:?}",
+                        key, existing, value
+                    ));
+                    merged.insert(format!("{}_conflict", key), value);
+                }
+            } else {
+                merged.insert(key, value);
+            }
+        }
+    }
+
+    let output = File::create(output_path)?;
+    serde_json::to_writer_pretty(output, &Value::Object(merged))?;
+
+    if !conflict_log.is_empty() {
+        let mut log_file = File::create("merge_conflicts.log")?;
+        for entry in conflict_log {
+            writeln!(log_file, "{}", entry)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn find_unique_keys<P: AsRef<Path>>(paths: &[P]) -> Result<HashSet<String>, Box<dyn std::error::Error>> {
+    let mut all_keys = HashSet::new();
+    let mut common_keys = HashSet::new();
+    let mut first = true;
+
+    for path in paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json: Map<String, Value> = serde_json::from_reader(reader)?;
+        let keys: HashSet<String> = json.keys().cloned().collect();
+
+        if first {
+            common_keys = keys.clone();
+            first = false;
+        } else {
+            common_keys = common_keys.intersection(&keys).cloned().collect();
+        }
+        all_keys.extend(keys);
+    }
+
+    let unique_keys: HashSet<String> = all_keys.difference(&common_keys).cloned().collect();
+    Ok(unique_keys)
+}
