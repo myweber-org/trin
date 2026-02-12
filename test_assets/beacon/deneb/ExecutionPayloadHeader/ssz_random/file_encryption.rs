@@ -1,42 +1,62 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::error::Error;
 
-pub fn encrypt_data(plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(b"unique_nonce_");
-    
-    let ciphertext = cipher.encrypt(nonce, plaintext)
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-    
-    Ok((ciphertext, key.to_vec()))
+use std::fs;
+use std::io::{self, Read, Write};
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&encrypted_data)?;
+
+    Ok(())
 }
 
-pub fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let key = Key::<Aes256Gcm>::from_slice(key);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(b"unique_nonce_");
-    
-    let plaintext = cipher.decrypt(nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-    
-    Ok(plaintext)
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let original_data = b"Secret message for encryption test";
-        
-        let (ciphertext, key) = encrypt_data(original_data).unwrap();
-        let decrypted_data = decrypt_data(&ciphertext, &key).unwrap();
-        
-        assert_eq!(original_data.to_vec(), decrypted_data);
+    fn test_xor_encryption() {
+        let key = b"secret_key";
+        let test_data = b"Hello, XOR encryption!";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), test_data).unwrap();
+
+        xor_encrypt_file(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let encrypted = fs::read(output_file.path()).unwrap();
+        assert_ne!(encrypted, test_data);
+
+        let decrypt_file = NamedTempFile::new().unwrap();
+        xor_decrypt_file(
+            output_file.path().to_str().unwrap(),
+            decrypt_file.path().to_str().unwrap(),
+            key,
+        )
+        .unwrap();
+
+        let decrypted = fs::read(decrypt_file.path()).unwrap();
+        assert_eq!(decrypted, test_data);
     }
 }
