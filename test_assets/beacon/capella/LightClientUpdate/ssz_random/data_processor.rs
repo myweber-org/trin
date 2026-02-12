@@ -235,4 +235,129 @@ mod tests {
         let type_a_records = processor.filter_by_category("TypeA");
         assert_eq!(type_a_records.len(), 2);
     }
+}use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Result<Self, Box<dyn Error>> {
+        if values.is_empty() {
+            return Err("Values cannot be empty".into());
+        }
+        if values.iter().any(|&v| v.is_nan() || v.is_infinite()) {
+            return Err("Invalid numeric values detected".into());
+        }
+        
+        Ok(Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        })
+    }
+    
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+    
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        let count = self.values.len() as f64;
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count;
+        
+        let variance: f64 = self.values
+            .iter()
+            .map(|&v| (v - mean).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+pub fn normalize_data(records: &mut [DataRecord]) {
+    if records.is_empty() {
+        return;
+    }
+    
+    let dimension = records[0].values.len();
+    let mut mins = vec![f64::INFINITY; dimension];
+    let mut maxs = vec![f64::NEG_INFINITY; dimension];
+    
+    for record in records.iter() {
+        for (i, &value) in record.values.iter().enumerate() {
+            if value < mins[i] {
+                mins[i] = value;
+            }
+            if value > maxs[i] {
+                maxs[i] = value;
+            }
+        }
+    }
+    
+    for record in records.iter_mut() {
+        for i in 0..dimension {
+            let range = maxs[i] - mins[i];
+            if range > 0.0 {
+                record.values[i] = (record.values[i] - mins[i]) / range;
+            }
+        }
+    }
+}
+
+pub fn filter_records<F>(records: Vec<DataRecord>, predicate: F) -> Vec<DataRecord>
+where
+    F: Fn(&DataRecord) -> bool,
+{
+    records.into_iter().filter(predicate).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.values, vec![1.0, 2.0, 3.0]);
+    }
+    
+    #[test]
+    fn test_invalid_data_record() {
+        let result = DataRecord::new(1, vec![]);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let (mean, variance, std_dev) = record.calculate_statistics();
+        
+        assert!((mean - 2.5).abs() < 1e-10);
+        assert!((variance - 1.25).abs() < 1e-10);
+        assert!((std_dev - 1.118033988749895).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_normalization() {
+        let mut records = vec![
+            DataRecord::new(1, vec![1.0, 10.0]).unwrap(),
+            DataRecord::new(2, vec![2.0, 20.0]).unwrap(),
+            DataRecord::new(3, vec![3.0, 30.0]).unwrap(),
+        ];
+        
+        normalize_data(&mut records);
+        
+        assert!((records[0].values[0] - 0.0).abs() < 1e-10);
+        assert!((records[0].values[1] - 0.0).abs() < 1e-10);
+        assert!((records[2].values[0] - 1.0).abs() < 1e-10);
+        assert!((records[2].values[1] - 1.0).abs() < 1e-10);
+    }
 }
