@@ -68,4 +68,129 @@ mod tests {
         assert_eq!(merged, expected);
         Ok(())
     }
+}use serde_json::{Map, Value};
+use std::collections::HashSet;
+
+pub fn merge_json(base: &mut Value, update: &Value, overwrite_arrays: bool) {
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            for (key, update_value) in update_map {
+                if let Some(base_value) = base_map.get_mut(key) {
+                    merge_json(base_value, update_value, overwrite_arrays);
+                } else {
+                    base_map.insert(key.clone(), update_value.clone());
+                }
+            }
+        }
+        (Value::Array(base_arr), Value::Array(update_arr)) if !overwrite_arrays => {
+            let mut existing_set = HashSet::new();
+            for item in base_arr.iter() {
+                if let Some(obj) = item.as_object() {
+                    if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                        existing_set.insert(id.to_string());
+                    }
+                }
+            }
+
+            for update_item in update_arr {
+                if let Some(obj) = update_item.as_object() {
+                    if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                        if existing_set.contains(id) {
+                            if let Some(existing) = base_arr
+                                .iter_mut()
+                                .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(id))
+                            {
+                                merge_json(existing, update_item, overwrite_arrays);
+                            }
+                        } else {
+                            base_arr.push(update_item.clone());
+                        }
+                    } else {
+                        base_arr.push(update_item.clone());
+                    }
+                } else {
+                    base_arr.push(update_item.clone());
+                }
+            }
+        }
+        (base, update) => {
+            *base = update.clone();
+        }
+    }
+}
+
+pub fn merge_json_with_config(base: &mut Value, update: &Value, config: &MergeConfig) {
+    merge_json(base, update, config.overwrite_arrays);
+}
+
+pub struct MergeConfig {
+    pub overwrite_arrays: bool,
+    pub preserve_null_values: bool,
+}
+
+impl Default for MergeConfig {
+    fn default() -> Self {
+        Self {
+            overwrite_arrays: false,
+            preserve_null_values: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut base = json!({
+            "name": "Alice",
+            "age": 30,
+            "address": {
+                "city": "New York",
+                "zip": "10001"
+            }
+        });
+
+        let update = json!({
+            "age": 31,
+            "address": {
+                "zip": "10002",
+                "country": "USA"
+            },
+            "email": "alice@example.com"
+        });
+
+        merge_json(&mut base, &update, false);
+
+        assert_eq!(base["age"], 31);
+        assert_eq!(base["address"]["zip"], "10002");
+        assert_eq!(base["address"]["country"], "USA");
+        assert_eq!(base["email"], "alice@example.com");
+    }
+
+    #[test]
+    fn test_array_merge_with_ids() {
+        let mut base = json!({
+            "items": [
+                {"id": "1", "name": "First"},
+                {"id": "2", "name": "Second"}
+            ]
+        });
+
+        let update = json!({
+            "items": [
+                {"id": "2", "name": "Updated Second"},
+                {"id": "3", "name": "Third"}
+            ]
+        });
+
+        merge_json(&mut base, &update, false);
+
+        let items = base["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[1]["name"], "Updated Second");
+        assert_eq!(items[2]["name"], "Third");
+    }
 }
