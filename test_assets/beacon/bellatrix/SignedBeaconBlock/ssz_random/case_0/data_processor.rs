@@ -229,4 +229,136 @@ mod tests {
         assert_eq!(processor.filter_by_category("A").len(), 2);
         assert_eq!(processor.average_value(), Some(200.0));
     }
+}use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue(f64),
+    InvalidCategory(String),
+    EmptyDataset,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            ProcessingError::InvalidCategory(c) => write!(f, "Invalid category: {}", c),
+            ProcessingError::EmptyDataset => write!(f, "Dataset contains no records"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.value < 0.0 || self.value > 1000.0 {
+            return Err(ProcessingError::InvalidValue(self.value));
+        }
+        
+        if self.category.is_empty() || self.category.len() > 50 {
+            return Err(ProcessingError::InvalidCategory(self.category.clone()));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+    }
+}
+
+pub struct Dataset {
+    records: Vec<DataRecord>,
+}
+
+impl Dataset {
+    pub fn new() -> Self {
+        Dataset { records: Vec::new() }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+    
+    pub fn process_all(&mut self, multiplier: f64) {
+        for record in &mut self.records {
+            record.transform(multiplier);
+        }
+    }
+    
+    pub fn calculate_average(&self) -> Result<f64, ProcessingError> {
+        if self.records.is_empty() {
+            return Err(ProcessingError::EmptyDataset);
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Ok(sum / self.records.len() as f64)
+    }
+    
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord {
+            id: 1,
+            value: 500.0,
+            category: String::from("electronics"),
+        };
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 2,
+            value: -10.0,
+            category: String::from("test"),
+        };
+        assert!(invalid_record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_dataset_operations() {
+        let mut dataset = Dataset::new();
+        
+        let record1 = DataRecord {
+            id: 1,
+            value: 100.0,
+            category: String::from("category_a"),
+        };
+        
+        let record2 = DataRecord {
+            id: 2,
+            value: 200.0,
+            category: String::from("category_b"),
+        };
+        
+        dataset.add_record(record1).unwrap();
+        dataset.add_record(record2).unwrap();
+        
+        dataset.process_all(2.0);
+        let avg = dataset.calculate_average().unwrap();
+        assert_eq!(avg, 300.0);
+        
+        let filtered = dataset.filter_by_category("category_a");
+        assert_eq!(filtered.len(), 1);
+    }
 }
