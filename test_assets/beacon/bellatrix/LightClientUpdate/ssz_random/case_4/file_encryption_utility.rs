@@ -1,8 +1,9 @@
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0xAA;
+const DEFAULT_KEY: u8 = 0x55;
 
 pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
     let encryption_key = key.unwrap_or(DEFAULT_KEY);
@@ -13,7 +14,7 @@ pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io:
     
     let encrypted_data: Vec<u8> = buffer
         .iter()
-        .map(|&byte| byte ^ encryption_key)
+        .map(|byte| byte ^ encryption_key)
         .collect();
     
     let mut output_file = fs::File::create(output_path)?;
@@ -33,10 +34,10 @@ pub fn encrypt_string(text: &str, key: Option<u8>) -> Vec<u8> {
         .collect()
 }
 
-pub fn decrypt_bytes(data: &[u8], key: Option<u8>) -> String {
+pub fn decrypt_string(data: &[u8], key: Option<u8>) -> String {
     let encryption_key = key.unwrap_or(DEFAULT_KEY);
     data.iter()
-        .map(|&byte| (byte ^ encryption_key) as char)
+        .map(|byte| (byte ^ encryption_key) as char)
         .collect()
 }
 
@@ -48,18 +49,19 @@ mod tests {
     #[test]
     fn test_string_encryption_decryption() {
         let original = "Hello, World!";
-        let key = Some(0x55);
+        let key = Some(0x42);
         
         let encrypted = encrypt_string(original, key);
-        let decrypted = decrypt_bytes(&encrypted, key);
+        let decrypted = decrypt_string(&encrypted, key);
         
-        assert_eq!(original, decrypted);
+        assert_ne!(encrypted, original.as_bytes());
+        assert_eq!(decrypted, original);
     }
     
     #[test]
     fn test_file_encryption_decryption() {
         let original_content = b"Secret file content";
-        let key = Some(0x77);
+        let key = Some(0x99);
         
         let input_file = NamedTempFile::new().unwrap();
         let encrypted_file = NamedTempFile::new().unwrap();
@@ -80,6 +82,6 @@ mod tests {
         ).unwrap();
         
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
+        assert_eq!(decrypted_content, original_content);
     }
 }
