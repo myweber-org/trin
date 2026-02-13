@@ -51,4 +51,91 @@ mod tests {
         assert_eq!(parsed["c"], 3);
         assert_eq!(parsed["d"], 4);
     }
+}use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Record {
+    id: u64,
+    name: String,
+    value: f64,
+}
+
+fn load_json_records<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let records: Vec<Record> = serde_json::from_reader(reader)?;
+    Ok(records)
+}
+
+fn merge_json_files(
+    input_paths: &[String],
+    output_path: &str,
+    key_field: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+    let mut seen_keys = HashSet::new();
+
+    for path in input_paths {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_array: Vec<Value> = serde_json::from_reader(reader)?;
+
+        for item in json_array {
+            if let Some(obj) = item.as_object() {
+                if let Some(key_value) = obj.get(key_field) {
+                    let key_string = key_value.to_string();
+                    if !seen_keys.contains(&key_string) {
+                        seen_keys.insert(key_string.clone());
+                        merged_map.insert(key_string, Value::Object(obj.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    let output_array: Vec<Value> = merged_map.values().cloned().collect();
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    serde_json::to_writer_pretty(writer, &output_array)?;
+
+    Ok(())
+}
+
+fn process_records() -> Result<(), Box<dyn std::error::Error>> {
+    let records = vec![
+        Record {
+            id: 1,
+            name: "Alpha".to_string(),
+            value: 42.5,
+        },
+        Record {
+            id: 2,
+            name: "Beta".to_string(),
+            value: 33.7,
+        },
+    ];
+
+    let output_file = File::create("output.json")?;
+    let writer = BufWriter::new(output_file);
+    serde_json::to_writer_pretty(writer, &records)?;
+
+    println!("Processed {} records", records.len());
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let input_files = vec![
+        "data1.json".to_string(),
+        "data2.json".to_string(),
+    ];
+    
+    merge_json_files(&input_files, "merged.json", "id")?;
+    process_records()?;
+    
+    Ok(())
 }
