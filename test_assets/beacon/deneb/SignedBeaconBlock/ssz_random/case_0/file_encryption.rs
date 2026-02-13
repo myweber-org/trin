@@ -305,4 +305,101 @@ pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
     output_file.write_all(&plaintext)?;
 
     Ok(())
+}use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use hex;
+use rand::Rng;
+use std::fs;
+use std::io::{self, Read, Write};
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+pub fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)?;
+
+    let salt: [u8; 16] = rand::thread_rng().gen();
+    let key_iv = derive_key_iv(password.as_bytes(), &salt);
+
+    let ciphertext = Aes256CbcEnc::new(&key_iv.0.into(), &key_iv.1.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output = fs::File::create(output_path)?;
+    output.write_all(&salt)?;
+    output.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+    let mut file = fs::File::open(input_path)?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+
+    if data.len() < 16 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "File too short"));
+    }
+
+    let (salt, ciphertext) = data.split_at(16);
+    let key_iv = derive_key_iv(password.as_bytes(), salt);
+
+    let plaintext = Aes256CbcDec::new(&key_iv.0.into(), &key_iv.1.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    fs::write(output_path, plaintext)?;
+    Ok(())
+}
+
+fn derive_key_iv(password: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 16]) {
+    let mut key = [0u8; 32];
+    let mut iv = [0u8; 16];
+    let mut combined = [0u8; 48];
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(password);
+    hasher.update(salt);
+    let hash = hasher.finalize();
+
+    combined.copy_from_slice(&hash.as_bytes()[..48]);
+    key.copy_from_slice(&combined[..32]);
+    iv.copy_from_slice(&combined[32..48]);
+
+    (key, iv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let plaintext = b"Secret data for encryption test";
+        let password = "strong_password_123";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), plaintext).unwrap();
+
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            password,
+        )
+        .unwrap();
+
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            password,
+        )
+        .unwrap();
+
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(plaintext.to_vec(), decrypted_data);
+    }
 }
