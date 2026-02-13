@@ -193,3 +193,143 @@ mod tests {
         assert!(filtered.iter().all(|r| r.category == "Alpha"));
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: u64,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be in the past"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ValidationError> {
+    if record.id == 0 {
+        return Err(ValidationError::InvalidId);
+    }
+    
+    if record.value < 0.0 || record.value > 1000.0 {
+        return Err(ValidationError::InvalidValue);
+    }
+    
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    if record.timestamp > current_time {
+        return Err(ValidationError::InvalidTimestamp);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: &DataRecord, multiplier: f64) -> DataRecord {
+    DataRecord {
+        id: record.id,
+        value: record.value * multiplier,
+        timestamp: record.timestamp,
+    }
+}
+
+pub fn process_records(
+    records: Vec<DataRecord>,
+    multiplier: f64,
+) -> Result<Vec<DataRecord>, ValidationError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(&record)?;
+        let transformed = transform_record(&record, multiplier);
+        processed.push(transformed);
+    }
+    
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_validate_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 500.0,
+            timestamp: 1000,
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+    
+    #[test]
+    fn test_validate_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 500.0,
+            timestamp: 1000,
+        };
+        
+        assert!(matches!(
+            validate_record(&record),
+            Err(ValidationError::InvalidId)
+        ));
+    }
+    
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            timestamp: 1000,
+        };
+        
+        let transformed = transform_record(&record, 2.0);
+        assert_eq!(transformed.value, 200.0);
+        assert_eq!(transformed.id, record.id);
+        assert_eq!(transformed.timestamp, record.timestamp);
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 100.0,
+                timestamp: 1000,
+            },
+            DataRecord {
+                id: 2,
+                value: 200.0,
+                timestamp: 2000,
+            },
+        ];
+        
+        let result = process_records(records, 1.5);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].value, 150.0);
+        assert_eq!(processed[1].value, 300.0);
+    }
+}
