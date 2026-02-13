@@ -580,4 +580,84 @@ mod tests {
         assert!(results[0].is_ok());
         assert!(results[1].is_ok());
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub fn process_csv_file(input_path: &Path, output_path: &Path) -> Result<usize, Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+
+    let mut valid_count = 0;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.is_valid() {
+            writer.serialize(&record)?;
+            valid_count += 1;
+        }
+    }
+
+    writer.flush()?;
+    Ok(valid_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            active: true,
+        };
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            active: false,
+        };
+        assert!(!record.is_valid());
+    }
+
+    #[test]
+    fn test_csv_processing() -> Result<(), Box<dyn Error>> {
+        let input_data = "id,name,value,active\n1,Alice,100.5,true\n2,Bob,-50.0,false\n3,,75.0,true";
+        
+        let mut input_file = NamedTempFile::new()?;
+        write!(input_file, "{}", input_data)?;
+        
+        let output_file = NamedTempFile::new()?;
+        
+        let valid_count = process_csv_file(input_file.path(), output_file.path())?;
+        
+        assert_eq!(valid_count, 1);
+        Ok(())
+    }
 }
