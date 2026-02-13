@@ -268,4 +268,89 @@ mod tests {
         assert!(results[0].is_ok());
         assert!(results[1].is_err());
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
+        let mut map = std::collections::HashMap::new();
+        
+        for record in &self.records {
+            map.entry(record.category.clone())
+               .or_insert_with(Vec::new)
+               .push(record);
+        }
+        
+        map
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_processing() {
+        let csv_data = "id,name,value,category\n1,ItemA,10.5,Category1\n2,ItemB,15.3,Category2\n";
+        
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_data).unwrap();
+        
+        let mut processor = DataProcessor::new();
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.calculate_total(), 25.8);
+        
+        let valid_records = processor.validate_records();
+        assert_eq!(valid_records.len(), 2);
+        
+        let grouped = processor.group_by_category();
+        assert_eq!(grouped.len(), 2);
+    }
 }
