@@ -608,3 +608,111 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidTimestamp,
+    SerializationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid data value"),
+            ProcessingError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            ProcessingError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+    if record.value.is_nan() || record.value.is_infinite() {
+        return Err(ProcessingError::InvalidValue);
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ProcessingError::InvalidTimestamp);
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+    validate_record(record)?;
+    
+    let transformed = DataRecord {
+        id: record.id,
+        value: record.value * 1.1,
+        timestamp: record.timestamp + 3600,
+    };
+    
+    Ok(transformed)
+}
+
+pub fn serialize_to_json(record: &DataRecord) -> Result<String, ProcessingError> {
+    serde_json::to_string(record)
+        .map_err(|e| ProcessingError::SerializationError(e.to_string()))
+}
+
+pub fn process_data_batch(records: Vec<DataRecord>) -> Vec<Result<String, ProcessingError>> {
+    records
+        .iter()
+        .map(|record| {
+            transform_record(record)
+                .and_then(|transformed| serialize_to_json(&transformed))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1609459200,
+        };
+        
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let record = DataRecord {
+            id: 1,
+            value: f64::NAN,
+            timestamp: 1609459200,
+        };
+        
+        assert!(validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            timestamp: 1609459200,
+        };
+        
+        let transformed = transform_record(&record).unwrap();
+        assert_eq!(transformed.value, 110.0);
+        assert_eq!(transformed.timestamp, 1609459200 + 3600);
+    }
+}
