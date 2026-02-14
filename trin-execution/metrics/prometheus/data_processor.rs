@@ -685,4 +685,93 @@ mod tests {
         assert_eq!(stats.max_value, 30.0);
         assert_eq!(stats.min_value, 10.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str, delimiter: char) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter,
+        }
+    }
+
+    pub fn filter_records(&self, column_index: usize, filter_value: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut filtered_data = Vec::new();
+
+        for line in reader.lines() {
+            let record = line?;
+            let fields: Vec<String> = record.split(self.delimiter).map(|s| s.to_string()).collect();
+            
+            if fields.get(column_index).map_or(false, |val| val == filter_value) {
+                filtered_data.push(fields);
+            }
+        }
+
+        Ok(filtered_data)
+    }
+
+    pub fn calculate_column_average(&self, column_index: usize) -> Result<f64, Box<dyn Error>> {
+        let file = File::open(&self.file_path)?;
+        let reader = BufReader::new(file);
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for line in reader.lines() {
+            let record = line?;
+            let fields: Vec<String> = record.split(self.delimiter).map(|s| s.to_string()).collect();
+            
+            if let Some(value_str) = fields.get(column_index) {
+                if let Ok(value) = value_str.parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            return Ok(0.0);
+        }
+
+        Ok(sum / count as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "John,25,Engineer\nJane,30,Designer\nBob,25,Manager").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let result = processor.filter_records(1, "25").unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0][0], "John");
+        assert_eq!(result[1][0], "Bob");
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "A,10.5\nB,20.0\nC,15.5").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap(), ',');
+        let average = processor.calculate_column_average(1).unwrap();
+        
+        assert!((average - 15.333).abs() < 0.001);
+    }
 }
