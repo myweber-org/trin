@@ -1,78 +1,121 @@
-use csv::{ReaderBuilder, StringRecord};
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+}
+
+#[derive(Debug)]
+pub enum CsvError {
+    IoError(std::io::Error),
+    ParseError(String),
+    ValidationError(String),
+}
+
+impl From<std::io::Error> for CsvError {
+    fn from(err: std::io::Error) -> Self {
+        CsvError::IoError(err)
+    }
+}
 
 pub struct CsvProcessor {
-    headers: Vec<String>,
-    records: Vec<StringRecord>,
+    delimiter: char,
+    has_header: bool,
 }
 
 impl CsvProcessor {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<CsvRecord>, CsvError> {
         let file = File::open(path)?;
-        let mut rdr = ReaderBuilder::new()
-            .has_headers(true)
-            .from_reader(file);
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut line_number = 0;
 
-        let headers = rdr
-            .headers()?
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        for line in reader.lines() {
+            let line = line?;
+            line_number += 1;
 
-        let records: Vec<StringRecord> = rdr.records().collect::<Result<_, _>>()?;
+            if line_number == 1 && self.has_header {
+                continue;
+            }
 
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let record = self.parse_line(&line, line_number)?;
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    fn parse_line(&self, line: &str, line_number: usize) -> Result<CsvRecord, CsvError> {
+        let parts: Vec<&str> = line.split(self.delimiter).collect();
+
+        if parts.len() != 3 {
+            return Err(CsvError::ParseError(format!(
+                "Line {}: Expected 3 columns, found {}",
+                line_number,
+                parts.len()
+            )));
+        }
+
+        let id = parts[0]
+            .parse::<u32>()
+            .map_err(|e| CsvError::ParseError(format!("Line {}: Invalid ID: {}", line_number, e)))?;
+
+        let name = parts[1].trim().to_string();
+        if name.is_empty() {
+            return Err(CsvError::ValidationError(format!(
+                "Line {}: Name cannot be empty",
+                line_number
+            )));
+        }
+
+        let value = parts[2]
+            .parse::<f64>()
+            .map_err(|e| CsvError::ParseError(format!("Line {}: Invalid value: {}", line_number, e)))?;
+
+        if value < 0.0 {
+            return Err(CsvError::ValidationError(format!(
+                "Line {}: Value cannot be negative: {}",
+                line_number, value
+            )));
+        }
+
+        Ok(CsvRecord { id, name, value })
+    }
+
+    pub fn calculate_statistics(records: &[CsvRecord]) -> (f64, f64, f64) {
         if records.is_empty() {
-            return Err("CSV file contains no data records".into());
+            return (0.0, 0.0, 0.0);
         }
 
-        Ok(Self { headers, records })
-    }
+        let sum: f64 = records.iter().map(|r| r.value).sum();
+        let count = records.len() as f64;
+        let mean = sum / count;
 
-    pub fn validate_column_count(&self) -> Result<(), String> {
-        let expected_len = self.headers.len();
-        
-        for (i, record) in self.records.iter().enumerate() {
-            if record.len() != expected_len {
-                return Err(format!(
-                    "Row {} has {} columns, expected {}",
-                    i + 1,
-                    record.len(),
-                    expected_len
-                ));
-            }
-        }
-        Ok(())
-    }
+        let variance: f64 = records
+            .iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>()
+            / count;
 
-    pub fn get_column_stats(&self, column_index: usize) -> Result<(usize, usize), String> {
-        if column_index >= self.headers.len() {
-            return Err(format!("Column index {} out of bounds", column_index));
-        }
+        let std_dev = variance.sqrt();
 
-        let mut max_len = 0;
-        let mut min_len = usize::MAX;
-
-        for record in &self.records {
-            if let Some(field) = record.get(column_index) {
-                let len = field.len();
-                max_len = max_len.max(len);
-                min_len = min_len.min(len);
-            }
-        }
-
-        if min_len == usize::MAX {
-            min_len = 0;
-        }
-
-        Ok((min_len, max_len))
-    }
-
-    pub fn print_summary(&self) {
-        println!("CSV Summary:");
-        println!("Headers: {}", self.headers.join(", "));
-        println!("Total records: {}", self.records.len());
-        println!("Columns: {}", self.headers.len());
+        (mean, variance, std_dev)
     }
 }
 
@@ -82,36 +125,33 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_test_csv() -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "name,age,city").unwrap();
-        writeln!(file, "Alice,30,New York").unwrap();
-        writeln!(file, "Bob,25,London").unwrap();
-        writeln!(file, "Charlie,35,Tokyo").unwrap();
-        file
-    }
-
     #[test]
     fn test_csv_processing() {
-        let test_file = create_test_csv();
-        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(processor.headers.len(), 3);
-        assert_eq!(processor.records.len(), 3);
-        
-        let validation = processor.validate_column_count();
-        assert!(validation.is_ok());
-        
-        let stats = processor.get_column_stats(0).unwrap();
-        assert_eq!(stats, (5, 7));
+        let csv_content = "id,name,value\n1,Test1,10.5\n2,Test2,20.0\n3,Test3,15.75";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_content).unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let records = processor.process_file(temp_file.path()).unwrap();
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].name, "Test1");
+        assert_eq!(records[1].value, 20.0);
+
+        let (mean, variance, std_dev) = CsvProcessor::calculate_statistics(&records);
+        assert!((mean - 15.416666).abs() < 0.001);
+        assert!((variance - 22.743055).abs() < 0.001);
+        assert!((std_dev - 4.768968).abs() < 0.001);
     }
 
     #[test]
-    fn test_invalid_column_index() {
-        let test_file = create_test_csv();
-        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
-        
-        let result = processor.get_column_stats(10);
+    fn test_invalid_csv() {
+        let csv_content = "id,name,value\n1,Test1,invalid\n2,Test2,20.0";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", csv_content).unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let result = processor.process_file(temp_file.path());
         assert!(result.is_err());
     }
 }
