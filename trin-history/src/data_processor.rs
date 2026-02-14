@@ -280,3 +280,110 @@ mod tests {
         assert_eq!(active_count, 2);
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+fn process_csv(input_path: &Path, output_path: &Path) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(file);
+
+    let mut valid_records = Vec::new();
+    let mut invalid_count = 0;
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        if record.is_valid() {
+            valid_records.push(record);
+        } else {
+            invalid_count += 1;
+        }
+    }
+
+    let output_file = File::create(output_path)?;
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    for record in valid_records {
+        wtr.serialize(&record)?;
+    }
+
+    wtr.flush()?;
+    println!("Processed {} records, filtered {} invalid entries", valid_records.len(), invalid_count);
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input = Path::new("input.csv");
+    let output = Path::new("output.csv");
+    
+    if !input.exists() {
+        eprintln!("Input file not found: {:?}", input);
+        return Ok(());
+    }
+
+    process_csv(input, output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 42.5,
+            active: true,
+        };
+        assert!(valid_record.is_valid());
+
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            active: false,
+        };
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_csv_processing() -> Result<(), Box<dyn Error>> {
+        let csv_data = "id,name,value,active\n1,Alice,100.5,true\n2,Bob,-50.0,false\n3,,75.0,true\n";
+        
+        let input_file = NamedTempFile::new()?;
+        std::fs::write(&input_file, csv_data)?;
+        
+        let output_file = NamedTempFile::new()?;
+        
+        process_csv(input_file.path(), output_file.path())?;
+        
+        let output_content = std::fs::read_to_string(output_file.path())?;
+        assert!(output_content.contains("Alice"));
+        assert!(!output_content.contains("Bob"));
+        assert!(!output_content.contains(",,"));
+        
+        Ok(())
+    }
+}
