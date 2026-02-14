@@ -1,265 +1,141 @@
 
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::collections::HashMap;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct DataRecord {
-    id: u32,
-    value: f64,
-    category: String,
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
 }
 
 impl DataRecord {
-    pub fn new(id: u32, value: f64, category: &str) -> Result<Self, String> {
-        if value < 0.0 {
-            return Err("Value cannot be negative".to_string());
-        }
-        if category.trim().is_empty() {
-            return Err("Category cannot be empty".to_string());
-        }
-        
-        Ok(Self {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
             id,
-            value,
-            category: category.to_string(),
+            timestamp,
+            values: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, value: f64) -> &mut Self {
+        self.values.push(value);
+        self
+    }
+
+    pub fn add_metadata(&mut self, key: &str, value: &str) -> &mut Self {
+        self.metadata.insert(key.to_string(), value.to_string());
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.id == 0 {
+            return Err("Invalid record ID");
+        }
+        if self.timestamp < 0 {
+            return Err("Timestamp cannot be negative");
+        }
+        if self.values.is_empty() {
+            return Err("Record must contain at least one value");
+        }
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> Option<DataStatistics> {
+        if self.values.is_empty() {
+            return None;
+        }
+
+        let count = self.values.len();
+        let sum: f64 = self.values.iter().sum();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = self.values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        Some(DataStatistics {
+            count,
+            sum,
+            mean,
+            variance,
+            min: *self.values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            max: *self.values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
         })
     }
 }
 
-pub struct DataProcessor {
-    records: Vec<DataRecord>,
+#[derive(Debug, Clone)]
+pub struct DataStatistics {
+    pub count: usize,
+    pub sum: f64,
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
 }
 
-impl DataProcessor {
-    pub fn new() -> Self {
-        Self {
-            records: Vec::new(),
-        }
-    }
-    
-    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut loaded_count = 0;
-        
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line.trim().is_empty() || line.starts_with('#') {
-                continue;
-            }
-            
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() != 3 {
-                return Err(format!("Invalid CSV format at line {}", line_num + 1).into());
-            }
-            
-            let id = parts[0].parse::<u32>()
-                .map_err(|e| format!("Invalid ID at line {}: {}", line_num + 1, e))?;
-            
-            let value = parts[1].parse::<f64>()
-                .map_err(|e| format!("Invalid value at line {}: {}", line_num + 1, e))?;
-            
-            let record = DataRecord::new(id, value, parts[2])?;
-            self.records.push(record);
-            loaded_count += 1;
-        }
-        
-        Ok(loaded_count)
-    }
-    
-    pub fn calculate_average(&self) -> Option<f64> {
-        if self.records.is_empty() {
-            return None;
-        }
-        
-        let sum: f64 = self.records.iter().map(|r| r.value).sum();
-        Some(sum / self.records.len() as f64)
-    }
-    
-    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
-        self.records
-            .iter()
-            .filter(|r| r.category == category)
-            .collect()
-    }
-    
-    pub fn get_records(&self) -> &[DataRecord] {
-        &self.records
-    }
-    
-    pub fn clear(&mut self) {
-        self.records.clear();
-    }
+pub fn process_records(records: &[DataRecord]) -> Vec<DataRecord> {
+    records.iter()
+        .filter(|record| record.validate().is_ok())
+        .filter(|record| !record.values.iter().any(|&v| v.is_nan() || v.is_infinite()))
+        .cloned()
+        .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-    
-    #[test]
-    fn test_data_record_creation() {
-        let record = DataRecord::new(1, 42.5, "test").unwrap();
-        assert_eq!(record.id, 1);
-        assert_eq!(record.value, 42.5);
-        assert_eq!(record.category, "test");
-    }
-    
-    #[test]
-    fn test_invalid_data_record() {
-        assert!(DataRecord::new(1, -5.0, "test").is_err());
-        assert!(DataRecord::new(1, 5.0, "").is_err());
-    }
-    
-    #[test]
-    fn test_load_and_process() -> Result<(), Box<dyn Error>> {
-        let mut csv_content = NamedTempFile::new()?;
-        writeln!(csv_content, "1,10.5,category_a")?;
-        writeln!(csv_content, "2,20.0,category_b")?;
-        writeln!(csv_content, "3,15.75,category_a")?;
-        
-        let mut processor = DataProcessor::new();
-        let count = processor.load_from_csv(csv_content.path())?;
-        
-        assert_eq!(count, 3);
-        assert_eq!(processor.get_records().len(), 3);
-        
-        let avg = processor.calculate_average().unwrap();
-        assert!((avg - 15.416666666666666).abs() < 0.0001);
-        
-        let filtered = processor.filter_by_category("category_a");
-        assert_eq!(filtered.len(), 2);
-        
-        Ok(())
-    }
-}
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum DataError {
-    #[error("Invalid data format")]
-    InvalidFormat,
-    #[error("Missing required field: {0}")]
-    MissingField(String),
-    #[error("Validation failed: {0}")]
-    ValidationFailed(String),
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: HashMap<String, f64>,
-    pub tags: Vec<String>,
-}
-
-impl DataRecord {
-    pub fn validate(&self) -> Result<(), DataError> {
-        if self.id == 0 {
-            return Err(DataError::ValidationFailed("ID cannot be zero".into()));
-        }
-        
-        if self.timestamp < 0 {
-            return Err(DataError::ValidationFailed("Timestamp cannot be negative".into()));
-        }
-        
-        if self.values.is_empty() {
-            return Err(DataError::ValidationFailed("Values cannot be empty".into()));
-        }
-        
-        Ok(())
-    }
-    
-    pub fn transform(&mut self, multiplier: f64) {
-        for value in self.values.values_mut() {
-            *value *= multiplier;
-        }
-    }
-    
-    pub fn add_tag(&mut self, tag: String) {
-        if !self.tags.contains(&tag) {
-            self.tags.push(tag);
-        }
-    }
-}
-
-pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<Vec<DataRecord>, DataError> {
-    let mut processed = Vec::with_capacity(records.len());
-    
+pub fn transform_values<F>(records: &mut [DataRecord], transform_fn: F)
+where
+    F: Fn(f64) -> f64,
+{
     for record in records.iter_mut() {
-        record.validate()?;
-        record.transform(multiplier);
-        record.add_tag("processed".into());
-        processed.push(record.clone());
-    }
-    
-    Ok(processed)
-}
-
-pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
-    let mut stats = HashMap::new();
-    
-    if records.is_empty() {
-        return stats;
-    }
-    
-    for key in records[0].values.keys() {
-        let values: Vec<f64> = records.iter()
-            .filter_map(|r| r.values.get(key).copied())
-            .collect();
-        
-        if !values.is_empty() {
-            let sum: f64 = values.iter().sum();
-            let count = values.len() as f64;
-            let avg = sum / count;
-            
-            let variance: f64 = values.iter()
-                .map(|v| (v - avg).powi(2))
-                .sum::<f64>() / count;
-            
-            stats.insert(format!("{}_mean", key), avg);
-            stats.insert(format!("{}_variance", key), variance);
+        for value in record.values.iter_mut() {
+            *value = transform_fn(*value);
         }
     }
-    
-    stats
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_record_validation() {
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1000,
-            values: HashMap::from([("temp".into(), 25.5)]),
-            tags: vec![],
-        };
+        let mut record = DataRecord::new(1, 1625097600);
+        record.add_value(42.5);
         
         assert!(record.validate().is_ok());
         
-        record.id = 0;
-        assert!(record.validate().is_err());
+        let invalid_record = DataRecord::new(0, 1625097600);
+        assert!(invalid_record.validate().is_err());
     }
-    
+
     #[test]
-    fn test_record_transformation() {
-        let mut record = DataRecord {
-            id: 1,
-            timestamp: 1000,
-            values: HashMap::from([("temp".into(), 25.5)]),
-            tags: vec![],
-        };
+    fn test_statistics_calculation() {
+        let mut record = DataRecord::new(1, 1625097600);
+        record.add_value(10.0).add_value(20.0).add_value(30.0);
         
-        record.transform(2.0);
-        assert_eq!(record.values.get("temp"), Some(&51.0));
+        let stats = record.calculate_statistics().unwrap();
+        
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.sum, 60.0);
+        assert_eq!(stats.mean, 20.0);
+        assert_eq!(stats.min, 10.0);
+        assert_eq!(stats.max, 30.0);
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut records = vec![
+            {
+                let mut r = DataRecord::new(1, 1625097600);
+                r.add_value(1.0).add_value(2.0).add_value(3.0);
+                r
+            }
+        ];
+        
+        transform_values(&mut records, |x| x * 2.0);
+        
+        assert_eq!(records[0].values, vec![2.0, 4.0, 6.0]);
     }
 }
