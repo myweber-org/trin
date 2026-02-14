@@ -332,4 +332,83 @@ mod tests {
         assert!(max_record.is_some());
         assert_eq!(max_record.unwrap().id, 2);
     }
+}use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be non-negative"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<Self, ValidationError> {
+        if id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        if value < 0.0 || value > 1000.0 {
+            return Err(ValidationError::InvalidValue);
+        }
+        if timestamp < 0 {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+        
+        Ok(Self { id, value, timestamp })
+    }
+    
+    pub fn transform(&self, multiplier: f64) -> Result<f64, ValidationError> {
+        if multiplier <= 0.0 {
+            return Err(ValidationError::InvalidValue);
+        }
+        
+        let transformed = self.value * multiplier;
+        if transformed > 1000.0 {
+            Err(ValidationError::InvalidValue)
+        } else {
+            Ok(transformed)
+        }
+    }
+    
+    pub fn normalize(&self, max_value: f64) -> Result<f64, ValidationError> {
+        if max_value <= 0.0 || max_value < self.value {
+            return Err(ValidationError::InvalidValue);
+        }
+        
+        Ok(self.value / max_value)
+    }
+}
+
+pub fn process_records(records: &[DataRecord]) -> Vec<Result<f64, ValidationError>> {
+    records.iter()
+        .map(|record| record.transform(2.0))
+        .collect()
+}
+
+pub fn validate_batch(records: &[DataRecord]) -> bool {
+    records.iter().all(|record| {
+        record.id > 0 && 
+        record.value >= 0.0 && 
+        record.value <= 1000.0 && 
+        record.timestamp >= 0
+    })
 }
