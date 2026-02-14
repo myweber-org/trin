@@ -16,16 +16,18 @@ pub fn encrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn s
         .map_err(|e| format!("Encryption failed: {}", e))?;
     
     fs::write(output_path, encrypted_data)?;
-    fs::write(format!("{}.key", output_path), key.as_slice())?;
+    
+    let key_path = format!("{}.key", output_path);
+    fs::write(key_path, key.as_slice())?;
     
     Ok(())
 }
 
 pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let encrypted_data = fs::read(input_path)?;
-    let key_bytes = fs::read(key_path)?;
+    let key_data = fs::read(key_path)?;
     
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let key = Key::<Aes256Gcm>::from_slice(&key_data);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(b"unique_nonce_");
     
@@ -39,72 +41,28 @@ pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_encryption_roundtrip() {
-        let test_data = b"Secret data for encryption test";
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-        let key_file = NamedTempFile::new().unwrap();
+    fn test_encryption_decryption() {
+        let mut test_file = NamedTempFile::new().unwrap();
+        let test_key = NamedTempFile::new().unwrap();
+        let test_encrypted = NamedTempFile::new().unwrap();
+        let test_decrypted = NamedTempFile::new().unwrap();
         
-        fs::write(input_file.path(), test_data).unwrap();
+        let original_content = b"Test data for encryption";
+        test_file.write_all(original_content).unwrap();
         
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap()
-        ).unwrap();
+        encrypt_file(test_file.path().to_str().unwrap(), 
+                    test_encrypted.path().to_str().unwrap()).unwrap();
         
-        let key_path = format!("{}.key", encrypted_file.path().to_str().unwrap());
-        fs::rename(&key_path, key_file.path()).unwrap();
+        let key_path = format!("{}.key", test_encrypted.path().to_str().unwrap());
+        decrypt_file(test_encrypted.path().to_str().unwrap(),
+                    &key_path,
+                    test_decrypted.path().to_str().unwrap()).unwrap();
         
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            key_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap()
-        ).unwrap();
-        
-        let decrypted = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(decrypted, test_data);
+        let decrypted_content = fs::read(test_decrypted.path()).unwrap();
+        assert_eq!(original_content, decrypted_content.as_slice());
     }
-}
-use std::fs;
-use std::io::{self, Read, Write};
-
-fn xor_encrypt_decrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(i, &byte)| byte ^ key[i % key.len()])
-        .collect()
-}
-
-fn process_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
-    let mut input_file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    input_file.read_to_end(&mut buffer)?;
-
-    let processed_data = xor_encrypt_decrypt(&buffer, key);
-
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&processed_data)?;
-
-    Ok(())
-}
-
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 4 {
-        eprintln!("Usage: {} <input_file> <output_file> <key>", args[0]);
-        std::process::exit(1);
-    }
-
-    let input_path = &args[1];
-    let output_path = &args[2];
-    let key = args[3].as_bytes();
-
-    process_file(input_path, output_path, key)?;
-    println!("File processed successfully: {} -> {}", input_path, output_path);
-    
-    Ok(())
 }
