@@ -1,89 +1,67 @@
+
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-const DEFAULT_KEY: u8 = 0x55;
-
-pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
-    let mut input_file = fs::File::open(input_path)?;
-    let mut buffer = Vec::new();
-    input_file.read_to_end(&mut buffer)?;
-
-    for byte in buffer.iter_mut() {
-        *byte ^= encryption_key;
-    }
-
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&buffer)?;
-    Ok(())
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    encrypt_file(input_path, output_path, key)
-}
-
-pub fn process_directory(dir_path: &str, operation: &str, key: Option<u8>) -> io::Result<()> {
-    let path = Path::new(dir_path);
-    if !path.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Provided path is not a directory",
-        ));
-    }
-
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let file_path = entry.path();
-        if file_path.is_file() {
-            let input_str = file_path.to_str().unwrap();
-            let output_str = format!("{}.processed", input_str);
-            
-            match operation {
-                "encrypt" => encrypt_file(input_str, &output_str, key)?,
-                "decrypt" => decrypt_file(input_str, &output_str, key)?,
-                _ => return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Invalid operation. Use 'encrypt' or 'decrypt'",
-                )),
-            }
-            
-            println!("Processed: {}", input_str);
+impl FileEncryptor {
+    pub fn new() -> Self {
+        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
+        Self {
+            cipher: Aes256Gcm::new(&key),
         }
     }
-    Ok(())
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut file = fs::File::open(input_path)?;
+        let mut plaintext = Vec::new();
+        file.read_to_end(&mut plaintext)?;
+
+        let nonce = Nonce::generate(&mut OsRng);
+        let ciphertext = self
+            .cipher
+            .encrypt(&nonce, plaintext.as_ref())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        let mut output_file = fs::File::create(output_path)?;
+        output_file.write_all(&nonce)?;
+        output_file.write_all(&ciphertext)?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut file = fs::File::open(input_path)?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+
+        if data.len() < 12 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "File too short to contain nonce",
+            ));
+        }
+
+        let (nonce_bytes, ciphertext) = data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let plaintext = self
+            .cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        fs::write(output_path, plaintext)?;
+        Ok(())
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_encryption_decryption() {
-        let original_content = b"Hello, World!";
-        let key = Some(0x42);
-        
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-        
-        fs::write(input_file.path(), original_content).unwrap();
-        
-        encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            key,
-        ).unwrap();
-        
-        decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            key,
-        ).unwrap();
-        
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content, decrypted_content.as_slice());
-    }
+pub fn generate_secure_filename(base_name: &str) -> String {
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    format!("{}_{}.enc", base_name, timestamp)
 }
