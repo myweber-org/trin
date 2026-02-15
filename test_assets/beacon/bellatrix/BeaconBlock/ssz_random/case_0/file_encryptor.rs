@@ -85,3 +85,63 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use base64::{engine::general_purpose, Engine as _};
+use std::fs;
+use std::io::{self, Read, Write};
+
+const XOR_KEY: u8 = 0xAA;
+
+pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let encrypted: Vec<u8> = buffer.iter().map(|&byte| byte ^ XOR_KEY).collect();
+    let encoded = general_purpose::STANDARD.encode(&encrypted);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(encoded.as_bytes())?;
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut encoded = String::new();
+    input_file.read_to_string(&mut encoded)?;
+
+    let encrypted = general_purpose::STANDARD.decode(encoded.trim()).map_err(|e| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("Base64 decode failed: {}", e))
+    })?;
+
+    let decrypted: Vec<u8> = encrypted.iter().map(|&byte| byte ^ XOR_KEY).collect();
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&decrypted)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encrypt_decrypt_cycle() {
+        let original_data = b"Secret data to protect!";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), original_data).unwrap();
+
+        encrypt_file(input_file.path().to_str().unwrap(), 
+                    encrypted_file.path().to_str().unwrap()).unwrap();
+        
+        decrypt_file(encrypted_file.path().to_str().unwrap(),
+                    decrypted_file.path().to_str().unwrap()).unwrap();
+
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.to_vec(), decrypted_data);
+    }
+}
