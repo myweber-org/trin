@@ -570,3 +570,144 @@ mod tests {
         assert_eq!(ages, vec!["30", "25"]);
     }
 }
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        if !self.tags.contains(&tag.to_string()) {
+            self.tags.push(tag.to_string());
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+    statistics: ProcessingStats,
+}
+
+#[derive(Debug, Default)]
+pub struct ProcessingStats {
+    pub total_records: usize,
+    pub valid_records: usize,
+    pub average_value: f64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: HashMap::new(),
+            statistics: ProcessingStats::default(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), String> {
+        if !record.is_valid() {
+            return Err("Invalid record data".to_string());
+        }
+
+        if self.records.contains_key(&record.id) {
+            return Err("Duplicate record ID".to_string());
+        }
+
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+
+    pub fn process_records(&mut self) {
+        let valid_records: Vec<&DataRecord> = self.records.values()
+            .filter(|r| r.is_valid())
+            .collect();
+
+        self.statistics.total_records = self.records.len();
+        self.statistics.valid_records = valid_records.len();
+
+        if !valid_records.is_empty() {
+            let sum: f64 = valid_records.iter().map(|r| r.value).sum();
+            self.statistics.average_value = sum / valid_records.len() as f64;
+        }
+    }
+
+    pub fn get_records_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records.values()
+            .filter(|r| r.tags.contains(&tag.to_string()))
+            .collect()
+    }
+
+    pub fn get_statistics(&self) -> &ProcessingStats {
+        &self.statistics
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in self.records.values_mut() {
+            record.value = transform_fn(record.value);
+        }
+    }
+}
+
+pub fn validate_input(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Input cannot be empty".to_string());
+    }
+    if trimmed.len() > 100 {
+        return Err("Input too long".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "test".to_string(), 10.5);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(2, "".to_string(), -5.0);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord::new(1, "sample".to_string(), 20.0);
+        
+        assert!(processor.add_record(record).is_ok());
+        processor.process_records();
+        
+        let stats = processor.get_statistics();
+        assert_eq!(stats.total_records, 1);
+        assert_eq!(stats.valid_records, 1);
+    }
+
+    #[test]
+    fn test_input_validation() {
+        assert!(validate_input("valid").is_ok());
+        assert!(validate_input("").is_err());
+    }
+}
