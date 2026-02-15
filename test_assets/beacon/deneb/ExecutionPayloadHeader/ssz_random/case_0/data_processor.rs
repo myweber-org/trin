@@ -234,3 +234,176 @@ mod tests {
         assert_eq!(age_column, vec!["age", "30", "25"]);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    InvalidCategory,
+    DuplicateId,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Value must be positive"),
+            ProcessingError::InvalidCategory => write!(f, "Category cannot be empty"),
+            ProcessingError::DuplicateId => write!(f, "Duplicate record ID found"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    processed_ids: std::collections::HashSet<u32>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            processed_ids: std::collections::HashSet::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        if record.value <= 0.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+
+        if record.category.is_empty() {
+            return Err(ProcessingError::InvalidCategory);
+        }
+
+        if self.processed_ids.contains(&record.id) {
+            return Err(ProcessingError::DuplicateId);
+        }
+
+        self.processed_ids.insert(record.id);
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in &mut self.records {
+            record.value = transform_fn(record.value);
+        }
+    }
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let avg = self.calculate_average().unwrap_or(0.0);
+
+        (min, max, avg)
+    }
+}
+
+impl Default for DataProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_addition() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            category: "test".to_string(),
+        };
+
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.calculate_average(), Some(42.5));
+    }
+
+    #[test]
+    fn test_invalid_value() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            value: -10.0,
+            category: "test".to_string(),
+        };
+
+        assert!(matches!(
+            processor.add_record(record),
+            Err(ProcessingError::InvalidValue)
+        ));
+    }
+
+    #[test]
+    fn test_duplicate_id() {
+        let mut processor = DataProcessor::new();
+        let record1 = DataRecord {
+            id: 1,
+            value: 10.0,
+            category: "test".to_string(),
+        };
+        let record2 = DataRecord {
+            id: 1,
+            value: 20.0,
+            category: "test2".to_string(),
+        };
+
+        assert!(processor.add_record(record1).is_ok());
+        assert!(matches!(
+            processor.add_record(record2),
+            Err(ProcessingError::DuplicateId)
+        ));
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            value: 10.0,
+            category: "test".to_string(),
+        };
+
+        processor.add_record(record).unwrap();
+        processor.transform_values(|x| x * 2.0);
+
+        assert_eq!(processor.calculate_average(), Some(20.0));
+    }
+}
