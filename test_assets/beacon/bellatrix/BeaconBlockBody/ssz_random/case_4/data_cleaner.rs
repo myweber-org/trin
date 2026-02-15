@@ -138,3 +138,81 @@ mod tests {
         assert!(result.is_ok());
     }
 }
+use std::collections::HashSet;
+use std::error::Error;
+
+pub struct DataCleaner {
+    dedupe_set: HashSet<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            dedupe_set: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, input: &str) -> Option<String> {
+        if self.dedupe_set.insert(input.to_string()) {
+            Some(input.to_string())
+        } else {
+            None
+        }
+    }
+
+    pub fn validate_email(&self, email: &str) -> Result<(), Box<dyn Error>> {
+        if email.contains('@') && email.contains('.') {
+            Ok(())
+        } else {
+            Err("Invalid email format".into())
+        }
+    }
+
+    pub fn normalize_whitespace(input: &str) -> String {
+        input
+            .split_whitespace()
+            .collect::<Vec<&str>>()
+            .join(" ")
+    }
+
+    pub fn remove_special_chars(input: &str, allowed: &[char]) -> String {
+        input
+            .chars()
+            .filter(|c| c.is_alphanumeric() || allowed.contains(c))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate() {
+        let mut cleaner = DataCleaner::new();
+        assert_eq!(cleaner.deduplicate("test"), Some("test".to_string()));
+        assert_eq!(cleaner.deduplicate("test"), None);
+    }
+
+    #[test]
+    fn test_validate_email() {
+        let cleaner = DataCleaner::new();
+        assert!(cleaner.validate_email("user@example.com").is_ok());
+        assert!(cleaner.validate_email("invalid").is_err());
+    }
+
+    #[test]
+    fn test_normalize_whitespace() {
+        let input = "  multiple   spaces   here  ";
+        let expected = "multiple spaces here";
+        assert_eq!(DataCleaner::normalize_whitespace(input), expected);
+    }
+
+    #[test]
+    fn test_remove_special_chars() {
+        let input = "Hello, @World! #2024";
+        let allowed = ['@', '!'];
+        let result = DataCleaner::remove_special_chars(input, &allowed);
+        assert_eq!(result, "Hello@World!2024");
+    }
+}
