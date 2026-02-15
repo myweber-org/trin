@@ -247,3 +247,165 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    MissingField(String),
+    ValidationFailed(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidValue => write!(f, "Invalid numeric value"),
+            DataError::MissingField(field) => write!(f, "Missing required field: {}", field),
+            DataError::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if value.is_nan() || value.is_infinite() {
+            return Err(DataError::InvalidValue);
+        }
+        if name.trim().is_empty() {
+            return Err(DataError::MissingField("name".to_string()));
+        }
+
+        Ok(Self {
+            id,
+            name,
+            value,
+            metadata: HashMap::new(),
+        })
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+
+    pub fn transform_value<F>(&mut self, transformer: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        self.value = transformer(self.value);
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if self.value < 0.0 {
+            return Err(DataError::ValidationFailed(
+                "Value cannot be negative".to_string(),
+            ));
+        }
+        if self.name.len() > 100 {
+            return Err(DataError::ValidationFailed(
+                "Name exceeds maximum length".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<DataRecord>, DataError> {
+    let mut processed = Vec::with_capacity(records.len());
+
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.transform_value(|v| v * 1.1);
+        processed.push(record.clone());
+    }
+
+    Ok(processed)
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+
+    let variance: f64 = records
+        .iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>()
+        / count;
+
+    let std_dev = variance.sqrt();
+
+    (mean, variance, std_dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, "Test".to_string(), 42.5);
+        assert!(record.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord::new(0, "Test".to_string(), 42.5);
+        assert!(matches!(record, Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_metadata_operations() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 42.5).unwrap();
+        record.add_metadata("category".to_string(), "sample".to_string());
+        assert_eq!(record.get_metadata("category"), Some(&"sample".to_string()));
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut record = DataRecord::new(1, "Test".to_string(), 100.0).unwrap();
+        record.transform_value(|v| v * 2.0);
+        assert_eq!(record.value, 200.0);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord::new(1, "A".to_string(), 10.0).unwrap(),
+            DataRecord::new(2, "B".to_string(), 20.0).unwrap(),
+            DataRecord::new(3, "C".to_string(), 30.0).unwrap(),
+        ];
+
+        let (mean, variance, std_dev) = calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 66.66666666666667);
+        assert_eq!(std_dev, 8.16496580927726);
+    }
+}
