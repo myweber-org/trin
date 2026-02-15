@@ -354,3 +354,160 @@ mod tests {
         assert_eq!(grouped.len(), 2);
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    pub fn new(id: u32, name: String, value: f64, active: bool) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            active,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+
+    pub fn calculate_adjusted_value(&self) -> f64 {
+        if self.active {
+            self.value * 1.1
+        } else {
+            self.value * 0.9
+        }
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn filter_valid_records(&self) -> Vec<&Record> {
+        self.records.iter().filter(|r| r.is_valid()).collect()
+    }
+
+    pub fn calculate_total_adjusted_value(&self) -> f64 {
+        self.records
+            .iter()
+            .map(|r| r.calculate_adjusted_value())
+            .sum()
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut wtr = csv::Writer::from_writer(file);
+
+        for record in &self.records {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn get_statistics(&self) -> (usize, f64, f64) {
+        let count = self.records.len();
+        let total_value: f64 = self.records.iter().map(|r| r.value).sum();
+        let avg_value = if count > 0 {
+            total_value / count as f64
+        } else {
+            0.0
+        };
+
+        (count, total_value, avg_value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record::new(1, "Test".to_string(), 100.0, true);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = Record::new(2, "".to_string(), -50.0, false);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_adjusted_value_calculation() {
+        let active_record = Record::new(1, "Active".to_string(), 100.0, true);
+        assert_eq!(active_record.calculate_adjusted_value(), 110.0);
+
+        let inactive_record = Record::new(2, "Inactive".to_string(), 100.0, false);
+        assert_eq!(inactive_record.calculate_adjusted_value(), 90.0);
+    }
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        processor.add_record(Record::new(1, "First".to_string(), 50.0, true));
+        processor.add_record(Record::new(2, "Second".to_string(), 75.0, false));
+        
+        let valid_records = processor.filter_valid_records();
+        assert_eq!(valid_records.len(), 2);
+        
+        let total_adjusted = processor.calculate_total_adjusted_value();
+        assert_eq!(total_adjusted, 50.0 * 1.1 + 75.0 * 0.9);
+        
+        let stats = processor.get_statistics();
+        assert_eq!(stats.0, 2);
+        assert_eq!(stats.1, 125.0);
+        assert_eq!(stats.2, 62.5);
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        processor.add_record(Record::new(1, "Test".to_string(), 100.0, true));
+        
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+        
+        processor.save_to_csv(path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path)?;
+        
+        assert_eq!(new_processor.records.len(), 1);
+        Ok(())
+    }
+}
