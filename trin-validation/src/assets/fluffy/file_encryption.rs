@@ -461,3 +461,94 @@ pub fn decrypt_file(input_path: &Path, output_path: &Path, key_hex: &str) -> io:
     println!("Decryption successful.");
     Ok(())
 }
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&self, source_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+        let mut source_file = File::open(source_path)?;
+        let mut buffer = Vec::new();
+        source_file.read_to_end(&mut buffer)?;
+
+        let processed_data: Vec<u8> = buffer
+            .iter()
+            .enumerate()
+            .map(|(i, &byte)| byte ^ self.key[i % self.key.len()])
+            .collect();
+
+        let mut dest_file = File::create(dest_path)?;
+        dest_file.write_all(&processed_data)?;
+
+        Ok(())
+    }
+}
+
+pub fn generate_random_key(length: usize) -> Vec<u8> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..length).map(|_| rng.gen()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher() {
+        let key = "secret_key";
+        let cipher = XorCipher::new(key);
+
+        let original_data = b"Hello, this is a test message!";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(original_data).unwrap();
+
+        let encrypted_path = temp_file.path().with_extension("enc");
+        cipher
+            .encrypt_file(temp_file.path(), &encrypted_path)
+            .unwrap();
+
+        let decrypted_path = temp_file.path().with_extension("dec");
+        cipher
+            .decrypt_file(&encrypted_path, &decrypted_path)
+            .unwrap();
+
+        let mut decrypted_data = Vec::new();
+        File::open(&decrypted_path)
+            .unwrap()
+            .read_to_end(&mut decrypted_data)
+            .unwrap();
+
+        assert_eq!(original_data.to_vec(), decrypted_data);
+
+        fs::remove_file(encrypted_path).unwrap();
+        fs::remove_file(decrypted_path).unwrap();
+    }
+
+    #[test]
+    fn test_random_key_generation() {
+        let key_length = 32;
+        let key = generate_random_key(key_length);
+        assert_eq!(key.len(), key_length);
+        assert!(key.iter().any(|&b| b != 0));
+    }
+}
