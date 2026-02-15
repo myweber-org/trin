@@ -329,3 +329,109 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_csv_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut reader = Reader::from_reader(file);
+    
+    let mut records = Vec::new();
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.value < 0.0 {
+            return Err("Negative value found in data".into());
+        }
+        
+        if record.name.trim().is_empty() {
+            return Err("Empty name field detected".into());
+        }
+        
+        records.push(record);
+    }
+    
+    if records.is_empty() {
+        return Err("No valid records found in CSV file".into());
+    }
+    
+    Ok(records)
+}
+
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let average = sum / count;
+    
+    let max_value = records.iter()
+        .map(|r| r.value)
+        .fold(f64::NEG_INFINITY, f64::max);
+    
+    let min_value = records.iter()
+        .map(|r| r.value)
+        .fold(f64::INFINITY, f64::min);
+    
+    (average, min_value, max_value)
+}
+
+pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
+    records.into_iter()
+        .filter(|r| r.category == category)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+    
+    #[test]
+    fn test_process_valid_csv() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
+        writeln!(temp_file, "2,ItemB,20.3,Category2").unwrap();
+        
+        let result = process_csv_file(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+    }
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            Record { id: 1, name: "Test1".to_string(), value: 10.0, category: "A".to_string() },
+            Record { id: 2, name: "Test2".to_string(), value: 20.0, category: "B".to_string() },
+            Record { id: 3, name: "Test3".to_string(), value: 30.0, category: "A".to_string() },
+        ];
+        
+        let (avg, min, max) = calculate_statistics(&records);
+        assert_eq!(avg, 20.0);
+        assert_eq!(min, 10.0);
+        assert_eq!(max, 30.0);
+    }
+    
+    #[test]
+    fn test_category_filter() {
+        let records = vec![
+            Record { id: 1, name: "Test1".to_string(), value: 10.0, category: "A".to_string() },
+            Record { id: 2, name: "Test2".to_string(), value: 20.0, category: "B".to_string() },
+            Record { id: 3, name: "Test3".to_string(), value: 30.0, category: "A".to_string() },
+        ];
+        
+        let filtered = filter_by_category(records, "A");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.category == "A"));
+    }
+}
