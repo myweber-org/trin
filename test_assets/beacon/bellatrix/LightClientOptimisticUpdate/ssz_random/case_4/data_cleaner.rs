@@ -1,94 +1,92 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use std::error::Error;
-use std::fs::File;
-use std::path::Path;
 
-pub struct DataCleaner {
-    input_path: String,
-    output_path: String,
-    fill_missing: Option<f64>,
+use std::collections::HashSet;
+use std::hash::Hash;
+
+pub struct DataCleaner<T> {
+    data: Vec<T>,
 }
 
-impl DataCleaner {
-    pub fn new(input_path: &str, output_path: &str) -> Self {
-        DataCleaner {
-            input_path: input_path.to_string(),
-            output_path: output_path.to_string(),
-            fill_missing: None,
-        }
+impl<T> DataCleaner<T>
+where
+    T: Clone + Eq + Hash,
+{
+    pub fn new(data: Vec<T>) -> Self {
+        DataCleaner { data }
     }
 
-    pub fn set_missing_value_fill(&mut self, value: f64) -> &mut Self {
-        self.fill_missing = Some(value);
+    pub fn deduplicate(&mut self) -> &mut Self {
+        let mut seen = HashSet::new();
+        self.data.retain(|item| seen.insert(item.clone()));
         self
     }
 
-    pub fn clean(&self) -> Result<(), Box<dyn Error>> {
-        let input_file = File::open(Path::new(&self.input_path))?;
-        let mut reader = ReaderBuilder::new()
-            .has_headers(true)
-            .from_reader(input_file);
-
-        let output_file = File::create(Path::new(&self.output_path))?;
-        let mut writer = WriterBuilder::new()
-            .has_headers(true)
-            .from_writer(output_file);
-
-        let headers = reader.headers()?.clone();
-        writer.write_record(&headers)?;
-
-        for result in reader.records() {
-            let record = result?;
-            let mut cleaned_record = Vec::new();
-
-            for field in record.iter() {
-                if field.trim().is_empty() {
-                    cleaned_record.push(
-                        self.fill_missing
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "N/A".to_string()),
-                    );
-                } else {
-                    cleaned_record.push(field.to_string());
-                }
-            }
-
-            writer.write_record(&cleaned_record)?;
-        }
-
-        writer.flush()?;
-        Ok(())
+    pub fn normalize<F>(&mut self, normalizer: F) -> &mut Self
+    where
+        F: Fn(&T) -> T,
+    {
+        self.data = self.data.iter().map(|item| normalizer(item)).collect();
+        self
     }
+
+    pub fn filter<F>(&mut self, predicate: F) -> &mut Self
+    where
+        F: Fn(&T) -> bool,
+    {
+        self.data.retain(|item| predicate(item));
+        self
+    }
+
+    pub fn get_data(&self) -> &Vec<T> {
+        &self.data
+    }
+
+    pub fn into_data(self) -> Vec<T> {
+        self.data
+    }
+}
+
+pub fn clean_string_data(strings: Vec<String>) -> Vec<String> {
+    let mut cleaner = DataCleaner::new(strings);
+    cleaner
+        .normalize(|s| s.trim().to_lowercase())
+        .deduplicate()
+        .filter(|s| !s.is_empty())
+        .into_data()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_cleaner_with_missing_values() {
-        let mut input_file = NamedTempFile::new().unwrap();
-        writeln!(
-            input_file,
-            "name,age,salary\nJohn,25,50000\nJane,,60000\nBob,30,"
-        )
-        .unwrap();
+    fn test_deduplicate() {
+        let data = vec![1, 2, 2, 3, 3, 3];
+        let mut cleaner = DataCleaner::new(data);
+        cleaner.deduplicate();
+        assert_eq!(cleaner.get_data(), &vec![1, 2, 3]);
+    }
 
-        let output_file = NamedTempFile::new().unwrap();
-
-        let mut cleaner = DataCleaner::new(
-            input_file.path().to_str().unwrap(),
-            output_file.path().to_str().unwrap(),
+    #[test]
+    fn test_normalize() {
+        let data = vec!["HELLO", "World", "rust"];
+        let mut cleaner = DataCleaner::new(data.into_iter().map(String::from).collect());
+        cleaner.normalize(|s| s.to_lowercase());
+        assert_eq!(
+            cleaner.get_data(),
+            &vec!["hello".to_string(), "world".to_string(), "rust".to_string()]
         );
-        cleaner.set_missing_value_fill(0.0);
+    }
 
-        assert!(cleaner.clean().is_ok());
-
-        let content = std::fs::read_to_string(output_file.path()).unwrap();
-        assert!(content.contains("John,25,50000"));
-        assert!(content.contains("Jane,0,60000"));
-        assert!(content.contains("Bob,30,0"));
+    #[test]
+    fn test_clean_string_data() {
+        let input = vec![
+            "  HELLO  ".to_string(),
+            "hello".to_string(),
+            "".to_string(),
+            "WORLD".to_string(),
+            "world".to_string(),
+        ];
+        let result = clean_string_data(input);
+        assert_eq!(result, vec!["hello".to_string(), "world".to_string()]);
     }
 }
