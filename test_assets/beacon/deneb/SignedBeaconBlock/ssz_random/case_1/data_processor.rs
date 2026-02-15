@@ -382,3 +382,123 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut reader = csv::Reader::from_reader(file);
+
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_active(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.active)
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.records.iter().map(|record| record.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn find_by_id(&self, target_id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == target_id)
+    }
+
+    pub fn export_to_json(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(file_path)?;
+        serde_json::to_writer_pretty(file, &self.records)?;
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        self.records.push(record);
+    }
+
+    pub fn remove_record(&mut self, target_id: u32) -> bool {
+        let original_len = self.records.len();
+        self.records.retain(|record| record.id != target_id);
+        self.records.len() < original_len
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+
+        processor.add_record(Record {
+            id: 1,
+            name: "Test Item".to_string(),
+            value: 42.5,
+            active: true,
+        });
+
+        processor.add_record(Record {
+            id: 2,
+            name: "Another Item".to_string(),
+            value: 57.5,
+            active: false,
+        });
+
+        assert_eq!(processor.records.len(), 2);
+        assert_eq!(processor.filter_active().len(), 1);
+        assert_eq!(processor.calculate_average(), Some(50.0));
+        assert!(processor.find_by_id(1).is_some());
+        assert!(processor.remove_record(1));
+        assert_eq!(processor.records.len(), 1);
+    }
+
+    #[test]
+    fn test_csv_export_import() {
+        let mut processor = DataProcessor::new();
+        processor.add_record(Record {
+            id: 100,
+            name: "CSV Test".to_string(),
+            value: 99.9,
+            active: true,
+        });
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let json_path = temp_file.path().to_str().unwrap();
+
+        assert!(processor.export_to_json(json_path).is_ok());
+    }
+}
