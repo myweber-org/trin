@@ -139,3 +139,82 @@ mod tests {
         assert_eq!(DataCleaner::clean_text_field("Data-Clean_Test"), "data-clean test");
     }
 }
+use std::collections::HashSet;
+use std::io::{self, BufRead, Write};
+
+pub struct DataCleaner {
+    entries: Vec<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn add_entry(&mut self, entry: String) {
+        self.entries.push(entry);
+    }
+
+    pub fn add_entries(&mut self, entries: Vec<String>) {
+        self.entries.extend(entries);
+    }
+
+    pub fn clean(&mut self) -> Vec<String> {
+        let unique_entries: HashSet<String> = self.entries.drain(..).collect();
+        let mut sorted_entries: Vec<String> = unique_entries.into_iter().collect();
+        sorted_entries.sort();
+        sorted_entries
+    }
+
+    pub fn process_from_stdin(&mut self) -> io::Result<Vec<String>> {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            let entry = line?.trim().to_string();
+            if !entry.is_empty() {
+                self.add_entry(entry);
+            }
+        }
+        Ok(self.clean())
+    }
+
+    pub fn write_to_file(&self, filename: &str, data: &[String]) -> io::Result<()> {
+        let mut file = std::fs::File::create(filename)?;
+        for entry in data {
+            writeln!(file, "{}", entry)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn clean_data(input: Vec<String>) -> Vec<String> {
+    let mut cleaner = DataCleaner::new();
+    cleaner.add_entries(input);
+    cleaner.clean()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_data() {
+        let input = vec![
+            "zebra".to_string(),
+            "apple".to_string(),
+            "zebra".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+        ];
+        let result = clean_data(input);
+        assert_eq!(result, vec!["apple", "banana", "zebra"]);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let input: Vec<String> = vec![];
+        let result = clean_data(input);
+        assert!(result.is_empty());
+    }
+}
