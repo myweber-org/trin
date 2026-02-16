@@ -33,4 +33,42 @@ pub fn display_weather(data: &WeatherData) {
     println!("  Temperature: {:.1}°C", data.main.temp);
     println!("  Feels like: {:.1}°C", data.main.feels_like);
     println!("  Humidity: {}%", data.main.humidity);
+}use std::error::Error;
+use serde::Deserialize;
+
+#[derive(Deserialize, Debug)]
+struct WeatherData {
+    location: String,
+    temperature: f64,
+    condition: String,
+    humidity: u8,
+}
+
+fn fetch_weather(city: &str) -> Result<WeatherData, Box<dyn Error>> {
+    let mock_response = format!(
+        r#"{{
+            "location": "{}",
+            "temperature": 22.5,
+            "condition": "Sunny",
+            "humidity": 65
+        }}"#,
+        city
+    );
+
+    let weather: WeatherData = serde_json::from_str(&mock_response)?;
+    Ok(weather)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let city = args.get(1).map(|s| s.as_str()).unwrap_or("London");
+
+    let weather = fetch_weather(city)?;
+    
+    println!("Weather in {}:", weather.location);
+    println!("  Temperature: {:.1}°C", weather.temperature);
+    println!("  Condition: {}", weather.condition);
+    println!("  Humidity: {}%", weather.humidity);
+
+    Ok(())
 }
