@@ -147,3 +147,122 @@ mod tests {
         assert!(obj.get("active").unwrap().as_bool().unwrap());
     }
 }
+use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+use std::collections::HashSet;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, String> {
+    if paths.is_empty() {
+        return Err("No input files provided".to_string());
+    }
+
+    let mut merged = Map::new();
+    let mut conflict_log = Vec::new();
+
+    for path in paths {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+        
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+
+        if let Value::Object(obj) = json {
+            merge_object(&mut merged, obj, &mut conflict_log, path.as_ref());
+        } else {
+            return Err("Top-level JSON must be an object".to_string());
+        }
+    }
+
+    if !conflict_log.is_empty() {
+        eprintln!("Conflicts detected during merge:");
+        for conflict in &conflict_log {
+            eprintln!("  - {}", conflict);
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+fn merge_object(base: &mut Map<String, Value>, 
+                incoming: Map<String, Value>,
+                conflicts: &mut Vec<String>,
+                source_path: &Path) {
+    for (key, incoming_value) in incoming {
+        match base.get_mut(&key) {
+            Some(existing_value) => {
+                match (existing_value, incoming_value) {
+                    (Value::Object(existing_obj), Value::Object(incoming_obj)) => {
+                        if let Value::Object(ref mut obj) = existing_value {
+                            merge_object(obj, incoming_obj, conflicts, source_path);
+                        }
+                    }
+                    (Value::Array(existing_arr), Value::Array(incoming_arr)) => {
+                        let mut combined = HashSet::new();
+                        existing_arr.iter().for_each(|v| { combined.insert(v.to_string()); });
+                        incoming_arr.iter().for_each(|v| { combined.insert(v.to_string()); });
+                        
+                        *existing_arr = combined.into_iter()
+                            .map(|s| Value::String(s))
+                            .collect();
+                    }
+                    (existing, incoming) if existing == &incoming => {
+                        // Identical values, no conflict
+                    }
+                    _ => {
+                        conflicts.push(format!("Key '{}' from {} overwrites existing value", 
+                            key, source_path.display()));
+                        base.insert(key, incoming_value);
+                    }
+                }
+            }
+            None => {
+                base.insert(key, incoming_value);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"a": 1, "b": {"x": 10}}"#).unwrap();
+        fs::write(&file2, r#"{"c": 3, "b": {"y": 20}}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let obj = result.as_object().unwrap();
+
+        assert_eq!(obj.get("a").unwrap().as_i64(), Some(1));
+        assert_eq!(obj.get("c").unwrap().as_i64(), Some(3));
+        
+        let b_obj = obj.get("b").unwrap().as_object().unwrap();
+        assert_eq!(b_obj.get("x").unwrap().as_i64(), Some(10));
+        assert_eq!(b_obj.get("y").unwrap().as_i64(), Some(20));
+    }
+
+    #[test]
+    fn test_array_merge() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        fs::write(&file1, r#"{"items": ["a", "b"]}"#).unwrap();
+        fs::write(&file2, r#"{"items": ["b", "c"]}"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
+        let items = result.get("items").unwrap().as_array().unwrap();
+        
+        let mut values: Vec<String> = items.iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        values.sort();
+
+        assert_eq!(values, vec!["a", "b", "c"]);
+    }
+}
