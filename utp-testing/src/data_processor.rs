@@ -455,4 +455,68 @@ mod tests {
         assert_eq!(groups.get("cat_a").unwrap().len(), 2);
         assert_eq!(groups.get("cat_b").unwrap().len(), 1);
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_csv_data(input_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let mut reader = Reader::from_path(input_path)?;
+    let mut records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        validate_record(&record)?;
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+fn validate_record(record: &Record) -> Result<(), Box<dyn Error>> {
+    if record.name.is_empty() {
+        return Err("Name cannot be empty".into());
+    }
+    if record.value < 0.0 {
+        return Err("Value must be non-negative".into());
+    }
+    if !["A", "B", "C"].contains(&record.category.as_str()) {
+        return Err("Category must be A, B, or C".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_valid_csv_processing() {
+        let csv_data = "id,name,value,category\n1,Test,42.5,A\n2,Sample,100.0,B";
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", csv_data).unwrap();
+        
+        let result = process_csv_data(file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_invalid_category() {
+        let csv_data = "id,name,value,category\n1,Test,42.5,X";
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", csv_data).unwrap();
+        
+        let result = process_csv_data(file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
 }
