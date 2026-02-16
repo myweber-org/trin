@@ -132,4 +132,60 @@ mod tests {
         assert_eq!(obj.get("city").unwrap(), "Berlin");
         assert_eq!(obj.get("active").unwrap(), true);
     }
+}use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Record {
+    id: u64,
+    name: String,
+    tags: Vec<String>,
+}
+
+fn load_json_records<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let records: Vec<Record> = serde_json::from_reader(reader)?;
+    Ok(records)
+}
+
+fn merge_json_files(
+    input_paths: &[&str],
+    output_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map: HashMap<u64, Record> = HashMap::new();
+
+    for path in input_paths {
+        let records = load_json_records(path)?;
+        for record in records {
+            merged_map.entry(record.id).or_insert(record);
+        }
+    }
+
+    let mut merged_records: Vec<Record> = merged_map.into_values().collect();
+    merged_records.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    serde_json::to_writer_pretty(writer, &merged_records)?;
+
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let inputs = vec![
+        "data/input1.json",
+        "data/input2.json",
+        "data/input3.json",
+    ];
+    let output = "data/merged_output.json";
+
+    merge_json_files(&inputs, output)?;
+    println!("Merged JSON files successfully into {}", output);
+
+    Ok(())
 }
