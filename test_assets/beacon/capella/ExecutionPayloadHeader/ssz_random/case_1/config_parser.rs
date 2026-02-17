@@ -117,4 +117,91 @@ mod tests {
         let missing = result.unwrap_err();
         assert_eq!(missing, vec!["missing_key".to_string()]);
     }
+}use serde::Deserialize;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    #[serde(default = "default_retry_attempts")]
+    pub retry_attempts: u8,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: String,
+    #[serde(default = "default_rotation_size")]
+    pub rotation_size_mb: u64,
+}
+
+fn default_timeout() -> u32 {
+    30
+}
+
+fn default_retry_attempts() -> u8 {
+    3
+}
+
+fn default_rotation_size() -> u64 {
+    100
+}
+
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.server.port == 0 {
+            return Err("Port cannot be zero".into());
+        }
+        if self.database.max_connections == 0 {
+            return Err("Max connections must be greater than zero".into());
+        }
+        if !["error", "warn", "info", "debug", "trace"].contains(&self.logging.level.as_str()) {
+            return Err("Invalid log level".into());
+        }
+        Ok(())
+    }
+
+    pub fn default_config() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: default_timeout(),
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost/mydb".to_string(),
+                max_connections: 10,
+                retry_attempts: default_retry_attempts(),
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: "app.log".to_string(),
+                rotation_size_mb: default_rotation_size(),
+            },
+        }
+    }
 }
