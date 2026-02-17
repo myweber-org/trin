@@ -238,3 +238,44 @@ mod tests {
         assert_eq!(max_record.value, 25.3);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use csv::{Reader, Writer};
+
+#[derive(Debug, serde::Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+fn process_csv(input_path: &str, output_path: &str, min_value: f64) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut reader = Reader::from_reader(file);
+    let mut writer = Writer::from_path(output_path)?;
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.value >= min_value && record.active {
+            writer.serialize(&record)?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input = "data/input.csv";
+    let output = "data/filtered.csv";
+    let threshold = 100.0;
+
+    match process_csv(input, output, threshold) {
+        Ok(_) => println!("Processing completed successfully"),
+        Err(e) => eprintln!("Error processing CSV: {}", e),
+    }
+
+    Ok(())
+}
