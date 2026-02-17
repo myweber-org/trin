@@ -449,4 +449,131 @@ mod tests {
         assert_eq!(mean, 20.0);
         assert!((std_dev - 8.164965).abs() < 0.0001);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { data: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            
+            for value in line.split(',') {
+                if let Ok(num) = value.trim().parse::<f64>() {
+                    self.data.push(num);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
+
+    pub fn calculate_standard_deviation(&self) -> Option<f64> {
+        if self.data.len() < 2 {
+            return None;
+        }
+        
+        let mean = self.calculate_mean()?;
+        let variance: f64 = self.data
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / (self.data.len() - 1) as f64;
+        
+        Some(variance.sqrt())
+    }
+
+    pub fn get_summary(&self) -> String {
+        let mean_str = match self.calculate_mean() {
+            Some(m) => format!("{:.4}", m),
+            None => "N/A".to_string(),
+        };
+        
+        let std_dev_str = match self.calculate_standard_deviation() {
+            Some(sd) => format!("{:.4}", sd),
+            None => "N/A".to_string(),
+        };
+        
+        format!(
+            "Data points: {}, Mean: {}, Std Dev: {}",
+            self.data.len(),
+            mean_str,
+            std_dev_str
+        )
+    }
+
+    pub fn add_data_point(&mut self, value: f64) {
+        self.data.push(value);
+    }
+
+    pub fn clear_data(&mut self) {
+        self.data.clear();
+    }
+
+    pub fn data_count(&self) -> usize {
+        self.data.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_empty_processor() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.data_count(), 0);
+        assert!(processor.calculate_mean().is_none());
+        assert!(processor.calculate_standard_deviation().is_none());
+    }
+
+    #[test]
+    fn test_basic_calculations() {
+        let mut processor = DataProcessor::new();
+        processor.add_data_point(1.0);
+        processor.add_data_point(2.0);
+        processor.add_data_point(3.0);
+        
+        assert_eq!(processor.calculate_mean(), Some(2.0));
+        assert_eq!(processor.calculate_standard_deviation(), Some(1.0));
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "1.0,2.0,3.0").unwrap();
+        writeln!(temp_file, "4.0,5.0,6.0").unwrap();
+        
+        let mut processor = DataProcessor::new();
+        let result = processor.load_from_csv(temp_file.path());
+        
+        assert!(result.is_ok());
+        assert_eq!(processor.data_count(), 6);
+        assert_eq!(processor.calculate_mean(), Some(3.5));
+    }
 }
