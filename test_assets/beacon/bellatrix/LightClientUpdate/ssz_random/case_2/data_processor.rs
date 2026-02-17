@@ -298,3 +298,168 @@ mod tests {
         assert_eq!(count, 2);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataPoint {
+    timestamp: i64,
+    value: f64,
+    category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidTimestamp,
+    InvalidValue,
+    EmptyCategory,
+    TransformationFailed,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidTimestamp => write!(f, "Timestamp must be positive"),
+            ProcessingError::InvalidValue => write!(f, "Value must be finite"),
+            ProcessingError::EmptyCategory => write!(f, "Category cannot be empty"),
+            ProcessingError::TransformationFailed => write!(f, "Data transformation failed"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataPoint {
+    pub fn new(timestamp: i64, value: f64, category: String) -> Result<Self, ProcessingError> {
+        if timestamp <= 0 {
+            return Err(ProcessingError::InvalidTimestamp);
+        }
+        
+        if !value.is_finite() {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        if category.trim().is_empty() {
+            return Err(ProcessingError::EmptyCategory);
+        }
+        
+        Ok(Self {
+            timestamp,
+            value,
+            category,
+        })
+    }
+    
+    pub fn transform(&self, multiplier: f64) -> Result<Self, ProcessingError> {
+        if !multiplier.is_finite() || multiplier == 0.0 {
+            return Err(ProcessingError::TransformationFailed);
+        }
+        
+        let transformed_value = self.value * multiplier;
+        
+        DataPoint::new(
+            self.timestamp,
+            transformed_value,
+            self.category.clone(),
+        )
+    }
+    
+    pub fn normalize(&self, max_value: f64) -> Result<Self, ProcessingError> {
+        if max_value <= 0.0 || !max_value.is_finite() {
+            return Err(ProcessingError::TransformationFailed);
+        }
+        
+        let normalized_value = self.value / max_value;
+        
+        DataPoint::new(
+            self.timestamp,
+            normalized_value,
+            self.category.clone(),
+        )
+    }
+    
+    pub fn get_timestamp(&self) -> i64 {
+        self.timestamp
+    }
+    
+    pub fn get_value(&self) -> f64 {
+        self.value
+    }
+    
+    pub fn get_category(&self) -> &str {
+        &self.category
+    }
+}
+
+pub struct DataProcessor {
+    points: Vec<DataPoint>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            points: Vec::new(),
+        }
+    }
+    
+    pub fn add_point(&mut self, point: DataPoint) {
+        self.points.push(point);
+    }
+    
+    pub fn process_all(&mut self, operation: fn(&DataPoint) -> Result<DataPoint, ProcessingError>) 
+        -> Result<(), ProcessingError> {
+        let mut processed_points = Vec::new();
+        
+        for point in &self.points {
+            let processed = operation(point)?;
+            processed_points.push(processed);
+        }
+        
+        self.points = processed_points;
+        Ok(())
+    }
+    
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataPoint> {
+        self.points
+            .iter()
+            .filter(|p| p.get_category() == category)
+            .collect()
+    }
+    
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.points.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.points.iter().map(|p| p.get_value()).sum();
+        Some(sum / self.points.len() as f64)
+    }
+    
+    pub fn get_points(&self) -> &[DataPoint] {
+        &self.points
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_data_point() {
+        let point = DataPoint::new(1234567890, 42.5, "temperature".to_string());
+        assert!(point.is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_timestamp() {
+        let point = DataPoint::new(-1, 42.5, "temperature".to_string());
+        assert!(matches!(point, Err(ProcessingError::InvalidTimestamp)));
+    }
+    
+    #[test]
+    fn test_data_transformation() {
+        let point = DataPoint::new(1234567890, 10.0, "pressure".to_string()).unwrap();
+        let transformed = point.transform(2.5).unwrap();
+        assert_eq!(transformed.get_value(), 25.0);
+    }
+}
