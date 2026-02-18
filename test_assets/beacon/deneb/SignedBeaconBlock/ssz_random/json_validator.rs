@@ -83,4 +83,82 @@ mod tests {
         let wrong_type = r#"{"name": "John", "age": "thirty"}"#;
         assert!(validator.validate(wrong_type).is_err());
     }
+}use serde_json::Value;
+use jsonschema::JSONSchema;
+
+pub fn validate_json(schema: &Value, data: &Value) -> Result<(), Vec<String>> {
+    let compiled = JSONSchema::compile(schema)
+        .map_err(|e| vec![format!("Schema compilation failed: {}", e)])?;
+    
+    let validation_result = compiled.validate(data);
+    match validation_result {
+        Ok(_) => Ok(()),
+        Err(errors) => {
+            let error_messages: Vec<String> = errors
+                .map(|e| format!("Validation error: {}", e))
+                .collect();
+            Err(error_messages)
+        }
+    }
+}
+
+pub fn create_person_schema() -> Value {
+    serde_json::json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "minLength": 1
+            },
+            "age": {
+                "type": "integer",
+                "minimum": 0
+            },
+            "email": {
+                "type": "string",
+                "format": "email"
+            }
+        },
+        "required": ["name", "age"],
+        "additionalProperties": false
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_person() {
+        let schema = create_person_schema();
+        let data = serde_json::json!({
+            "name": "John Doe",
+            "age": 30,
+            "email": "john@example.com"
+        });
+        
+        assert!(validate_json(&schema, &data).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_person_missing_required() {
+        let schema = create_person_schema();
+        let data = serde_json::json!({
+            "name": "John Doe"
+        });
+        
+        assert!(validate_json(&schema, &data).is_err());
+    }
+
+    #[test]
+    fn test_invalid_person_wrong_type() {
+        let schema = create_person_schema();
+        let data = serde_json::json!({
+            "name": "John Doe",
+            "age": "thirty"
+        });
+        
+        assert!(validate_json(&schema, &data).is_err());
+    }
 }
