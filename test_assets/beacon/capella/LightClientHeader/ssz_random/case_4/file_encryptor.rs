@@ -57,3 +57,90 @@ mod tests {
         assert_eq!(original_content.to_vec(), decrypted_content);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{pbkdf2_hmac, Params};
+use sha2::Sha256;
+use std::fs;
+use std::io::{Read, Write};
+
+const SALT_LEN: usize = 16;
+const NONCE_LEN: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct FileEncryptor {
+    key: Key<Aes256Gcm>,
+}
+
+impl FileEncryptor {
+    pub fn from_password(password: &str, salt: &[u8]) -> Self {
+        let mut key = [0u8; 32];
+        let params = Params {
+            rounds: PBKDF2_ITERATIONS,
+            output_length: 32,
+        };
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, params.rounds, &mut key);
+        
+        FileEncryptor {
+            key: Key::<Aes256Gcm>::from_slice(&key).into(),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), String> {
+        let mut file = fs::File::open(input_path)
+            .map_err(|e| format!("Failed to open input file: {}", e))?;
+        
+        let mut plaintext = Vec::new();
+        file.read_to_end(&mut plaintext)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let cipher = Aes256Gcm::new(&self.key);
+        let nonce = Nonce::from_slice(&generate_random_bytes(NONCE_LEN));
+        
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+
+        let mut output = fs::File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        
+        output.write_all(&ciphertext)
+            .map_err(|e| format!("Failed to write encrypted data: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &str, output_path: &str, nonce: &[u8]) -> Result<(), String> {
+        let mut file = fs::File::open(input_path)
+            .map_err(|e| format!("Failed to open encrypted file: {}", e))?;
+        
+        let mut ciphertext = Vec::new();
+        file.read_to_end(&mut ciphertext)
+            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+
+        let cipher = Aes256Gcm::new(&self.key);
+        let nonce = Nonce::from_slice(nonce);
+        
+        let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+
+        let mut output = fs::File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        
+        output.write_all(&plaintext)
+            .map_err(|e| format!("Failed to write decrypted data: {}", e))?;
+
+        Ok(())
+    }
+}
+
+fn generate_random_bytes(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0u8; len];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+pub fn generate_salt() -> Vec<u8> {
+    generate_random_bytes(SALT_LEN)
+}
