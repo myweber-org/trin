@@ -109,4 +109,108 @@ mod tests {
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XORCipher {
+    key: Vec<u8>,
+}
+
+impl XORCipher {
+    pub fn new(key: &str) -> Self {
+        XORCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
+
+    fn process_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0; 4096];
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let mut processed_chunk = Vec::with_capacity(bytes_read);
+            for i in 0..bytes_read {
+                let key_byte = self.key[key_index % self.key.len()];
+                processed_chunk.push(buffer[i] ^ key_byte);
+                key_index += 1;
+            }
+
+            dest_file.write_all(&processed_chunk)?;
+        }
+
+        dest_file.flush()?;
+        Ok(())
+    }
+
+    pub fn encrypt_data(&self, data: &[u8]) -> Vec<u8> {
+        self.process_data(data)
+    }
+
+    pub fn decrypt_data(&self, data: &[u8]) -> Vec<u8> {
+        self.process_data(data)
+    }
+
+    fn process_data(&self, data: &[u8]) -> Vec<u8> {
+        let mut result = Vec::with_capacity(data.len());
+        for (i, &byte) in data.iter().enumerate() {
+            let key_byte = self.key[i % self.key.len()];
+            result.push(byte ^ key_byte);
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let cipher = XORCipher::new("secret_key");
+        let original_data = b"Hello, XOR encryption!";
+        
+        let encrypted = cipher.encrypt_data(original_data);
+        let decrypted = cipher.decrypt_data(&encrypted);
+        
+        assert_eq!(original_data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let cipher = XORCipher::new("test_key");
+        
+        let mut source_file = NamedTempFile::new()?;
+        source_file.write_all(b"Test file content")?;
+        
+        let dest_file = NamedTempFile::new()?;
+        
+        cipher.encrypt_file(source_file.path(), dest_file.path())?;
+        
+        let roundtrip_file = NamedTempFile::new()?;
+        cipher.decrypt_file(dest_file.path(), roundtrip_file.path())?;
+        
+        let restored_content = fs::read(roundtrip_file.path())?;
+        assert_eq!(b"Test file content", restored_content.as_slice());
+        
+        Ok(())
+    }
 }
