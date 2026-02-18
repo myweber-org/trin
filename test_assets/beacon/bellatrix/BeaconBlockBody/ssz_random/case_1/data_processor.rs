@@ -241,3 +241,119 @@ fn process_data_sample() -> Result<(), Box<dyn Error>> {
     
     Ok(())
 }
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, values: Vec<f64>) -> Self {
+        Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.values.is_empty() && self.id > 0
+    }
+
+    pub fn calculate_statistics(&self) -> Option<DataStatistics> {
+        if self.values.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.values.iter().sum();
+        let count = self.values.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = self.values
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        Some(DataStatistics {
+            mean,
+            variance,
+            count: self.values.len(),
+            min: *self.values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            max: *self.values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+        })
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn transform_values<F>(&mut self, transformer: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        self.values = self.values.iter().map(|&x| transformer(x)).collect();
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DataStatistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+}
+
+pub fn process_records(records: &[DataRecord]) -> Vec<DataRecord> {
+    records
+        .iter()
+        .filter(|record| record.is_valid())
+        .cloned()
+        .collect()
+}
+
+pub fn normalize_values(records: &mut [DataRecord]) {
+    for record in records {
+        if let Some(stats) = record.calculate_statistics() {
+            if stats.variance > 0.0 {
+                record.transform_values(|x| (x - stats.mean) / stats.variance.sqrt());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = DataRecord::new(0, vec![]);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        let stats = record.calculate_statistics().unwrap();
+        
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+    }
+
+    #[test]
+    fn test_metadata_operations() {
+        let mut record = DataRecord::new(1, vec![1.0, 2.0]);
+        record.add_metadata("source".to_string(), "sensor_a".to_string());
+        
+        assert_eq!(record.metadata.get("source"), Some(&"sensor_a".to_string()));
+    }
+}
