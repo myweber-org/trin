@@ -219,4 +219,138 @@ pub fn print_analysis(stats: &CsvStats) {
             }
         }
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct CsvAnalyzer {
+    headers: Vec<String>,
+    data: Vec<Vec<String>>,
+}
+
+impl CsvAnalyzer {
+    pub fn new(file_path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        let headers_line = lines.next()
+            .ok_or("Empty CSV file")??;
+        let headers: Vec<String> = headers_line.split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+        
+        let mut data = Vec::new();
+        for line_result in lines {
+            let line = line_result?;
+            let row: Vec<String> = line.split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            if row.len() == headers.len() {
+                data.push(row);
+            }
+        }
+        
+        Ok(CsvAnalyzer { headers, data })
+    }
+    
+    pub fn row_count(&self) -> usize {
+        self.data.len()
+    }
+    
+    pub fn column_count(&self) -> usize {
+        self.headers.len()
+    }
+    
+    pub fn get_column_stats(&self, column_index: usize) -> Option<HashMap<String, usize>> {
+        if column_index >= self.headers.len() {
+            return None;
+        }
+        
+        let mut stats = HashMap::new();
+        for row in &self.data {
+            if let Some(value) = row.get(column_index) {
+                *stats.entry(value.clone()).or_insert(0) += 1;
+            }
+        }
+        
+        Some(stats)
+    }
+    
+    pub fn filter_rows<F>(&self, predicate: F) -> Vec<Vec<String>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        self.data.iter()
+            .filter(|row| predicate(row))
+            .cloned()
+            .collect()
+    }
+    
+    pub fn find_duplicates(&self, column_indices: &[usize]) -> HashMap<Vec<String>, usize> {
+        let mut frequency_map = HashMap::new();
+        
+        for row in &self.data {
+            let key: Vec<String> = column_indices.iter()
+                .filter_map(|&idx| row.get(idx).cloned())
+                .collect();
+            
+            if !key.is_empty() {
+                *frequency_map.entry(key).or_insert(0) += 1;
+            }
+        }
+        
+        frequency_map.into_iter()
+            .filter(|(_, count)| *count > 1)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    fn create_test_csv() -> NamedTempFile {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+        temp_file
+    }
+    
+    #[test]
+    fn test_csv_loading() {
+        let temp_file = create_test_csv();
+        let analyzer = CsvAnalyzer::new(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(analyzer.row_count(), 4);
+        assert_eq!(analyzer.column_count(), 3);
+        assert_eq!(analyzer.headers, vec!["name", "age", "city"]);
+    }
+    
+    #[test]
+    fn test_column_stats() {
+        let temp_file = create_test_csv();
+        let analyzer = CsvAnalyzer::new(temp_file.path().to_str().unwrap()).unwrap();
+        
+        let stats = analyzer.get_column_stats(0).unwrap();
+        assert_eq!(stats.get("Alice"), Some(&2));
+        assert_eq!(stats.get("Bob"), Some(&1));
+        assert_eq!(stats.get("Charlie"), Some(&1));
+    }
+    
+    #[test]
+    fn test_duplicate_finding() {
+        let temp_file = create_test_csv();
+        let analyzer = CsvAnalyzer::new(temp_file.path().to_str().unwrap()).unwrap();
+        
+        let duplicates = analyzer.find_duplicates(&[0, 1, 2]);
+        let expected_key = vec!["Alice".to_string(), "30".to_string(), "New York".to_string()];
+        assert_eq!(duplicates.get(&expected_key), Some(&2));
+    }
 }
