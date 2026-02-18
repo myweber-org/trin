@@ -92,4 +92,104 @@ pub fn process_csv_data(file_path: &str, filter_column: &str, filter_value: &str
     }
 
     Ok(())
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    category: String,
+    value: f64,
+    active: bool,
+}
+
+fn load_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+    
+    let mut records = Vec::new();
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+    
+    Ok(records)
+}
+
+fn filter_active_records(records: &[Record]) -> Vec<&Record> {
+    records.iter()
+        .filter(|r| r.active)
+        .collect()
+}
+
+fn calculate_category_averages(records: &[Record]) -> Vec<(String, f64)> {
+    use std::collections::HashMap;
+    
+    let mut category_totals: HashMap<String, (f64, usize)> = HashMap::new();
+    
+    for record in records {
+        let entry = category_totals
+            .entry(record.category.clone())
+            .or_insert((0.0, 0));
+        entry.0 += record.value;
+        entry.1 += 1;
+    }
+    
+    category_totals
+        .into_iter()
+        .map(|(category, (total, count))| (category, total / count as f64))
+        .collect()
+}
+
+fn save_processed_data(
+    records: &[Record],
+    output_path: &str
+) -> Result<(), Box<dyn Error>> {
+    let file = File::create(output_path)?;
+    let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
+    
+    for record in records {
+        wtr.serialize(record)?;
+    }
+    
+    wtr.flush()?;
+    Ok(())
+}
+
+fn process_data_pipeline(
+    input_file: &str,
+    output_file: &str
+) -> Result<(), Box<dyn Error>> {
+    let records = load_csv(input_file)?;
+    
+    println!("Total records loaded: {}", records.len());
+    
+    let active_records = filter_active_records(&records);
+    println!("Active records: {}", active_records.len());
+    
+    let averages = calculate_category_averages(&records);
+    println!("Category averages:");
+    for (category, avg) in averages {
+        println!("  {}: {:.2}", category, avg);
+    }
+    
+    save_processed_data(&records, output_file)?;
+    println!("Processed data saved to: {}", output_file);
+    
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/output.csv";
+    
+    match process_data_pipeline(input_file, output_file) {
+        Ok(_) => println!("Data processing completed successfully"),
+        Err(e) => eprintln!("Error processing data: {}", e),
+    }
+    
+    Ok(())
 }
