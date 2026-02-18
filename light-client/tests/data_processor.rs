@@ -199,3 +199,122 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, filepath: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(filepath)?;
+        let reader = BufReader::new(file);
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            if index == 0 {
+                self.parse_header(&line);
+                continue;
+            }
+            
+            if let Some(value) = self.parse_value(&line) {
+                self.data.push(value);
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn parse_header(&mut self, header_line: &str) {
+        let parts: Vec<&str> = header_line.split(',').collect();
+        if parts.len() >= 2 {
+            self.metadata.insert("source".to_string(), parts[0].to_string());
+            self.metadata.insert("unit".to_string(), parts[1].to_string());
+        }
+    }
+
+    fn parse_value(&self, line: &str) -> Option<f64> {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.is_empty() {
+            return None;
+        }
+        
+        match parts[0].trim().parse::<f64>() {
+            Ok(value) => Some(value),
+            Err(_) => None,
+        }
+    }
+
+    pub fn calculate_statistics(&self) -> Statistics {
+        if self.data.is_empty() {
+            return Statistics::default();
+        }
+
+        let sum: f64 = self.data.iter().sum();
+        let count = self.data.len();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = self.data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        let min = self.data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        
+        Statistics {
+            count,
+            mean,
+            std_dev,
+            min,
+            max,
+            sum,
+        }
+    }
+
+    pub fn get_metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
+    }
+
+    pub fn filter_data<F>(&self, predicate: F) -> Vec<f64>
+    where
+        F: Fn(f64) -> bool,
+    {
+        self.data.iter()
+            .filter(|&&x| predicate(x))
+            .copied()
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub sum: f64,
+}
+
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Statistics: count={}, mean={:.2}, std_dev={:.2}, min={:.2}, max={:.2}, sum={:.2}",
+            self.count, self.mean, self.std_dev, self.min, self.max, self.sum
+        )
+    }
+}
