@@ -257,3 +257,191 @@ mod tests {
         assert_eq!(processor.record_count(), 1);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Self {
+        let valid = value >= 0.0 && !category.is_empty();
+        DataRecord {
+            id,
+            value,
+            category,
+            valid,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn summary(&self) -> String {
+        format!("ID: {}, Value: {:.2}, Category: {}", self.id, self.value, self.category)
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    stats: ProcessingStats,
+}
+
+#[derive(Debug, Default)]
+pub struct ProcessingStats {
+    total_records: usize,
+    valid_records: usize,
+    invalid_records: usize,
+    sum_values: f64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            stats: ProcessingStats::default(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                eprintln!("Warning: Invalid format at line {}", line_num + 1);
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(id) => id,
+                Err(_) => {
+                    eprintln!("Warning: Invalid ID at line {}", line_num + 1);
+                    continue;
+                }
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    eprintln!("Warning: Invalid value at line {}", line_num + 1);
+                    continue;
+                }
+            };
+
+            let category = parts[2].trim().to_string();
+            let record = DataRecord::new(id, value, category);
+            
+            self.add_record(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.stats.total_records += 1;
+        
+        if record.is_valid() {
+            self.stats.valid_records += 1;
+            self.stats.sum_values += record.value;
+            self.records.push(record);
+        } else {
+            self.stats.invalid_records += 1;
+        }
+    }
+
+    pub fn get_stats(&self) -> &ProcessingStats {
+        &self.stats
+    }
+
+    pub fn filter_valid(&self) -> Vec<&DataRecord> {
+        self.records.iter().filter(|r| r.is_valid()).collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.stats.valid_records > 0 {
+            Some(self.stats.sum_values / self.stats.valid_records as f64)
+        } else {
+            None
+        }
+    }
+
+    pub fn export_summary(&self) -> String {
+        let avg = self.calculate_average().unwrap_or(0.0);
+        format!(
+            "Total: {}, Valid: {}, Invalid: {}, Average: {:.2}",
+            self.stats.total_records,
+            self.stats.valid_records,
+            self.stats.invalid_records,
+            avg
+        )
+    }
+}
+
+impl ProcessingStats {
+    pub fn display(&self) {
+        println!("Processing Statistics:");
+        println!("  Total records: {}", self.total_records);
+        println!("  Valid records: {}", self.valid_records);
+        println!("  Invalid records: {}", self.invalid_records);
+        println!("  Sum of values: {:.2}", self.sum_values);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, 42.5, "test".to_string());
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "test");
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(2, -10.0, "".to_string());
+        assert!(!record.is_valid());
+    }
+
+    #[test]
+    fn test_processor_stats() {
+        let mut processor = DataProcessor::new();
+        processor.add_record(DataRecord::new(1, 10.0, "A".to_string()));
+        processor.add_record(DataRecord::new(2, 20.0, "B".to_string()));
+        processor.add_record(DataRecord::new(3, -5.0, "C".to_string()));
+
+        let stats = processor.get_stats();
+        assert_eq!(stats.total_records, 3);
+        assert_eq!(stats.valid_records, 2);
+        assert_eq!(stats.invalid_records, 1);
+        assert_eq!(stats.sum_values, 30.0);
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let mut processor = DataProcessor::new();
+        processor.add_record(DataRecord::new(1, 10.0, "A".to_string()));
+        processor.add_record(DataRecord::new(2, 20.0, "B".to_string()));
+        
+        assert_eq!(processor.calculate_average(), Some(15.0));
+    }
+}
