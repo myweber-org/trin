@@ -1,46 +1,77 @@
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 pub struct DataCleaner {
-    pub remove_duplicates: bool,
-    pub normalize_case: bool,
+    data: HashMap<String, Vec<Option<String>>>,
 }
 
 impl DataCleaner {
-    pub fn new(remove_duplicates: bool, normalize_case: bool) -> Self {
+    pub fn new() -> Self {
         DataCleaner {
-            remove_duplicates,
-            normalize_case,
+            data: HashMap::new(),
         }
     }
 
-    pub fn clean_strings(&self, input: Vec<String>) -> Vec<String> {
-        let mut processed: Vec<String> = input
-            .into_iter()
-            .map(|s| {
-                if self.normalize_case {
-                    s.to_lowercase()
-                } else {
-                    s
+    pub fn add_column(&mut self, column_name: &str, values: Vec<Option<String>>) {
+        self.data.insert(column_name.to_string(), values);
+    }
+
+    pub fn clean_column(&mut self, column_name: &str) -> Result<Vec<String>, String> {
+        match self.data.get_mut(column_name) {
+            Some(column_data) => {
+                let mut cleaned = Vec::new();
+                
+                for value in column_data.iter() {
+                    match value {
+                        Some(v) => {
+                            let trimmed = v.trim().to_string();
+                            if !trimmed.is_empty() {
+                                cleaned.push(trimmed);
+                            }
+                        }
+                        None => continue,
+                    }
                 }
-            })
-            .collect();
-
-        if self.remove_duplicates {
-            let mut seen = HashSet::new();
-            processed.retain(|s| seen.insert(s.clone()));
+                
+                Ok(cleaned)
+            }
+            None => Err(format!("Column '{}' not found", column_name)),
         }
-
-        processed
     }
 
-    pub fn deduplicate_numbers(numbers: &[i32]) -> Vec<i32> {
-        let mut unique = HashSet::new();
-        numbers
-            .iter()
-            .filter(|&&n| unique.insert(n))
-            .copied()
-            .collect()
+    pub fn remove_null_rows(&mut self) -> HashMap<String, Vec<String>> {
+        let mut cleaned_data = HashMap::new();
+        let mut row_count = 0;
+        
+        if let Some(first_column) = self.data.keys().next() {
+            if let Some(first_values) = self.data.get(first_column) {
+                row_count = first_values.len();
+            }
+        }
+
+        for row_index in 0..row_count {
+            let mut row_has_null = false;
+            
+            for (column_name, column_data) in &self.data {
+                if row_index >= column_data.len() || column_data[row_index].is_none() {
+                    row_has_null = true;
+                    break;
+                }
+            }
+
+            if !row_has_null {
+                for (column_name, column_data) in &self.data {
+                    if let Some(value) = &column_data[row_index] {
+                        cleaned_data
+                            .entry(column_name.clone())
+                            .or_insert_with(Vec::new)
+                            .push(value.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        cleaned_data
     }
 }
 
@@ -49,35 +80,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clean_strings_with_duplicates() {
-        let cleaner = DataCleaner::new(true, false);
-        let input = vec![
-            "apple".to_string(),
-            "banana".to_string(),
-            "apple".to_string(),
-            "cherry".to_string(),
-        ];
-        let result = cleaner.clean_strings(input);
-        assert_eq!(result.len(), 3);
+    fn test_clean_column() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_column(
+            "names",
+            vec![
+                Some("  John  ".to_string()),
+                Some("".to_string()),
+                None,
+                Some("Jane".to_string()),
+            ],
+        );
+
+        let cleaned = cleaner.clean_column("names").unwrap();
+        assert_eq!(cleaned, vec!["John", "Jane"]);
     }
 
     #[test]
-    fn test_clean_strings_with_case_normalization() {
-        let cleaner = DataCleaner::new(false, true);
-        let input = vec!["Apple".to_string(), "BANANA".to_string()];
-        let result = cleaner.clean_strings(input);
-        assert_eq!(result[0], "apple");
-        assert_eq!(result[1], "banana");
-    }
+    fn test_remove_null_rows() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_column(
+            "id",
+            vec![
+                Some("1".to_string()),
+                Some("2".to_string()),
+                None,
+                Some("4".to_string()),
+            ],
+        );
+        cleaner.add_column(
+            "value",
+            vec![
+                Some("A".to_string()),
+                Some("B".to_string()),
+                Some("C".to_string()),
+                Some("D".to_string()),
+            ],
+        );
 
-    #[test]
-    fn test_deduplicate_numbers() {
-        let numbers = vec![1, 2, 3, 2, 1, 4];
-        let result = DataCleaner::deduplicate_numbers(&numbers);
-        assert_eq!(result.len(), 4);
-        assert!(result.contains(&1));
-        assert!(result.contains(&2));
-        assert!(result.contains(&3));
-        assert!(result.contains(&4));
+        let cleaned = cleaner.remove_null_rows();
+        assert_eq!(cleaned.get("id").unwrap(), &vec!["1", "2", "4"]);
+        assert_eq!(cleaned.get("value").unwrap(), &vec!["A", "B", "D"]);
     }
 }
