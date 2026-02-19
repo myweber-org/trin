@@ -79,4 +79,84 @@ mod tests {
         assert_eq!(config.get("PASSWORD"), Some(&"secret123".to_string()));
         assert_eq!(config.get("NORMAL"), Some(&"value".to_string()));
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub max_connections: usize,
+    pub enable_ssl: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            max_connections: 100,
+            enable_ssl: false,
+        }
+    }
+}
+
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<ServerConfig, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)?;
+    let mut config: ServerConfig = toml::from_str(&config_str)?;
+    
+    validate_config(&mut config)?;
+    
+    Ok(config)
+}
+
+fn validate_config(config: &mut ServerConfig) -> Result<(), String> {
+    if config.port == 0 {
+        return Err("Port cannot be zero".to_string());
+    }
+    
+    if config.max_connections == 0 {
+        config.max_connections = ServerConfig::default().max_connections;
+    }
+    
+    if config.host.is_empty() {
+        config.host = ServerConfig::default().host;
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_load_valid_config() {
+        let config_toml = r#"
+            host = "0.0.0.0"
+            port = 3000
+            max_connections = 500
+            enable_ssl = true
+        "#;
+        
+        let mut file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), config_toml).unwrap();
+        
+        let config = load_config(file.path()).unwrap();
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 3000);
+        assert_eq!(config.max_connections, 500);
+        assert_eq!(config.enable_ssl, true);
+    }
+    
+    #[test]
+    fn test_config_defaults() {
+        let config = ServerConfig::default();
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.max_connections, 100);
+        assert_eq!(config.enable_ssl, false);
+    }
 }
