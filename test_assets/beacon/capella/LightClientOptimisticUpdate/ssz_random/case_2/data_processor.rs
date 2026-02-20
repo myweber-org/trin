@@ -600,3 +600,186 @@ mod tests {
         assert_eq!(processor.record_count(), 0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    MissingField,
+    CategoryNotFound,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidValue => write!(f, "Invalid numeric value"),
+            DataError::MissingField => write!(f, "Required field is missing"),
+            DataError::CategoryNotFound => write!(f, "Category not found in mapping"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    category_mapping: HashMap<String, String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            category_mapping: HashMap::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        self.validate_record(&record)?;
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn add_category_mapping(&mut self, from: String, to: String) {
+        self.category_mapping.insert(from, to);
+    }
+
+    pub fn process_records(&mut self) -> Result<Vec<DataRecord>, DataError> {
+        let mut processed = Vec::with_capacity(self.records.len());
+        
+        for record in &self.records {
+            let processed_record = self.transform_record(record)?;
+            processed.push(processed_record);
+        }
+        
+        Ok(processed)
+    }
+
+    pub fn calculate_statistics(&self) -> (f64, f64, f64) {
+        if self.records.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        let count = self.records.len() as f64;
+        let average = sum / count;
+        
+        let variance: f64 = self.records
+            .iter()
+            .map(|r| (r.value - average).powi(2))
+            .sum::<f64>() / count;
+        
+        let std_dev = variance.sqrt();
+        
+        (average, variance, std_dev)
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        
+        if record.value.is_nan() || record.value.is_infinite() {
+            return Err(DataError::InvalidValue);
+        }
+        
+        if record.name.trim().is_empty() || record.category.trim().is_empty() {
+            return Err(DataError::MissingField);
+        }
+        
+        Ok(())
+    }
+
+    fn transform_record(&self, record: &DataRecord) -> Result<DataRecord, DataError> {
+        let normalized_category = self.normalize_category(&record.category)?;
+        
+        Ok(DataRecord {
+            id: record.id,
+            name: record.name.to_uppercase(),
+            value: (record.value * 100.0).round() / 100.0,
+            category: normalized_category,
+        })
+    }
+
+    fn normalize_category(&self, category: &str) -> Result<String, DataError> {
+        if let Some(mapped) = self.category_mapping.get(category) {
+            Ok(mapped.clone())
+        } else if self.category_mapping.is_empty() {
+            Ok(category.to_string())
+        } else {
+            Err(DataError::CategoryNotFound)
+        }
+    }
+}
+
+pub fn filter_records_by_threshold(records: &[DataRecord], threshold: f64) -> Vec<&DataRecord> {
+    records
+        .iter()
+        .filter(|record| record.value >= threshold)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let record = DataRecord {
+            id: 1,
+            name: "test".to_string(),
+            value: 42.5,
+            category: "A".to_string(),
+        };
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.records.len(), 1);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord { id: 1, name: "a".to_string(), value: 10.0, category: "X".to_string() },
+            DataRecord { id: 2, name: "b".to_string(), value: 20.0, category: "X".to_string() },
+            DataRecord { id: 3, name: "c".to_string(), value: 30.0, category: "Y".to_string() },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        let (avg, var, std) = processor.calculate_statistics();
+        
+        assert_eq!(avg, 20.0);
+        assert_eq!(var, 66.66666666666667);
+        assert_eq!(std, 8.16496580927726);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let records = vec![
+            DataRecord { id: 1, name: "a".to_string(), value: 15.0, category: "X".to_string() },
+            DataRecord { id: 2, name: "b".to_string(), value: 25.0, category: "X".to_string() },
+            DataRecord { id: 3, name: "c".to_string(), value: 5.0, category: "Y".to_string() },
+        ];
+        
+        let filtered = filter_records_by_threshold(&records, 10.0);
+        assert_eq!(filtered.len(), 2);
+    }
+}
