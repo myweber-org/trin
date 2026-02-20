@@ -482,3 +482,69 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
+    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validators: HashMap::new(),
+            transformers: HashMap::new(),
+        }
+    }
+
+    pub fn register_validator(&mut self, name: &str, validator: Box<dyn Fn(&str) -> bool>) {
+        self.validators.insert(name.to_string(), validator);
+    }
+
+    pub fn register_transformer(&mut self, name: &str, transformer: Box<dyn Fn(String) -> String>) {
+        self.transformers.insert(name.to_string(), transformer);
+    }
+
+    pub fn validate(&self, name: &str, data: &str) -> bool {
+        match self.validators.get(name) {
+            Some(validator) => validator(data),
+            None => false,
+        }
+    }
+
+    pub fn transform(&self, name: &str, data: String) -> Option<String> {
+        self.transformers.get(name).map(|transformer| transformer(data))
+    }
+
+    pub fn process_pipeline(&self, data: &str, validators: &[&str], transformers: &[&str]) -> Option<String> {
+        for validator_name in validators {
+            if !self.validate(validator_name, data) {
+                return None;
+            }
+        }
+
+        let mut result = data.to_string();
+        for transformer_name in transformers {
+            if let Some(transformed) = self.transform(transformer_name, result) {
+                result = transformed;
+            } else {
+                return None;
+            }
+        }
+
+        Some(result)
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.register_validator("is_numeric", Box::new(|s| s.chars().all(|c| c.is_ascii_digit())));
+    processor.register_validator("is_alpha", Box::new(|s| s.chars().all(|c| c.is_ascii_alphabetic())));
+
+    processor.register_transformer("to_uppercase", Box::new(|s| s.to_uppercase()));
+    processor.register_transformer("reverse", Box::new(|s| s.chars().rev().collect()));
+    processor.register_transformer("trim_spaces", Box::new(|s| s.trim().to_string()));
+
+    processor
+}
