@@ -1,52 +1,38 @@
+
 use std::collections::HashSet;
 
 pub struct DataCleaner {
-    records: Vec<String>,
+    unique_items: HashSet<String>,
 }
 
 impl DataCleaner {
     pub fn new() -> Self {
         DataCleaner {
-            records: Vec::new(),
+            unique_items: HashSet::new(),
         }
     }
 
-    pub fn add_record(&mut self, record: String) {
-        self.records.push(record);
+    pub fn add_item(&mut self, item: &str) -> bool {
+        let normalized = Self::normalize_string(item);
+        self.unique_items.insert(normalized)
     }
 
-    pub fn deduplicate(&mut self) -> Vec<String> {
-        let mut seen = HashSet::new();
-        let mut unique_records = Vec::new();
-
-        for record in self.records.drain(..) {
-            if seen.insert(record.clone()) {
-                unique_records.push(record);
-            }
-        }
-
-        self.records = unique_records.clone();
-        unique_records
-    }
-
-    pub fn validate_records(&self) -> Result<(), String> {
-        for (index, record) in self.records.iter().enumerate() {
-            if record.trim().is_empty() {
-                return Err(format!("Empty record found at index {}", index));
-            }
-            if record.len() > 1000 {
-                return Err(format!("Record too long at index {}", index));
-            }
-        }
-        Ok(())
-    }
-
-    pub fn get_record_count(&self) -> usize {
-        self.records.len()
+    pub fn get_unique_items(&self) -> Vec<String> {
+        let mut items: Vec<String> = self.unique_items.iter().cloned().collect();
+        items.sort();
+        items
     }
 
     pub fn clear(&mut self) {
-        self.records.clear();
+        self.unique_items.clear();
+    }
+
+    pub fn count(&self) -> usize {
+        self.unique_items.len()
+    }
+
+    fn normalize_string(s: &str) -> String {
+        s.trim().to_lowercase()
     }
 }
 
@@ -55,24 +41,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_deduplication() {
+    fn test_add_duplicate_items() {
         let mut cleaner = DataCleaner::new();
-        cleaner.add_record("test".to_string());
-        cleaner.add_record("test".to_string());
-        cleaner.add_record("unique".to_string());
-
-        let deduped = cleaner.deduplicate();
-        assert_eq!(deduped.len(), 2);
-        assert_eq!(cleaner.get_record_count(), 2);
+        assert!(cleaner.add_item("Apple"));
+        assert!(!cleaner.add_item("apple"));
+        assert!(!cleaner.add_item("  APPLE  "));
+        assert_eq!(cleaner.count(), 1);
     }
 
     #[test]
-    fn test_validation() {
+    fn test_get_sorted_items() {
         let mut cleaner = DataCleaner::new();
-        cleaner.add_record("valid record".to_string());
-        assert!(cleaner.validate_records().is_ok());
+        cleaner.add_item("Zebra");
+        cleaner.add_item("apple");
+        cleaner.add_item("Banana");
+        
+        let items = cleaner.get_unique_items();
+        assert_eq!(items, vec!["apple", "banana", "zebra"]);
+    }
 
-        cleaner.add_record("".to_string());
-        assert!(cleaner.validate_records().is_err());
+    #[test]
+    fn test_clear_functionality() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_item("Test");
+        assert_eq!(cleaner.count(), 1);
+        
+        cleaner.clear();
+        assert_eq!(cleaner.count(), 0);
     }
 }
