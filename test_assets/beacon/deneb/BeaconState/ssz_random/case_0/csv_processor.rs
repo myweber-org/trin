@@ -130,3 +130,109 @@ mod tests {
         assert!(!invalid_record.is_valid());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn read_and_filter<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+        column_index: usize,
+        filter_value: &str,
+    ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines().enumerate();
+
+        if self.has_headers {
+            lines.next();
+        }
+
+        for (line_num, line) in lines {
+            let line = line?;
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if column_index < fields.len() && fields[column_index] == filter_value {
+                records.push(fields);
+            } else if column_index >= fields.len() {
+                return Err(format!(
+                    "Line {}: Column index {} out of bounds ({} columns)",
+                    line_num + 1,
+                    column_index,
+                    fields.len()
+                ).into());
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn count_matching_records<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+        column_index: usize,
+        filter_value: &str,
+    ) -> Result<usize, Box<dyn Error>> {
+        let records = self.read_and_filter(file_path, column_index, filter_value)?;
+        Ok(records.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,30,Paris").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let result = processor
+            .read_and_filter(temp_file.path(), 1, "30")
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], vec!["Alice", "30", "New York"]);
+        assert_eq!(result[1], vec!["Charlie", "30", "Paris"]);
+    }
+
+    #[test]
+    fn test_count_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,status,value").unwrap();
+        writeln!(temp_file, "1,active,100").unwrap();
+        writeln!(temp_file, "2,inactive,200").unwrap();
+        writeln!(temp_file, "3,active,300").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let count = processor
+            .count_matching_records(temp_file.path(), 1, "active")
+            .unwrap();
+
+        assert_eq!(count, 2);
+    }
+}
