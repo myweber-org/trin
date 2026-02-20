@@ -1,86 +1,72 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
+use std::path::Path;
 use regex::Regex;
-use chrono::NaiveDateTime;
-
-pub struct LogEntry {
-    pub timestamp: NaiveDateTime,
-    pub level: String,
-    pub message: String,
-}
 
 pub struct LogParser {
-    pattern: Regex,
+    error_pattern: Regex,
 }
 
 impl LogParser {
     pub fn new() -> Self {
-        let pattern = Regex::new(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (.+)").unwrap();
-        LogParser { pattern }
+        let pattern = r"ERROR|FATAL|CRITICAL|FAILED";
+        let regex = Regex::new(pattern).expect("Invalid regex pattern");
+        LogParser { error_pattern: regex }
     }
 
-    pub fn parse_file(&self, path: &str) -> io::Result<Vec<LogEntry>> {
+    pub fn parse_log_file<P: AsRef<Path>>(&self, path: P) -> io::Result<Vec<String>> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let mut entries = Vec::new();
+        let mut errors = Vec::new();
 
-        for line in reader.lines() {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
-            if let Some(entry) = self.parse_line(&line) {
-                entries.push(entry);
+            if self.error_pattern.is_match(&line) {
+                errors.push(format!("Line {}: {}", line_num + 1, line));
             }
         }
 
-        Ok(entries)
+        Ok(errors)
     }
 
-    pub fn parse_line(&self, line: &str) -> Option<LogEntry> {
-        let captures = self.pattern.captures(line)?;
-        
-        let timestamp_str = captures.get(1)?.as_str();
-        let level = captures.get(2)?.as_str().to_string();
-        let message = captures.get(3)?.as_str().to_string();
-
-        let timestamp = NaiveDateTime::parse_from_str(timestamp_str, "%Y-%m-%d %H:%M:%S").ok()?;
-
-        Some(LogEntry {
-            timestamp,
-            level,
-            message,
-        })
-    }
-
-    pub fn filter_by_level(&self, entries: &[LogEntry], level: &str) -> Vec<&LogEntry> {
-        entries.iter()
-            .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
-            .collect()
-    }
-
-    pub fn find_errors(&self, entries: &[LogEntry]) -> Vec<&LogEntry> {
-        self.filter_by_level(entries, "ERROR")
+    pub fn count_errors<P: AsRef<Path>>(&self, path: P) -> io::Result<usize> {
+        let errors = self.parse_log_file(path)?;
+        Ok(errors.len())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_parse_valid_line() {
+    fn test_parse_log_file() {
         let parser = LogParser::new();
-        let line = "2024-01-15 14:30:45 [ERROR] Database connection failed";
+        let mut temp_file = NamedTempFile::new().unwrap();
         
-        let entry = parser.parse_line(line).unwrap();
+        writeln!(temp_file, "INFO: Application started").unwrap();
+        writeln!(temp_file, "ERROR: Database connection failed").unwrap();
+        writeln!(temp_file, "WARN: High memory usage").unwrap();
+        writeln!(temp_file, "FATAL: System shutdown required").unwrap();
         
-        assert_eq!(entry.level, "ERROR");
-        assert_eq!(entry.message, "Database connection failed");
+        let errors = parser.parse_log_file(temp_file.path()).unwrap();
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("ERROR"));
+        assert!(errors[1].contains("FATAL"));
     }
 
     #[test]
-    fn test_parse_invalid_line() {
+    fn test_count_errors() {
         let parser = LogParser::new();
-        let line = "Invalid log format";
+        let mut temp_file = NamedTempFile::new().unwrap();
         
-        assert!(parser.parse_line(line).is_none());
+        writeln!(temp_file, "INFO: Test message").unwrap();
+        writeln!(temp_file, "ERROR: Something went wrong").unwrap();
+        writeln!(temp_file, "CRITICAL: System failure").unwrap();
+        
+        let count = parser.count_errors(temp_file.path()).unwrap();
+        assert_eq!(count, 2);
     }
 }
