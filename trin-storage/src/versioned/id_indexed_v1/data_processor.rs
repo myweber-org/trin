@@ -584,3 +584,87 @@ mod tests {
         assert!((stats.std_dev - 1.0).abs() < 1e-10);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_numeric_data(&mut self, key: &str, values: &[f64]) -> Result<Vec<f64>, String> {
+        if values.is_empty() {
+            return Err("Empty data provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let validated = self.validate_data(values)?;
+        let processed = self.transform_data(&validated);
+        
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    fn validate_data(&self, values: &[f64]) -> Result<Vec<f64>, String> {
+        let mut result = Vec::with_capacity(values.len());
+        
+        for &value in values {
+            if !value.is_finite() {
+                return Err("Invalid numeric value detected".to_string());
+            }
+            if value < 0.0 {
+                return Err("Negative values not allowed".to_string());
+            }
+            result.push(value);
+        }
+        
+        Ok(result)
+    }
+
+    fn transform_data(&self, values: &[f64]) -> Vec<f64> {
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        values.iter()
+            .map(|&x| (x - mean).abs())
+            .collect()
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        
+        let result = processor.process_numeric_data("test", &data);
+        assert!(result.is_ok());
+        assert_eq!(processor.cache_size(), 1);
+    }
+
+    #[test]
+    fn test_validation_error() {
+        let mut processor = DataProcessor::new();
+        let invalid_data = vec![1.0, f64::NAN, 3.0];
+        
+        let result = processor.process_numeric_data("invalid", &invalid_data);
+        assert!(result.is_err());
+    }
+}
