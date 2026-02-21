@@ -445,3 +445,139 @@ mod tests {
         assert_eq!(processor.calculate_average(), Some(15.0));
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: ValidationRules {
+                min_value: 0.0,
+                max_value: 100.0,
+                required_keys: vec!["temperature".to_string(), "humidity".to_string()],
+            },
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} out of range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
+        }
+
+        self.data.insert(key, values);
+        Ok(())
+    }
+
+    pub fn validate_all_datasets(&self) -> bool {
+        for required_key in &self.validation_rules.required_keys {
+            if !self.data.contains_key(required_key) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn calculate_statistics(&self, key: &str) -> Option<Statistics> {
+        self.data.get(key).map(|values| {
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            Statistics {
+                mean,
+                variance,
+                count: values.len(),
+                min: *values.iter().fold(&f64::INFINITY, |a, b| a.min(b)),
+                max: *values.iter().fold(&f64::NEG_INFINITY, |a, b| a.max(b)),
+            }
+        })
+    }
+
+    pub fn normalize_data(&mut self, key: &str) -> Result<(), String> {
+        if let Some(values) = self.data.get_mut(key) {
+            if let Some(stats) = self.calculate_statistics(key) {
+                if stats.variance == 0.0 {
+                    return Err("Cannot normalize data with zero variance".to_string());
+                }
+
+                for value in values.iter_mut() {
+                    *value = (*value - stats.mean) / stats.variance.sqrt();
+                }
+                Ok(())
+            } else {
+                Err("Statistics calculation failed".to_string())
+            }
+        } else {
+            Err(format!("Dataset '{}' not found", key))
+        }
+    }
+
+    pub fn merge_datasets(&mut self, target_key: &str, source_keys: &[&str]) -> Result<(), String> {
+        let mut merged_data = Vec::new();
+        
+        for &source_key in source_keys {
+            if let Some(data) = self.data.get(source_key) {
+                merged_data.extend(data.clone());
+            } else {
+                return Err(format!("Source dataset '{}' not found", source_key));
+            }
+        }
+
+        if merged_data.is_empty() {
+            return Err("No data to merge".to_string());
+        }
+
+        self.data.insert(target_key.to_string(), merged_data);
+        Ok(())
+    }
+
+    pub fn get_dataset_keys(&self) -> Vec<String> {
+        self.data.keys().cloned().collect()
+    }
+
+    pub fn clear_dataset(&mut self, key: &str) -> bool {
+        self.data.remove(key).is_some()
+    }
+}
+
+pub struct Statistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl DataProcessor {
+    pub fn export_to_csv(&self, key: &str) -> Option<String> {
+        self.data.get(key).map(|values| {
+            let mut csv = String::from("index,value\n");
+            for (i, &value) in values.iter().enumerate() {
+                csv.push_str(&format!("{},{}\n", i, value));
+            }
+            csv
+        })
+    }
+}
