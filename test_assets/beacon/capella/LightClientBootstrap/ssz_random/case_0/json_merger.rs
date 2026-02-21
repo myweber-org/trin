@@ -63,3 +63,34 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use serde_json::{Map, Value};
+use std::fs;
+use std::io;
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io::Result<()> {
+    let mut merged: Map<String, Value> = Map::new();
+
+    for path in input_paths {
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged.insert(key, value);
+            }
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "JSON root must be an object",
+            ));
+        }
+    }
+
+    let output_json = Value::Object(merged);
+    let output_str = serde_json::to_string_pretty(&output_json)?;
+    fs::write(output_path, output_str)?;
+
+    Ok(())
+}
