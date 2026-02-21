@@ -211,4 +211,78 @@ mod tests {
         let cleaner = DataCleaner::new();
         assert_eq!(cleaner.normalize_text("  HELLO World  "), "hello world");
     }
+}use std::collections::HashSet;
+
+pub struct DataCleaner {
+    data: Vec<Vec<String>>,
+}
+
+impl DataCleaner {
+    pub fn new(data: Vec<Vec<String>>) -> Self {
+        DataCleaner { data }
+    }
+
+    pub fn remove_null_rows(&mut self) {
+        self.data.retain(|row| {
+            row.iter().all(|cell| !cell.trim().is_empty() && cell.to_lowercase() != "null")
+        });
+    }
+
+    pub fn deduplicate_rows(&mut self) {
+        let mut seen = HashSet::new();
+        let mut unique_data = Vec::new();
+
+        for row in &self.data {
+            let row_key: String = row.iter()
+                .map(|cell| cell.trim())
+                .collect::<Vec<&str>>()
+                .join("|");
+
+            if seen.insert(row_key) {
+                unique_data.push(row.clone());
+            }
+        }
+
+        self.data = unique_data;
+    }
+
+    pub fn get_clean_data(&self) -> &Vec<Vec<String>> {
+        &self.data
+    }
+
+    pub fn print_summary(&self) {
+        println!("Total rows after cleaning: {}", self.data.len());
+        if !self.data.is_empty() {
+            println!("Columns per row: {}", self.data[0].len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cleaner_removes_nulls() {
+        let mut cleaner = DataCleaner::new(vec![
+            vec!["John".to_string(), "Doe".to_string()],
+            vec!["".to_string(), "Smith".to_string()],
+            vec!["null".to_string(), "Data".to_string()],
+        ]);
+
+        cleaner.remove_null_rows();
+        assert_eq!(cleaner.get_clean_data().len(), 1);
+    }
+
+    #[test]
+    fn test_cleaner_deduplicates() {
+        let mut cleaner = DataCleaner::new(vec![
+            vec!["A".to_string(), "B".to_string()],
+            vec!["A".to_string(), "B".to_string()],
+            vec!["C".to_string(), "D".to_string()],
+        ]);
+
+        cleaner.deduplicate_rows();
+        assert_eq!(cleaner.get_clean_data().len(), 2);
+    }
 }
