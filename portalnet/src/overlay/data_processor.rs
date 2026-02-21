@@ -736,4 +736,109 @@ mod tests {
         assert_eq!(groups.get("Category1").unwrap().len(), 2);
         assert_eq!(groups.get("Category2").unwrap().len(), 1);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor { data: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            for value in line.split(',') {
+                if let Ok(num) = value.trim().parse::<f64>() {
+                    self.data.push(num);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self) -> Option<f64> {
+        if self.data.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = self.data.iter().sum();
+        Some(sum / self.data.len() as f64)
+    }
+
+    pub fn calculate_standard_deviation(&self) -> Option<f64> {
+        if self.data.len() < 2 {
+            return None;
+        }
+
+        let mean = self.calculate_mean()?;
+        let variance: f64 = self.data
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / (self.data.len() - 1) as f64;
+
+        Some(variance.sqrt())
+    }
+
+    pub fn filter_outliers(&mut self, threshold: f64) {
+        if let Some(mean) = self.calculate_mean() {
+            if let Some(std_dev) = self.calculate_standard_deviation() {
+                self.data.retain(|&x| (x - mean).abs() <= threshold * std_dev);
+            }
+        }
+    }
+
+    pub fn get_data(&self) -> &[f64] {
+        &self.data
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "10.5,20.3,30.7").unwrap();
+        writeln!(temp_file, "15.2,25.8,35.1").unwrap();
+
+        processor.load_from_csv(temp_file.path()).unwrap();
+
+        assert_eq!(processor.get_data().len(), 6);
+        
+        let mean = processor.calculate_mean().unwrap();
+        assert!((mean - 22.933).abs() < 0.001);
+
+        let std_dev = processor.calculate_standard_deviation().unwrap();
+        assert!((std_dev - 9.0).abs() < 1.0);
+
+        let original_len = processor.get_data().len();
+        processor.filter_outliers(2.0);
+        assert!(processor.get_data().len() <= original_len);
+
+        processor.clear();
+        assert!(processor.get_data().is_empty());
+    }
 }
