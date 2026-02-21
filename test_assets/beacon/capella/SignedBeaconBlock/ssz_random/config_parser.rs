@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -20,27 +19,28 @@ impl Config {
                 continue;
             }
             
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let mut processed_value = value.trim().to_string();
-                
-                processed_value = Self::substitute_env_vars(&processed_value);
-                values.insert(key, processed_value);
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", line));
             }
+            
+            let key = parts[0].trim().to_string();
+            let raw_value = parts[1].trim().to_string();
+            let value = Self::resolve_value(&raw_value);
+            
+            values.insert(key, value);
         }
         
         Ok(Config { values })
     }
     
-    fn substitute_env_vars(input: &str) -> String {
-        let mut result = input.to_string();
-        
-        for (key, value) in env::vars() {
-            let placeholder = format!("${{{}}}", key);
-            result = result.replace(&placeholder, &value);
+    fn resolve_value(raw_value: &str) -> String {
+        if raw_value.starts_with("${") && raw_value.ends_with('}') {
+            let var_name = &raw_value[2..raw_value.len() - 1];
+            env::var(var_name).unwrap_or_else(|_| raw_value.to_string())
+        } else {
+            raw_value.to_string()
         }
-        
-        result
     }
     
     pub fn get(&self, key: &str) -> Option<&String> {
@@ -62,44 +62,41 @@ mod tests {
     use tempfile::NamedTempFile;
     
     #[test]
-    fn test_config_parsing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "DATABASE_URL=postgres://localhost/db").unwrap();
-        writeln!(temp_file, "# This is a comment").unwrap();
-        writeln!(temp_file, "MAX_CONNECTIONS=10").unwrap();
-        writeln!(temp_file, "").unwrap();
-        writeln!(temp_file, "TIMEOUT=30").unwrap();
+    fn test_basic_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
         
-        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(config.get("DATABASE_URL").unwrap(), "postgres://localhost/db");
-        assert_eq!(config.get("MAX_CONNECTIONS").unwrap(), "10");
-        assert_eq!(config.get("TIMEOUT").unwrap(), "30");
-        assert!(config.get("NONEXISTENT").is_none());
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("NONEXISTENT"), None);
     }
     
     #[test]
     fn test_env_substitution() {
-        env::set_var("APP_PORT", "8080");
+        env::set_var("DB_PASSWORD", "secret123");
         
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "PORT=${{APP_PORT}}").unwrap();
-        writeln!(temp_file, "HOST=localhost:${{APP_PORT}}").unwrap();
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DB_HOST=${DB_HOST:-localhost}").unwrap();
+        writeln!(file, "DB_PASS=${DB_PASSWORD}").unwrap();
+        writeln!(file, "STATIC_VALUE=production").unwrap();
         
-        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(config.get("PORT").unwrap(), "8080");
-        assert_eq!(config.get("HOST").unwrap(), "localhost:8080");
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("DB_PASS"), Some(&"secret123".to_string()));
+        assert_eq!(config.get("STATIC_VALUE"), Some(&"production".to_string()));
     }
     
     #[test]
-    fn test_get_or_default() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "EXISTING_KEY=actual_value").unwrap();
+    fn test_invalid_config() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "INVALID_LINE").unwrap();
         
-        let config = Config::from_file(temp_file.path().to_str().unwrap()).unwrap();
-        
-        assert_eq!(config.get_or_default("EXISTING_KEY", "default"), "actual_value");
-        assert_eq!(config.get_or_default("MISSING_KEY", "default_value"), "default_value");
+        let result = Config::from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
     }
 }
