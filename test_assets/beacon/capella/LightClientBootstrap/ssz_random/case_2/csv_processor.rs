@@ -124,4 +124,122 @@ mod tests {
         assert!(processor.find_by_id(2).is_some());
         assert!(processor.find_by_id(99).is_none());
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_headers: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_headers: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_headers,
+        }
+    }
+
+    pub fn filter_columns<P: AsRef<Path>>(
+        &self,
+        input_path: P,
+        output_path: P,
+        selected_columns: &[usize],
+    ) -> Result<(), Box<dyn Error>> {
+        let input_file = File::open(input_path)?;
+        let reader = BufReader::new(input_file);
+        let mut output_file = File::create(output_path)?;
+
+        let mut lines = reader.lines();
+        
+        if self.has_headers {
+            if let Some(header_line) = lines.next() {
+                let headers: Vec<String> = header_line?
+                    .split(self.delimiter)
+                    .map(String::from)
+                    .collect();
+                
+                let filtered_headers: Vec<String> = selected_columns
+                    .iter()
+                    .filter_map(|&idx| headers.get(idx).cloned())
+                    .collect();
+                
+                writeln!(output_file, "{}", filtered_headers.join(&self.delimiter.to_string()))?;
+            }
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<&str> = line.split(self.delimiter).collect();
+            
+            let filtered_fields: Vec<String> = selected_columns
+                .iter()
+                .filter_map(|&idx| fields.get(idx).map(|&s| s.to_string()))
+                .collect();
+            
+            writeln!(output_file, "{}", filtered_fields.join(&self.delimiter.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn count_rows<P: AsRef<Path>>(&self, file_path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        let total_lines = reader.lines().count();
+        
+        let adjusted_count = if self.has_headers && total_lines > 0 {
+            total_lines - 1
+        } else {
+            total_lines
+        };
+        
+        Ok(adjusted_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_columns() {
+        let input_content = "name,age,city,country\nAlice,30,London,UK\nBob,25,Paris,FR";
+        let mut input_file = NamedTempFile::new().unwrap();
+        write!(input_file, "{}", input_content).unwrap();
+        
+        let output_file = NamedTempFile::new().unwrap();
+        
+        let processor = CsvProcessor::new(',', true);
+        processor.filter_columns(
+            input_file.path(),
+            output_file.path(),
+            &[0, 2],
+        ).unwrap();
+        
+        let mut output_content = String::new();
+        File::open(output_file.path())
+            .unwrap()
+            .read_to_string(&mut output_content)
+            .unwrap();
+        
+        assert_eq!(output_content, "name,city\nAlice,London\nBob,Paris\n");
+    }
+
+    #[test]
+    fn test_count_rows() {
+        let content = "header1,header2\nvalue1,value2\nvalue3,value4\nvalue5,value6";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{}", content).unwrap();
+        
+        let processor = CsvProcessor::new(',', true);
+        let count = processor.count_rows(temp_file.path()).unwrap();
+        
+        assert_eq!(count, 3);
+    }
 }
