@@ -775,3 +775,206 @@ mod tests {
         assert!((average - 15.333).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidId,
+    InvalidValue,
+    EmptyName,
+    DuplicateTag,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidId => write!(f, "ID must be greater than zero"),
+            ProcessingError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            ProcessingError::EmptyName => write!(f, "Name cannot be empty"),
+            ProcessingError::DuplicateTag => write!(f, "Tags must be unique"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+    statistics: ProcessingStats,
+}
+
+#[derive(Debug, Default)]
+pub struct ProcessingStats {
+    pub total_records: usize,
+    pub total_value: f64,
+    pub average_value: f64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: HashMap::new(),
+            statistics: ProcessingStats::default(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        self.validate_record(&record)?;
+        
+        self.records.insert(record.id, record.clone());
+        self.update_statistics(&record);
+        
+        Ok(())
+    }
+
+    pub fn get_record(&self, id: u32) -> Option<&DataRecord> {
+        self.records.get(&id)
+    }
+
+    pub fn remove_record(&mut self, id: u32) -> Option<DataRecord> {
+        let removed = self.records.remove(&id);
+        if let Some(record) = &removed {
+            self.recalculate_statistics();
+        }
+        removed
+    }
+
+    pub fn filter_by_value_range(&self, min: f64, max: f64) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.value >= min && record.value <= max)
+            .collect()
+    }
+
+    pub fn get_statistics(&self) -> &ProcessingStats {
+        &self.statistics
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.id == 0 {
+            return Err(ProcessingError::InvalidId);
+        }
+        
+        if record.name.trim().is_empty() {
+            return Err(ProcessingError::EmptyName);
+        }
+        
+        if record.value < 0.0 || record.value > 1000.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+        
+        let mut seen_tags = std::collections::HashSet::new();
+        for tag in &record.tags {
+            if !seen_tags.insert(tag) {
+                return Err(ProcessingError::DuplicateTag);
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn update_statistics(&mut self, record: &DataRecord) {
+        self.statistics.total_records += 1;
+        self.statistics.total_value += record.value;
+        self.statistics.average_value = self.statistics.total_value / self.statistics.total_records as f64;
+    }
+
+    fn recalculate_statistics(&mut self) {
+        self.statistics = ProcessingStats::default();
+        
+        for record in self.records.values() {
+            self.statistics.total_records += 1;
+            self.statistics.total_value += record.value;
+        }
+        
+        if self.statistics.total_records > 0 {
+            self.statistics.average_value = self.statistics.total_value / self.statistics.total_records as f64;
+        }
+    }
+}
+
+pub fn transform_record(record: &DataRecord, multiplier: f64) -> DataRecord {
+    DataRecord {
+        id: record.id,
+        name: record.name.to_uppercase(),
+        value: record.value * multiplier,
+        tags: record.tags.iter().map(|tag| format!("transformed_{}", tag)).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_valid_record() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 1,
+            name: "Test Record".to_string(),
+            value: 100.0,
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        };
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.get_statistics().total_records, 1);
+    }
+
+    #[test]
+    fn test_invalid_record_id() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 50.0,
+            tags: vec![],
+        };
+        
+        assert!(processor.add_record(record).is_err());
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let mut processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord { id: 1, name: "A".to_string(), value: 10.0, tags: vec![] },
+            DataRecord { id: 2, name: "B".to_string(), value: 50.0, tags: vec![] },
+            DataRecord { id: 3, name: "C".to_string(), value: 100.0, tags: vec![] },
+        ];
+        
+        for record in records {
+            processor.add_record(record).unwrap();
+        }
+        
+        let filtered = processor.filter_by_value_range(20.0, 80.0);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 2);
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let original = DataRecord {
+            id: 1,
+            name: "test".to_string(),
+            value: 10.0,
+            tags: vec!["original".to_string()],
+        };
+        
+        let transformed = transform_record(&original, 2.0);
+        
+        assert_eq!(transformed.name, "TEST");
+        assert_eq!(transformed.value, 20.0);
+        assert_eq!(transformed.tags[0], "transformed_original");
+    }
+}
