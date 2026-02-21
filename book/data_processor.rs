@@ -337,3 +337,202 @@ mod tests {
         assert_eq!(average.unwrap(), 20.0);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub value: f64,
+    pub timestamp: i64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub struct ProcessingResult {
+    pub valid_records: Vec<DataRecord>,
+    pub invalid_records: Vec<DataRecord>,
+    pub statistics: ProcessingStats,
+}
+
+#[derive(Debug)]
+pub struct ProcessingStats {
+    pub total_processed: usize,
+    pub average_value: f64,
+    pub min_timestamp: i64,
+    pub max_timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(ValidationError::InvalidValue);
+        }
+        
+        if self.timestamp <= 0 {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+        
+        if self.category.trim().is_empty() {
+            return Err(ValidationError::EmptyCategory);
+        }
+        
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidValue,
+    InvalidTimestamp,
+    EmptyCategory,
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be non-zero"),
+            ValidationError::InvalidValue => write!(f, "Value must be a valid number"),
+            ValidationError::InvalidTimestamp => write!(f, "Timestamp must be positive"),
+            ValidationError::EmptyCategory => write!(f, "Category cannot be empty"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub fn process_records(records: Vec<DataRecord>) -> ProcessingResult {
+    let mut valid_records = Vec::new();
+    let mut invalid_records = Vec::new();
+    let mut total_value = 0.0;
+    let mut min_timestamp = i64::MAX;
+    let mut max_timestamp = i64::MIN;
+    
+    for record in records {
+        match record.validate() {
+            Ok(_) => {
+                total_value += record.value;
+                min_timestamp = min_timestamp.min(record.timestamp);
+                max_timestamp = max_timestamp.max(record.timestamp);
+                valid_records.push(record);
+            }
+            Err(_) => {
+                invalid_records.push(record);
+            }
+        }
+    }
+    
+    let average_value = if !valid_records.is_empty() {
+        total_value / valid_records.len() as f64
+    } else {
+        0.0
+    };
+    
+    let statistics = ProcessingStats {
+        total_processed: valid_records.len() + invalid_records.len(),
+        average_value,
+        min_timestamp: if min_timestamp == i64::MAX { 0 } else { min_timestamp },
+        max_timestamp: if max_timestamp == i64::MIN { 0 } else { max_timestamp },
+    };
+    
+    ProcessingResult {
+        valid_records,
+        invalid_records,
+        statistics,
+    }
+}
+
+pub fn transform_records(records: &[DataRecord], multiplier: f64) -> Vec<DataRecord> {
+    records
+        .iter()
+        .map(|record| DataRecord {
+            id: record.id,
+            value: record.value * multiplier,
+            timestamp: record.timestamp,
+            category: record.category.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1234567890,
+            category: "test".to_string(),
+        };
+        
+        assert!(record.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 42.5,
+            timestamp: 1234567890,
+            category: "test".to_string(),
+        };
+        
+        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_process_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 1000,
+                category: "A".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                timestamp: 2000,
+                category: "B".to_string(),
+            },
+            DataRecord {
+                id: 0,
+                value: 30.0,
+                timestamp: 3000,
+                category: "C".to_string(),
+            },
+        ];
+        
+        let result = process_records(records);
+        
+        assert_eq!(result.valid_records.len(), 2);
+        assert_eq!(result.invalid_records.len(), 1);
+        assert_eq!(result.statistics.average_value, 15.0);
+        assert_eq!(result.statistics.min_timestamp, 1000);
+        assert_eq!(result.statistics.max_timestamp, 2000);
+    }
+    
+    #[test]
+    fn test_transform_records() {
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 1000,
+                category: "test".to_string(),
+            },
+        ];
+        
+        let transformed = transform_records(&records, 2.0);
+        
+        assert_eq!(transformed[0].value, 20.0);
+        assert_eq!(transformed[0].id, 1);
+    }
+}
