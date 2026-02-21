@@ -604,3 +604,114 @@ mod tests {
         assert_eq!(std_dev, 0.0);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct ProcessingError {
+    message: String,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Processing error: {}", self.message)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl ProcessingError {
+    pub fn new(msg: &str) -> Self {
+        ProcessingError {
+            message: msg.to_string(),
+        }
+    }
+}
+
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::new("ID cannot be zero"));
+        }
+        
+        if self.value.is_nan() || self.value.is_infinite() {
+            return Err(ProcessingError::new("Value must be a finite number"));
+        }
+        
+        if self.timestamp < 0 {
+            return Err(ProcessingError::new("Timestamp cannot be negative"));
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::new("Multiplier must be positive"));
+        }
+        
+        self.value *= multiplier;
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed = Vec::with_capacity(records.len());
+    
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.transform(multiplier)?;
+        processed.push(DataRecord {
+            id: record.id,
+            value: record.value,
+            timestamp: record.timestamp,
+        });
+    }
+    
+    Ok(processed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 42.5,
+            timestamp: 1234567890,
+        };
+        
+        assert!(record.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            value: 42.5,
+            timestamp: 1234567890,
+        };
+        
+        assert!(record.validate().is_err());
+    }
+    
+    #[test]
+    fn test_transform_record() {
+        let mut record = DataRecord {
+            id: 1,
+            value: 10.0,
+            timestamp: 1234567890,
+        };
+        
+        assert!(record.transform(2.5).is_ok());
+        assert_eq!(record.value, 25.0);
+    }
+}
