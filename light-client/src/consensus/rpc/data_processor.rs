@@ -499,4 +499,86 @@ mod tests {
         let filtered = processor.filter_by_threshold(12.0);
         assert_eq!(filtered.len(), 2);
     }
+}use csv::Reader;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    fn new() -> Self {
+        DataProcessor { records: Vec::new() }
+    }
+
+    fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    fn calculate_average(&self) -> f64 {
+        if self.records.is_empty() {
+            return 0.0;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        sum / self.records.len() as f64
+    }
+
+    fn find_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
+    }
+
+    fn export_to_json<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &self.records)?;
+        Ok(())
+    }
+}
+
+fn process_data_sample() -> Result<(), Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    
+    processor.load_from_csv("data/input.csv")?;
+    
+    println!("Total records: {}", processor.records.len());
+    println!("Average value: {:.2}", processor.calculate_average());
+    
+    if let Some(max_record) = processor.find_max_value() {
+        println!("Max value record: {:?}", max_record);
+    }
+    
+    let filtered = processor.filter_by_category("premium");
+    println!("Premium records: {}", filtered.len());
+    
+    processor.export_to_json("data/output.json")?;
+    
+    Ok(())
 }
