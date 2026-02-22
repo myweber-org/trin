@@ -127,3 +127,71 @@ mod tests {
         assert_eq!(cleaner.get_unique_count(), 2);
     }
 }
+use std::collections::HashSet;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+pub fn remove_duplicates(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_path = Path::new(input_path);
+    let output_path = Path::new(output_path);
+    
+    if !input_path.exists() {
+        return Err(format!("Input file '{}' does not exist", input_path.display()).into());
+    }
+    
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut lines = reader.lines();
+    
+    let mut seen = HashSet::new();
+    let mut output_file = File::create(output_path)?;
+    
+    if let Some(header) = lines.next() {
+        let header_line = header?;
+        writeln!(output_file, "{}", header_line)?;
+    }
+    
+    for line_result in lines {
+        let line = line_result?;
+        if !seen.contains(&line) {
+            writeln!(output_file, "{}", line)?;
+            seen.insert(line);
+        }
+    }
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_remove_duplicates() {
+        let input_content = "id,name,value\n1,Alice,100\n2,Bob,200\n1,Alice,100\n3,Charlie,300\n2,Bob,200";
+        let expected_output = "id,name,value\n1,Alice,100\n2,Bob,200\n3,Charlie,300";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), input_content).unwrap();
+        
+        remove_duplicates(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap()
+        ).unwrap();
+        
+        let actual_output = fs::read_to_string(output_file.path()).unwrap();
+        assert_eq!(actual_output.trim(), expected_output);
+    }
+    
+    #[test]
+    fn test_file_not_found() {
+        let result = remove_duplicates("nonexistent.csv", "output.csv");
+        assert!(result.is_err());
+    }
+}
