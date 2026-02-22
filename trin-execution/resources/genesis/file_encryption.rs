@@ -287,3 +287,88 @@ mod tests {
         Ok(())
     }
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use hex;
+use rand::Rng;
+use std::fs;
+use std::io::{self, Read, Write};
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const KEY_SIZE: usize = 32;
+const IV_SIZE: usize = 16;
+
+fn generate_key() -> [u8; KEY_SIZE] {
+    let mut key = [0u8; KEY_SIZE];
+    rand::thread_rng().fill(&mut key);
+    key
+}
+
+fn generate_iv() -> [u8; IV_SIZE] {
+    let mut iv = [0u8; IV_SIZE];
+    rand::thread_rng().fill(&mut iv);
+    iv
+}
+
+fn encrypt_file(input_path: &str, output_path: &str, key: &[u8; KEY_SIZE]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut plaintext = Vec::new();
+    input_file.read_to_end(&mut plaintext)?;
+
+    let iv = generate_iv();
+    let cipher = Aes256CbcEnc::new(key.into(), &iv.into());
+
+    let ciphertext = cipher.encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&iv)?;
+    output_file.write_all(&ciphertext)?;
+
+    Ok(())
+}
+
+fn decrypt_file(input_path: &str, output_path: &str, key: &[u8; KEY_SIZE]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut encrypted_data = Vec::new();
+    input_file.read_to_end(&mut encrypted_data)?;
+
+    if encrypted_data.len() < IV_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Encrypted data too short",
+        ));
+    }
+
+    let (iv, ciphertext) = encrypted_data.split_at(IV_SIZE);
+    let cipher = Aes256CbcDec::new(key.into(), iv.into());
+
+    let plaintext = cipher
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let mut output_file = fs::File::create(output_path)?;
+    output_file.write_all(&plaintext)?;
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 4 {
+        eprintln!("Usage: {} <encrypt|decrypt> <input> <output>", args[0]);
+        std::process::exit(1);
+    }
+
+    let key = generate_key();
+    println!("Generated key: {}", hex::encode(key));
+
+    match args[1].as_str() {
+        "encrypt" => encrypt_file(&args[2], &args[3], &key),
+        "decrypt" => decrypt_file(&args[2], &args[3], &key),
+        _ => {
+            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'");
+            std::process::exit(1);
+        }
+    }
+}
