@@ -107,4 +107,107 @@ mod tests {
 
         assert_eq!(column, vec!["100", "200"]);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub columns: Vec<String>,
+}
+
+pub struct CsvProcessor {
+    delimiter: char,
+    has_header: bool,
+}
+
+impl CsvProcessor {
+    pub fn new(delimiter: char, has_header: bool) -> Self {
+        CsvProcessor {
+            delimiter,
+            has_header,
+        }
+    }
+
+    pub fn parse_file(&self, file_path: &str) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut lines = reader.lines();
+
+        if self.has_header {
+            lines.next();
+        }
+
+        for line_result in lines {
+            let line = line_result?;
+            let columns: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if !columns.is_empty() {
+                records.push(CsvRecord { columns });
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn filter_records(
+        &self,
+        records: &[CsvRecord],
+        column_index: usize,
+        filter_value: &str,
+    ) -> Vec<&CsvRecord> {
+        records
+            .iter()
+            .filter(|record| {
+                record
+                    .columns
+                    .get(column_index)
+                    .map(|val| val == filter_value)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_csv_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = CsvProcessor::new(',', true);
+        let records = processor.parse_file(temp_file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].columns, vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let records = vec![
+            CsvRecord {
+                columns: vec!["Alice".to_string(), "30".to_string(), "New York".to_string()],
+            },
+            CsvRecord {
+                columns: vec!["Bob".to_string(), "25".to_string(), "London".to_string()],
+            },
+        ];
+
+        let processor = CsvProcessor::new(',', false);
+        let filtered = processor.filter_records(&records, 2, "London");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].columns[0], "Bob");
+    }
 }
