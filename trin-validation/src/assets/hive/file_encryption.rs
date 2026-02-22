@@ -277,4 +277,92 @@ mod tests {
         
         assert_eq!(decrypted, plaintext);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+    key_position: usize,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+            key_position: 0,
+        }
+    }
+
+    fn next_key_byte(&mut self) -> u8 {
+        let byte = self.key[self.key_position];
+        self.key_position = (self.key_position + 1) % self.key.len();
+        byte
+    }
+
+    pub fn process_bytes(&mut self, data: &[u8]) -> Vec<u8> {
+        data.iter()
+            .map(|&byte| byte ^ self.next_key_byte())
+            .collect()
+    }
+}
+
+pub fn encrypt_file(source_path: &Path, dest_path: &Path, key: &str) -> io::Result<()> {
+    let mut cipher = XorCipher::new(key);
+    
+    let mut source_file = fs::File::open(source_path)?;
+    let mut buffer = Vec::new();
+    source_file.read_to_end(&mut buffer)?;
+    
+    let encrypted_data = cipher.process_bytes(&buffer);
+    
+    let mut dest_file = fs::File::create(dest_path)?;
+    dest_file.write_all(&encrypted_data)?;
+    
+    Ok(())
+}
+
+pub fn decrypt_file(source_path: &Path, dest_path: &Path, key: &str) -> io::Result<()> {
+    encrypt_file(source_path, dest_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher_symmetry() {
+        let key = "secret_key";
+        let original_text = b"Hello, World! This is a test message.";
+        
+        let mut cipher1 = XorCipher::new(key);
+        let encrypted = cipher1.process_bytes(original_text);
+        
+        let mut cipher2 = XorCipher::new(key);
+        let decrypted = cipher2.process_bytes(&encrypted);
+        
+        assert_eq!(original_text.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_file_encryption() -> io::Result<()> {
+        let key = "test_password";
+        
+        let mut source_file = NamedTempFile::new()?;
+        source_file.write_all(b"Sample file content for encryption test")?;
+        
+        let encrypted_file = NamedTempFile::new()?;
+        let decrypted_file = NamedTempFile::new()?;
+        
+        encrypt_file(source_file.path(), encrypted_file.path(), key)?;
+        decrypt_file(encrypted_file.path(), decrypted_file.path(), key)?;
+        
+        let original_content = fs::read(source_file.path())?;
+        let decrypted_content = fs::read(decrypted_file.path())?;
+        
+        assert_eq!(original_content, decrypted_content);
+        Ok(())
+    }
 }
