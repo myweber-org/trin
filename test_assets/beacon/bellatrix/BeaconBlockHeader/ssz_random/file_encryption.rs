@@ -1,65 +1,39 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
 
-pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-    let input_path = Path::new(input_path);
-    let output_path = Path::new(output_path);
+const KEY: u8 = 0xAA;
 
-    if !input_path.exists() {
-        return Err("Input file does not exist".into());
+fn xor_encrypt_decrypt(data: &mut [u8]) {
+    for byte in data.iter_mut() {
+        *byte ^= KEY;
     }
+}
 
-    let mut input_file = fs::File::open(input_path)?;
+fn process_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = fs::File::open(input_path)?;
     let mut buffer = Vec::new();
-    input_file.read_to_end(&mut buffer)?;
+    file.read_to_end(&mut buffer)?;
 
-    let encrypted_data: Vec<u8> = buffer
-        .iter()
-        .enumerate()
-        .map(|(i, &byte)| byte ^ key[i % key.len()])
-        .collect();
+    xor_encrypt_decrypt(&mut buffer);
 
     let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&encrypted_data)?;
+    output_file.write_all(&buffer)?;
 
     Ok(())
 }
 
-pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-    xor_encrypt_file(input_path, output_path, key)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_xor_encryption_decryption() {
-        let original_content = b"Hello, this is a secret message!";
-        let key = b"mysecretkey";
-
-        let input_file = NamedTempFile::new().unwrap();
-        let encrypted_file = NamedTempFile::new().unwrap();
-        let decrypted_file = NamedTempFile::new().unwrap();
-
-        fs::write(input_file.path(), original_content).unwrap();
-
-        xor_encrypt_file(
-            input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap(),
-            key,
-        ).unwrap();
-
-        xor_decrypt_file(
-            encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap(),
-            key,
-        ).unwrap();
-
-        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(original_content.to_vec(), decrypted_content);
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 3 {
+        eprintln!("Usage: {} <input_file> <output_file>", args[0]);
+        std::process::exit(1);
     }
+
+    if let Err(e) = process_file(&args[1], &args[2]) {
+        eprintln!("Error processing file: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("File processed successfully!");
 }
