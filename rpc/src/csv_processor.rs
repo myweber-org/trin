@@ -1,91 +1,90 @@
-use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    category: String,
-    value: f64,
-    active: bool,
+pub struct CsvData {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
 }
 
-fn load_csv<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+impl CsvData {
+    pub fn new(headers: Vec<String>, records: Vec<Vec<String>>) -> Self {
+        CsvData { headers, records }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.headers.is_empty() {
+            return Err("CSV headers cannot be empty".to_string());
+        }
+
+        for (i, record) in self.records.iter().enumerate() {
+            if record.len() != self.headers.len() {
+                return Err(format!(
+                    "Record {} has {} fields, expected {}",
+                    i + 1,
+                    record.len(),
+                    self.headers.len()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_column(&self, column_name: &str) -> Option<Vec<&str>> {
+        let index = self.headers.iter().position(|h| h == column_name)?;
+        Some(self.records.iter().map(|r| r[index].as_str()).collect())
+    }
+}
+
+pub fn parse_csv_file<P: AsRef<Path>>(path: P) -> Result<CsvData, Box<dyn Error>> {
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut rdr = csv::Reader::from_reader(file);
+    
+    let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
+    
     let mut records = Vec::new();
-    
-    let mut rdr = csv::Reader::from_reader(reader);
-    for result in rdr.deserialize() {
-        let record: Record = result?;
-        records.push(record);
+    for result in rdr.records() {
+        let record = result?;
+        records.push(record.iter().map(|s| s.to_string()).collect());
     }
     
-    Ok(records)
-}
-
-fn filter_active_records(records: &[Record]) -> Vec<&Record> {
-    records.iter()
-        .filter(|r| r.active && r.value > 0.0)
-        .collect()
-}
-
-fn save_filtered_csv<P: AsRef<Path>>(records: &[&Record], path: P) -> Result<(), Box<dyn Error>> {
-    let file = File::create(path)?;
-    let writer = BufWriter::new(file);
-    let mut wtr = csv::Writer::from_writer(writer);
+    let csv_data = CsvData::new(headers, records);
+    csv_data.validate()?;
     
-    for record in records {
-        wtr.serialize(record)?;
+    Ok(csv_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_valid_csv_parsing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        
+        let result = parse_csv_file(temp_file.path());
+        assert!(result.is_ok());
+        
+        let csv_data = result.unwrap();
+        assert_eq!(csv_data.headers, vec!["name", "age", "city"]);
+        assert_eq!(csv_data.records.len(), 2);
     }
-    
-    wtr.flush()?;
-    Ok(())
-}
 
-fn calculate_statistics(records: &[&Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    if count == 0.0 {
-        return (0.0, 0.0, 0.0);
-    }
-    
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let avg = sum / count;
-    let max = records.iter().map(|r| r.value).fold(f64::NEG_INFINITY, f64::max);
-    
-    (sum, avg, max)
-}
-
-fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let records = load_csv(input_path)?;
-    let filtered = filter_active_records(&records);
-    
-    if filtered.is_empty() {
-        println!("No active records found with positive values");
-        return Ok(());
-    }
-    
-    let (total, average, maximum) = calculate_statistics(&filtered);
-    println!("Processed {} records", filtered.len());
-    println!("Total value: {:.2}", total);
-    println!("Average value: {:.2}", average);
-    println!("Maximum value: {:.2}", maximum);
-    
-    save_filtered_csv(&filtered, output_path)?;
-    println!("Filtered data saved to {}", output_path);
-    
-    Ok(())
-}
-
-fn main() {
-    let input_file = "data/input.csv";
-    let output_file = "data/output.csv";
-    
-    if let Err(e) = process_csv(input_file, output_file) {
-        eprintln!("Error processing CSV: {}", e);
-        std::process::exit(1);
+    #[test]
+    fn test_get_column() {
+        let headers = vec!["name".to_string(), "age".to_string()];
+        let records = vec![
+            vec!["Alice".to_string(), "30".to_string()],
+            vec!["Bob".to_string(), "25".to_string()],
+        ];
+        
+        let csv_data = CsvData::new(headers, records);
+        let ages = csv_data.get_column("age").unwrap();
+        assert_eq!(ages, vec!["30", "25"]);
     }
 }
