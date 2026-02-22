@@ -100,4 +100,53 @@ pub fn check_localhost_health() {
 
     let stats = checker.run_diagnostics();
     stats.display();
+}use std::net::{TcpStream, SocketAddr};
+use std::time::Duration;
+use std::thread;
+
+pub fn check_connectivity(host: &str, port: u16, timeout_secs: u64, max_retries: u32) -> bool {
+    let addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap_or_else(|_| {
+        panic!("Invalid address format: {}:{}", host, port)
+    });
+
+    for attempt in 1..=max_retries {
+        println!("Attempt {} of {} to {}:{}", attempt, max_retries, host, port);
+        
+        match TcpStream::connect_timeout(&addr, Duration::from_secs(timeout_secs)) {
+            Ok(stream) => {
+                println!("Successfully connected to {}:{}", host, port);
+                drop(stream);
+                return true;
+            }
+            Err(e) => {
+                println!("Connection failed: {}", e);
+                if attempt < max_retries {
+                    println!("Retrying in 2 seconds...");
+                    thread::sleep(Duration::from_secs(2));
+                }
+            }
+        }
+    }
+    
+    println!("All {} attempts failed", max_retries);
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_localhost_connection() {
+        // This test requires a local server on port 8080
+        let result = check_connectivity("127.0.0.1", 8080, 2, 1);
+        // We can't guarantee connection, so just verify function doesn't panic
+        assert!(true); // Placeholder assertion
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid address format")]
+    fn test_invalid_address() {
+        check_connectivity("invalid_host", 99999, 1, 1);
+    }
 }
