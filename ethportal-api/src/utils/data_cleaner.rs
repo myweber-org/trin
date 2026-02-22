@@ -56,3 +56,73 @@ mod tests {
         assert_eq!(result, vec![2.718, 3.141, 3.1415]);
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use std::error::Error;
+use std::fs::File;
+
+pub fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .trim(csv::Trim::All)
+        .from_reader(file);
+
+    let output_file = File::create(output_path)?;
+    let mut wtr = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(output_file);
+
+    let headers = rdr.headers()?.clone();
+    wtr.write_record(&headers)?;
+
+    for result in rdr.records() {
+        let record = result?;
+        let cleaned_record: Vec<String> = record
+            .iter()
+            .map(|field| {
+                field
+                    .trim()
+                    .to_uppercase()
+                    .replace("\"", "")
+                    .replace("\n", " ")
+                    .replace("\r", "")
+            })
+            .collect();
+        wtr.write_record(&cleaned_record)?;
+    }
+
+    wtr.flush()?;
+    println!("Data cleaning completed. Output saved to: {}", output_path);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_clean_csv_data() {
+        let mut input_file = NamedTempFile::new().unwrap();
+        writeln!(input_file, "name,age,city\n\"John\",25,\"New York\"\nAlice,30,Boston\n").unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let result = clean_csv_data(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+        );
+        assert!(result.is_ok());
+
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(File::open(output_file.path()).unwrap());
+
+        let records: Vec<_> = rdr.records().collect::<Result<_, _>>().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0][0], "JOHN");
+        assert_eq!(records[0][1], "25");
+        assert_eq!(records[0][2], "NEW YORK");
+    }
+}
