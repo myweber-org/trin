@@ -64,4 +64,73 @@ mod tests {
         let open_ports = NetworkProbe::scan_common_ports("127.0.0.1");
         println!("Open ports on localhost: {:?}", open_ports);
     }
+}use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::time::Duration;
+
+#[derive(Debug)]
+struct HostStatus {
+    host: String,
+    port: u16,
+    reachable: bool,
+    latency: Option<Duration>,
+}
+
+fn check_host(host: &str, port: u16, timeout: Duration) -> HostStatus {
+    let addr: SocketAddr = match format!("{}:{}", host, port).parse() {
+        Ok(addr) => addr,
+        Err(_) => {
+            return HostStatus {
+                host: host.to_string(),
+                port,
+                reachable: false,
+                latency: None,
+            }
+        }
+    };
+
+    let start = std::time::Instant::now();
+    let reachable = TcpStream::connect_timeout(&addr, timeout).is_ok();
+    let elapsed = start.elapsed();
+
+    HostStatus {
+        host: host.to_string(),
+        port,
+        reachable,
+        latency: if reachable { Some(elapsed) } else { None },
+    }
+}
+
+fn main() {
+    let hosts_to_check = vec![
+        ("google.com", 80),
+        ("github.com", 443),
+        ("example.invalid", 80),
+        ("localhost", 8080),
+    ];
+
+    let timeout = Duration::from_secs(3);
+    let mut results = Vec::new();
+
+    for (host, port) in hosts_to_check {
+        let status = check_host(host, port, timeout);
+        results.push(status);
+    }
+
+    println!("Network Health Check Results:");
+    println!("{:<25} {:<8} {:<12} {:<10}", "Host", "Port", "Reachable", "Latency (ms)");
+    println!("{}", "-".repeat(60));
+
+    for status in results {
+        let latency_str = match status.latency {
+            Some(dur) => format!("{:.2}", dur.as_millis()),
+            None => "N/A".to_string(),
+        };
+        println!(
+            "{:<25} {:<8} {:<12} {:<10}",
+            status.host,
+            status.port,
+            status.reachable,
+            latency_str
+        );
+    }
 }
