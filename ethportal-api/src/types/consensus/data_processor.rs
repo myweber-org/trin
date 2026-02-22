@@ -253,3 +253,171 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    MetadataTooLarge,
+}
+
+pub struct DataProcessor {
+    max_metadata_size: usize,
+    min_timestamp: i64,
+}
+
+impl DataProcessor {
+    pub fn new(max_metadata_size: usize, min_timestamp: i64) -> Self {
+        DataProcessor {
+            max_metadata_size,
+            min_timestamp,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ValidationError> {
+        if record.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+
+        if record.timestamp < self.min_timestamp {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+
+        if record.values.is_empty() {
+            return Err(ValidationError::EmptyValues);
+        }
+
+        let total_metadata_size: usize = record
+            .metadata
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum();
+
+        if total_metadata_size > self.max_metadata_size {
+            return Err(ValidationError::MetadataTooLarge);
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_values(&self, record: &mut DataRecord, multiplier: f64) {
+        for value in record.values.iter_mut() {
+            *value *= multiplier;
+        }
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if records.is_empty() {
+            return stats;
+        }
+
+        let total_values: usize = records.iter().map(|r| r.values.len()).sum();
+        let sum_all: f64 = records
+            .iter()
+            .flat_map(|r| r.values.iter())
+            .sum();
+
+        let avg = sum_all / total_values as f64;
+
+        let variance: f64 = records
+            .iter()
+            .flat_map(|r| r.values.iter())
+            .map(|v| (v - avg).powi(2))
+            .sum::<f64>()
+            / total_values as f64;
+
+        stats.insert("record_count".to_string(), records.len() as f64);
+        stats.insert("total_values".to_string(), total_values as f64);
+        stats.insert("average".to_string(), avg);
+        stats.insert("variance".to_string(), variance);
+
+        stats
+    }
+
+    pub fn filter_by_timestamp(&self, records: Vec<DataRecord>, start: i64, end: i64) -> Vec<DataRecord> {
+        records
+            .into_iter()
+            .filter(|r| r.timestamp >= start && r.timestamp <= end)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_record() -> DataRecord {
+        DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::from([
+                ("source".to_string(), "test".to_string()),
+                ("version".to_string(), "1.0".to_string()),
+            ]),
+        }
+    }
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(100, 0);
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_id() {
+        let processor = DataProcessor::new(100, 0);
+        let mut record = create_test_record();
+        record.id = 0;
+        assert_eq!(processor.validate_record(&record), Err(ValidationError::InvalidId));
+    }
+
+    #[test]
+    fn test_transform_values() {
+        let processor = DataProcessor::new(100, 0);
+        let mut record = create_test_record();
+        processor.transform_values(&mut record, 2.0);
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(100, 0);
+        let records = vec![create_test_record(), create_test_record()];
+        let stats = processor.calculate_statistics(&records);
+        
+        assert_eq!(stats.get("record_count"), Some(&2.0));
+        assert_eq!(stats.get("total_values"), Some(&6.0));
+        assert_eq!(stats.get("average"), Some(&2.0));
+    }
+
+    #[test]
+    fn test_filter_by_timestamp() {
+        let processor = DataProcessor::new(100, 0);
+        let mut record1 = create_test_record();
+        let mut record2 = create_test_record();
+        record1.timestamp = 500;
+        record2.timestamp = 1500;
+        
+        let records = vec![record1, record2];
+        let filtered = processor.filter_by_timestamp(records, 1000, 2000);
+        
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].timestamp, 1500);
+    }
+}
