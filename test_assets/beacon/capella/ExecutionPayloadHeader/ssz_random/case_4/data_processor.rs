@@ -798,3 +798,131 @@ mod tests {
         assert!((average - 12.666).abs() < 0.001);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue,
+    MissingField,
+    CategoryNotFound,
+    TransformationFailed,
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue => write!(f, "Invalid data value"),
+            ProcessingError::MissingField => write!(f, "Required field is missing"),
+            ProcessingError::CategoryNotFound => write!(f, "Category not found in mapping"),
+            ProcessingError::TransformationFailed => write!(f, "Data transformation failed"),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    category_mapping: HashMap<String, u32>,
+    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            category_mapping: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_category_mapping(&mut self, category: String, code: u32) {
+        self.category_mapping.insert(category, code);
+    }
+
+    pub fn add_validation_rule<F>(&mut self, rule: F)
+    where
+        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
+    {
+        self.validation_rules.push(Box::new(rule));
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        for rule in &self.validation_rules {
+            rule(record)?;
+        }
+        Ok(())
+    }
+
+    pub fn transform_record(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(record)?;
+
+        let category_code = self
+            .category_mapping
+            .get(&record.category)
+            .ok_or(ProcessingError::CategoryNotFound)?;
+
+        if record.value < 0.0 {
+            return Err(ProcessingError::InvalidValue);
+        }
+
+        let transformed_value = record.value * 1.1;
+
+        Ok(DataRecord {
+            id: record.id,
+            name: record.name.to_uppercase(),
+            value: (transformed_value * 100.0).round() / 100.0,
+            category: category_code.to_string(),
+        })
+    }
+
+    pub fn process_batch(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut processed_records = Vec::new();
+
+        for record in records {
+            match self.transform_record(&record) {
+                Ok(transformed) => processed_records.push(transformed),
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(processed_records)
+    }
+}
+
+pub fn create_default_processor() -> DataProcessor {
+    let mut processor = DataProcessor::new();
+
+    processor.add_category_mapping("standard".to_string(), 100);
+    processor.add_category_mapping("premium".to_string(), 200);
+    processor.add_category_mapping("economy".to_string(), 300);
+
+    processor.add_validation_rule(|record| {
+        if record.name.is_empty() {
+            Err(ProcessingError::MissingField)
+        } else {
+            Ok(())
+        }
+    });
+
+    processor.add_validation_rule(|record| {
+        if record.value > 10000.0 {
+            Err(ProcessingError::InvalidValue)
+        } else {
+            Ok(())
+        }
+    });
+
+    processor
+}
