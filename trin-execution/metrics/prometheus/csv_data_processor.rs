@@ -120,4 +120,83 @@ mod tests {
         let avg = calculate_average(&records);
         assert_eq!(avg, 15.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use csv::{ReaderBuilder, Writer};
+
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub active: bool,
+}
+
+impl Record {
+    pub fn new(id: u32, name: String, value: f64, active: bool) -> Self {
+        Record { id, name, value, active }
+    }
+}
+
+pub fn read_csv(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+    let mut records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+pub fn filter_active_records(records: Vec<Record>) -> Vec<Record> {
+    records.into_iter().filter(|r| r.active).collect()
+}
+
+pub fn calculate_total_value(records: &[Record]) -> f64 {
+    records.iter().map(|r| r.value).sum()
+}
+
+pub fn write_filtered_csv(output_path: &str, records: &[Record]) -> Result<(), Box<dyn Error>> {
+    let file = File::create(output_path)?;
+    let mut wtr = Writer::from_writer(file);
+
+    for record in records {
+        wtr.serialize(record)?;
+    }
+
+    wtr.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_filter_active_records() {
+        let records = vec![
+            Record::new(1, "Alice".to_string(), 100.0, true),
+            Record::new(2, "Bob".to_string(), 200.0, false),
+            Record::new(3, "Charlie".to_string(), 300.0, true),
+        ];
+
+        let filtered = filter_active_records(records);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(filtered[1].id, 3);
+    }
+
+    #[test]
+    fn test_calculate_total_value() {
+        let records = vec![
+            Record::new(1, "Test1".to_string(), 50.5, true),
+            Record::new(2, "Test2".to_string(), 75.2, true),
+        ];
+
+        let total = calculate_total_value(&records);
+        assert!((total - 125.7).abs() < 0.001);
+    }
 }
