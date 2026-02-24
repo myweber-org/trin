@@ -1,105 +1,144 @@
 
-use csv::{Reader, Writer};
-use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+#[derive(Debug, Clone)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
 }
 
-fn validate_record(record: &Record) -> Result<(), String> {
-    if record.name.is_empty() {
-        return Err("Name cannot be empty".to_string());
-    }
-    if record.value < 0.0 {
-        return Err("Value must be non-negative".to_string());
-    }
-    if !["A", "B", "C"].contains(&record.category.as_str()) {
-        return Err("Category must be A, B, or C".to_string());
-    }
-    Ok(())
+pub struct CsvProcessor {
+    records: Vec<CsvRecord>,
 }
 
-fn transform_record(record: &mut Record) {
-    record.name = record.name.to_uppercase();
-    record.value = (record.value * 100.0).round() / 100.0;
-}
+impl CsvProcessor {
+    pub fn new() -> Self {
+        CsvProcessor {
+            records: Vec::new(),
+        }
+    }
 
-fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let mut reader = Reader::from_reader(input_file);
-    
-    let output_file = File::create(output_path)?;
-    let mut writer = Writer::from_writer(output_file);
-
-    for result in reader.deserialize() {
-        let mut record: Record = result?;
+    pub fn load_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
         
-        if let Err(e) = validate_record(&record) {
-            eprintln!("Validation failed: {}", e);
-            continue;
+        let mut count = 0;
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 4 {
+                continue;
+            }
+            
+            let id = parts[0].parse::<u32>()?;
+            let name = parts[1].to_string();
+            let value = parts[2].parse::<f64>()?;
+            let category = parts[3].to_string();
+            
+            if !self.validate_record(&name, value) {
+                continue;
+            }
+            
+            let record = CsvRecord {
+                id,
+                name,
+                value,
+                category,
+            };
+            
+            self.records.push(record);
+            count += 1;
         }
         
-        transform_record(&mut record);
-        writer.serialize(&record)?;
+        Ok(count)
     }
-    
-    writer.flush()?;
-    Ok(())
+
+    fn validate_record(&self, name: &str, value: f64) -> bool {
+        !name.is_empty() && value >= 0.0
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<CsvRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn calculate_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
+        } else {
+            Some(self.calculate_total_value() / self.records.len() as f64)
+        }
+    }
+
+    pub fn transform_values<F>(&mut self, transform_fn: F)
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in &mut self.records {
+            record.value = transform_fn(record.value);
+        }
+    }
+
+    pub fn get_records(&self) -> &[CsvRecord] {
+        &self.records
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
 }
 
-fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count;
-    
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    
-    (sum, mean, variance.sqrt())
+impl Default for CsvProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_validate_record() {
-        let valid_record = Record {
-            id: 1,
-            name: "Test".to_string(),
-            value: 10.5,
-            category: "A".to_string(),
-        };
-        assert!(validate_record(&valid_record).is_ok());
-
-        let invalid_record = Record {
-            id: 2,
-            name: "".to_string(),
-            value: -5.0,
-            category: "D".to_string(),
-        };
-        assert!(validate_record(&invalid_record).is_err());
-    }
-
-    #[test]
-    fn test_transform_record() {
-        let mut record = Record {
-            id: 1,
-            name: "test".to_string(),
-            value: 10.12345,
-            category: "A".to_string(),
-        };
+    fn test_csv_processing() {
+        let mut processor = CsvProcessor::new();
         
-        transform_record(&mut record);
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,100.5,Electronics").unwrap();
+        writeln!(temp_file, "2,ItemB,50.0,Books").unwrap();
+        writeln!(temp_file, "3,ItemC,75.25,Electronics").unwrap();
         
-        assert_eq!(record.name, "TEST");
-        assert_eq!(record.value, 10.12);
+        let result = processor.load_from_file(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 3);
+        
+        let electronics = processor.filter_by_category("Electronics");
+        assert_eq!(electronics.len(), 2);
+        
+        let total = processor.calculate_total_value();
+        assert!((total - 225.75).abs() < 0.001);
+        
+        let avg = processor.calculate_average_value();
+        assert!(avg.is_some());
+        assert!((avg.unwrap() - 75.25).abs() < 0.001);
     }
 }
