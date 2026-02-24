@@ -1,177 +1,125 @@
-use std::fs;
+
 use std::collections::HashMap;
-use toml;
+use std::env;
+use std::fs;
 
-#[derive(Debug, Clone)]
-pub struct AppConfig {
-    pub server: ServerConfig,
-    pub database: DatabaseConfig,
-    pub logging: LoggingConfig,
+pub struct Config {
+    values: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ServerConfig {
-    pub host: String,
-    pub port: u16,
-    pub enable_ssl: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct DatabaseConfig {
-    pub connection_string: String,
-    pub pool_size: u32,
-    pub timeout_seconds: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub file_path: Option<String>,
-    pub enable_console: bool,
-}
-
-impl AppConfig {
-    pub fn from_file(path: &str) -> Result<Self, ConfigError> {
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, String> {
         let content = fs::read_to_string(path)
-            .map_err(|e| ConfigError::IoError(e.to_string()))?;
-        
-        let parsed: HashMap<String, toml::Value> = toml::from_str(&content)
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
-        
-        Self::from_map(&parsed)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+        let mut values = HashMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", trimmed));
+            }
+
+            let key = parts[0].trim().to_string();
+            let raw_value = parts[1].trim().to_string();
+            let value = Self::interpolate_env_vars(&raw_value);
+
+            values.insert(key, value);
+        }
+
+        Ok(Config { values })
     }
-    
-    fn from_map(map: &HashMap<String, toml::Value>) -> Result<Self, ConfigError> {
-        let server = Self::parse_server(map)?;
-        let database = Self::parse_database(map)?;
-        let logging = Self::parse_logging(map)?;
+
+    fn interpolate_env_vars(input: &str) -> String {
+        let mut result = String::new();
+        let mut chars = input.chars().peekable();
         
-        Ok(AppConfig {
-            server,
-            database,
-            logging,
-        })
-    }
-    
-    fn parse_server(map: &HashMap<String, toml::Value>) -> Result<ServerConfig, ConfigError> {
-        let server_table = map.get("server")
-            .and_then(|v| v.as_table())
-            .ok_or_else(|| ConfigError::MissingSection("server".to_string()))?;
-        
-        let host = server_table.get("host")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-        
-        let port = server_table.get("port")
-            .and_then(|v| v.as_integer())
-            .map(|p| p as u16)
-            .unwrap_or(8080);
-        
-        let enable_ssl = server_table.get("enable_ssl")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        
-        Ok(ServerConfig {
-            host,
-            port,
-            enable_ssl,
-        })
-    }
-    
-    fn parse_database(map: &HashMap<String, toml::Value>) -> Result<DatabaseConfig, ConfigError> {
-        let db_table = map.get("database")
-            .and_then(|v| v.as_table())
-            .ok_or_else(|| ConfigError::MissingSection("database".to_string()))?;
-        
-        let connection_string = db_table.get("connection_string")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| ConfigError::MissingField("connection_string".to_string()))?;
-        
-        let pool_size = db_table.get("pool_size")
-            .and_then(|v| v.as_integer())
-            .map(|p| p as u32)
-            .unwrap_or(10);
-        
-        let timeout_seconds = db_table.get("timeout_seconds")
-            .and_then(|v| v.as_integer())
-            .map(|t| t as u32)
-            .unwrap_or(30);
-        
-        Ok(DatabaseConfig {
-            connection_string,
-            pool_size,
-            timeout_seconds,
-        })
-    }
-    
-    fn parse_logging(map: &HashMap<String, toml::Value>) -> Result<LoggingConfig, ConfigError> {
-        let logging_table = map.get("logging")
-            .and_then(|v| v.as_table())
-            .unwrap_or(&toml::value::Table::new());
-        
-        let level = logging_table.get("level")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "info".to_string());
-        
-        let file_path = logging_table.get("file_path")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        
-        let enable_console = logging_table.get("enable_console")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        
-        Ok(LoggingConfig {
-            level,
-            file_path,
-            enable_console,
-        })
-    }
-    
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
-        
-        if self.server.port == 0 {
-            errors.push("Server port cannot be zero".to_string());
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // Skip '{'
+                let mut var_name = String::new();
+                
+                while let Some(&ch) = chars.peek() {
+                    if ch == '}' {
+                        chars.next(); // Skip '}'
+                        if let Ok(var_value) = env::var(&var_name) {
+                            result.push_str(&var_value);
+                        }
+                        break;
+                    } else {
+                        var_name.push(ch);
+                        chars.next();
+                    }
+                }
+            } else {
+                result.push(ch);
+            }
         }
         
-        if self.database.pool_size == 0 {
-            errors.push("Database pool size cannot be zero".to_string());
-        }
-        
-        let valid_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_levels.contains(&self.logging.level.as_str()) {
-            errors.push(format!("Invalid log level: {}", self.logging.level));
-        }
-        
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
     }
 }
 
-#[derive(Debug)]
-pub enum ConfigError {
-    IoError(String),
-    ParseError(String),
-    MissingSection(String),
-    MissingField(String),
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigError::IoError(msg) => write!(f, "IO error: {}", msg),
-            ConfigError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            ConfigError::MissingSection(section) => write!(f, "Missing section: {}", section),
-            ConfigError::MissingField(field) => write!(f, "Missing field: {}", field),
+    #[test]
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
+    }
+
+    #[test]
+    fn test_env_interpolation() {
+        env::set_var("APP_SECRET", "super-secret-value");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "SECRET=${{APP_SECRET}}").unwrap();
+        writeln!(file, "PATH=/home/${{USER}}/data").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("SECRET"), Some(&"super-secret-value".to_string()));
+        
+        if let Ok(user) = env::var("USER") {
+            let expected = format!("/home/{}/data", user);
+            assert_eq!(config.get("PATH"), Some(&expected));
         }
     }
-}
 
-impl std::error::Error for ConfigError {}
+    #[test]
+    fn test_get_or_default() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "ENABLED=true").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get_or_default("ENABLED", "false"), "true");
+        assert_eq!(config.get_or_default("MISSING", "default_value"), "default_value");
+    }
+}
