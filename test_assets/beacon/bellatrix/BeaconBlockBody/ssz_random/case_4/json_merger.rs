@@ -1,96 +1,124 @@
 
-use serde_json::{Value, Map};
-use std::fs;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
-pub fn merge_json_files<P: AsRef<Path>>(paths: &[P]) -> Result<Value, String> {
-    if paths.is_empty() {
-        return Err("No input files provided".to_string());
-    }
+use serde_json::{json, Value};
 
-    let mut merged_map = Map::new();
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), String> {
+    let mut merged_array = Vec::new();
 
     for path in paths {
-        let content = fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
-        let json_value: Value = serde_json::from_str(&content).map_err(|e| format!("Invalid JSON in {}: {}", path.as_ref().display(), e))?;
+        let file = File::open(path).map_err(|e| format!("Failed to open {}: {}", path.as_ref().display(), e))?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content).map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
 
-        if let Value::Object(map) = json_value {
-            for (key, value) in map {
-                handle_key_conflict(&mut merged_map, key, value);
+        let json_value: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse JSON from {}: {}", path.as_ref().display(), e))?;
+
+        match json_value {
+            Value::Array(arr) => {
+                merged_array.extend(arr);
             }
-        } else {
-            return Err(format!("Top-level JSON must be an object in {}", path.as_ref().display()));
+            Value::Object(obj) => {
+                merged_array.push(Value::Object(obj));
+            }
+            _ => {
+                return Err(format!("JSON in {} must be an array or object", path.as_ref().display()));
+            }
         }
     }
 
-    Ok(Value::Object(merged_map))
+    let output_json = Value::Array(merged_array);
+    let output_str = serde_json::to_string_pretty(&output_json)
+        .map_err(|e| format!("Failed to serialize merged JSON: {}", e))?;
+
+    fs::write(output_path, output_str).map_err(|e| format!("Failed to write output file: {}", e))?;
+
+    Ok(())
 }
 
-fn handle_key_conflict(map: &mut Map<String, Value>, key: String, new_value: Value) {
-    match map.get(&key) {
-        Some(existing_value) => {
-            if existing_value.is_array() && new_value.is_array() {
-                if let (Some(existing_arr), Some(new_arr)) = (existing_value.as_array(), new_value.as_array()) {
-                    let mut combined = existing_arr.clone();
-                    combined.extend(new_arr.clone());
-                    map.insert(key, Value::Array(combined));
+pub fn merge_json_with_deduplication<P: AsRef<Path>>(paths: &[P], output_path: P, key_field: &str) -> Result<(), String> {
+    let mut unique_map: HashMap<String, Value> = HashMap::new();
+
+    for path in paths {
+        let file = File::open(path).map_err(|e| format!("Failed to open {}: {}", path.as_ref().display(), e))?;
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+        reader.read_to_string(&mut content).map_err(|e| format!("Failed to read {}: {}", path.as_ref().display(), e))?;
+
+        let json_value: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse JSON from {}: {}", path.as_ref().display(), e))?;
+
+        let items = match json_value {
+            Value::Array(arr) => arr,
+            _ => return Err(format!("JSON in {} must be an array", path.as_ref().display())),
+        };
+
+        for item in items {
+            if let Value::Object(map) = item {
+                if let Some(key_value) = map.get(key_field) {
+                    let key = key_value.to_string();
+                    unique_map.insert(key, Value::Object(map));
                 }
-            } else if existing_value.is_object() && new_value.is_object() {
-                if let (Some(existing_obj), Some(new_obj)) = (existing_value.as_object(), new_value.as_object()) {
-                    let mut merged_obj = existing_obj.clone();
-                    for (nested_key, nested_value) in new_obj {
-                        handle_key_conflict(&mut merged_obj, nested_key.clone(), nested_value.clone());
-                    }
-                    map.insert(key, Value::Object(merged_obj));
-                }
-            } else {
-                map.insert(key + "_merged", new_value);
             }
         }
-        None => {
-            map.insert(key, new_value);
-        }
     }
+
+    let deduplicated_array: Vec<Value> = unique_map.into_values().collect();
+    let output_json = Value::Array(deduplicated_array);
+    let output_str = serde_json::to_string_pretty(&output_json)
+        .map_err(|e| format!("Failed to serialize deduplicated JSON: {}", e))?;
+
+    fs::write(output_path, output_str).map_err(|e| format!("Failed to write output file: {}", e))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_merge_basic_objects() {
+    fn test_merge_json_files() {
         let file1 = NamedTempFile::new().unwrap();
         let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
 
-        fs::write(&file1, r#"{"a": 1, "b": "test"}"#).unwrap();
-        fs::write(&file2, r#"{"c": true, "d": null}"#).unwrap();
+        fs::write(&file1, r#"[{"id": 1}, {"id": 2}]"#).unwrap();
+        fs::write(&file2, r#"[{"id": 3}, {"id": 4}]"#).unwrap();
 
-        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
-        let expected = json!({
-            "a": 1,
-            "b": "test",
-            "c": true,
-            "d": null
-        });
+        let paths = [file1.path(), file2.path()];
+        let result = merge_json_files(&paths, output_file.path());
 
-        assert_eq!(result, expected);
+        assert!(result.is_ok());
+
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&output_content).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 4);
     }
 
     #[test]
-    fn test_merge_with_array_concatenation() {
+    fn test_merge_with_deduplication() {
         let file1 = NamedTempFile::new().unwrap();
         let file2 = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
 
-        fs::write(&file1, r#"{"items": [1, 2]}"#).unwrap();
-        fs::write(&file2, r#"{"items": [3, 4]}"#).unwrap();
+        fs::write(&file1, r#"[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]"#).unwrap();
+        fs::write(&file2, r#"[{"id": 2, "name": "Robert"}, {"id": 3, "name": "Charlie"}]"#).unwrap();
 
-        let result = merge_json_files(&[file1.path(), file2.path()]).unwrap();
-        let expected = json!({
-            "items": [1, 2, 3, 4]
-        });
+        let paths = [file1.path(), file2.path()];
+        let result = merge_json_with_deduplication(&paths, output_file.path(), "id");
 
-        assert_eq!(result, expected);
+        assert!(result.is_ok());
+
+        let output_content = fs::read_to_string(output_file.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&output_content).unwrap();
+        let array = parsed.as_array().unwrap();
+        assert_eq!(array.len(), 3);
     }
 }
