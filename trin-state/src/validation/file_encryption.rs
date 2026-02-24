@@ -199,4 +199,74 @@ mod tests {
         let decrypted = fs::read_to_string(dec_file.path()).unwrap();
         assert_eq!(original, decrypted);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let input_data = fs::read(input_path)?;
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
+    Ok(())
+}
+
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
+}
+
+pub fn process_file() -> io::Result<()> {
+    let key = b"secret_key";
+    let original = "test_data.txt";
+    let encrypted = "encrypted.bin";
+    let decrypted = "decrypted.txt";
+    
+    let test_content = b"Sample data for encryption test";
+    fs::write(original, test_content)?;
+    
+    xor_encrypt_file(original, encrypted, key)?;
+    xor_decrypt_file(encrypted, decrypted, key)?;
+    
+    let restored = fs::read(decrypted)?;
+    assert_eq!(test_content.to_vec(), restored);
+    
+    println!("Encryption test completed successfully");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_xor_encryption() {
+        let key = b"test_key";
+        let original_data = b"Hello, XOR encryption!";
+        
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_data).unwrap();
+        
+        let mut encrypted_file = NamedTempFile::new().unwrap();
+        let mut decrypted_file = NamedTempFile::new().unwrap();
+        
+        xor_encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        xor_decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            key
+        ).unwrap();
+        
+        let restored_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.to_vec(), restored_data);
+    }
 }
