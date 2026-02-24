@@ -180,4 +180,56 @@ mod tests {
         assert_eq!(obj.get("city").unwrap().as_str().unwrap(), "Berlin");
         assert_eq!(obj.get("age").unwrap().as_u64().unwrap(), 35);
     }
+}use std::collections::HashMap;
+use serde_json::{Value, json};
+
+pub fn deep_merge(target: &mut Value, source: &Value) {
+    match (target, source) {
+        (Value::Object(t), Value::Object(s)) => {
+            for (key, value) in s {
+                if let Some(t_val) = t.get_mut(key) {
+                    deep_merge(t_val, value);
+                } else {
+                    t.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        (target, source) => {
+            *target = source.clone();
+        }
+    }
+}
+
+pub fn merge_multiple(json_objects: Vec<Value>) -> Value {
+    let mut result = json!({});
+    for obj in json_objects {
+        deep_merge(&mut result, &obj);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic_merge() {
+        let obj1 = json!({"a": 1, "b": {"c": 2}});
+        let obj2 = json!({"b": {"d": 3}, "e": 4});
+        let mut merged = obj1.clone();
+        deep_merge(&mut merged, &obj2);
+        
+        assert_eq!(merged["a"], 1);
+        assert_eq!(merged["b"]["c"], 2);
+        assert_eq!(merged["b"]["d"], 3);
+        assert_eq!(merged["e"], 4);
+    }
+
+    #[test]
+    fn test_overwrite_primitive() {
+        let mut target = json!({"a": 1});
+        let source = json!({"a": 2});
+        deep_merge(&mut target, &source);
+        assert_eq!(target["a"], 2);
+    }
 }
