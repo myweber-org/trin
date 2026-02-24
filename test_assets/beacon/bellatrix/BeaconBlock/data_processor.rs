@@ -176,3 +176,99 @@ mod tests {
         assert!(missing_record.is_none());
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut reader = csv::Reader::from_reader(file);
+        
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|record| record.value > 0.0 && !record.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<&Record> {
+        self.records.iter().find(|record| record.id == id)
+    }
+
+    pub fn export_valid_records<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let valid_records = self.validate_records();
+        let file = File::create(path)?;
+        let mut writer = csv::Writer::from_writer(file);
+        
+        for record in valid_records {
+            writer.serialize(record)?;
+        }
+        
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        assert_eq!(processor.record_count(), 0);
+        
+        let csv_data = "id,name,value,active\n1,Test1,100.5,true\n2,Test2,50.25,false\n";
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), csv_data).unwrap();
+        
+        processor.load_from_csv(temp_file.path()).unwrap();
+        assert_eq!(processor.record_count(), 2);
+        assert_eq!(processor.calculate_total(), 150.75);
+        
+        let valid = processor.validate_records();
+        assert_eq!(valid.len(), 2);
+        
+        let found = processor.find_by_id(1);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Test1");
+    }
+}
