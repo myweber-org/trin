@@ -165,4 +165,56 @@ mod tests {
         
         assert_ne!(encrypted1, encrypted2);
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    let mut input_file = fs::File::open(input_path)?;
+    let mut output_file = fs::File::create(output_path)?;
+    
+    let mut buffer = [0u8; 1024];
+    let key_len = key.len();
+    
+    loop {
+        let bytes_read = input_file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        for i in 0..bytes_read {
+            buffer[i] ^= key[i % key_len];
+        }
+        
+        output_file.write_all(&buffer[..bytes_read])?;
+    }
+    
+    Ok(())
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: &[u8]) -> io::Result<()> {
+    encrypt_file(input_path, output_path, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let test_data = b"Hello, Rust!";
+        let key = b"secret";
+        
+        fs::write("test_input.txt", test_data).unwrap();
+        
+        encrypt_file("test_input.txt", "test_encrypted.txt", key).unwrap();
+        decrypt_file("test_encrypted.txt", "test_decrypted.txt", key).unwrap();
+        
+        let decrypted = fs::read("test_decrypted.txt").unwrap();
+        assert_eq!(decrypted, test_data);
+        
+        fs::remove_file("test_input.txt").unwrap_or_default();
+        fs::remove_file("test_encrypted.txt").unwrap_or_default();
+        fs::remove_file("test_decrypted.txt").unwrap_or_default();
+    }
 }
