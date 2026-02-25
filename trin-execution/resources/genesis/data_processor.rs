@@ -645,3 +645,264 @@ mod tests {
         assert_eq!(column, vec!["b".to_string(), "d".to_string()]);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    config: ProcessingConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessingConfig {
+    pub max_values: usize,
+    pub min_timestamp: i64,
+    pub max_timestamp: i64,
+    pub require_metadata: bool,
+}
+
+impl Default for ProcessingConfig {
+    fn default() -> Self {
+        Self {
+            max_values: 100,
+            min_timestamp: 0,
+            max_timestamp: i64::MAX,
+            require_metadata: false,
+        }
+    }
+}
+
+impl DataProcessor {
+    pub fn new(config: ProcessingConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.len() > self.config.max_values {
+            return Err(ProcessingError::ValidationError(format!(
+                "Too many values: {} > {}",
+                record.values.len(),
+                self.config.max_values
+            )));
+        }
+
+        if record.timestamp < self.config.min_timestamp {
+            return Err(ProcessingError::ValidationError(format!(
+                "Timestamp too early: {} < {}",
+                record.timestamp, self.config.min_timestamp
+            )));
+        }
+
+        if record.timestamp > self.config.max_timestamp {
+            return Err(ProcessingError::ValidationError(format!(
+                "Timestamp too late: {} > {}",
+                record.timestamp, self.config.max_timestamp
+            )));
+        }
+
+        if self.config.require_metadata && record.metadata.is_empty() {
+            return Err(ProcessingError::ValidationError(
+                "Metadata required but missing".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_record(
+        &self,
+        record: DataRecord,
+    ) -> Result<DataRecord, ProcessingError> {
+        self.validate_record(&record)?;
+
+        let transformed_values: Vec<f64> = record
+            .values
+            .iter()
+            .map(|&value| {
+                if value.is_nan() || value.is_infinite() {
+                    0.0
+                } else {
+                    value
+                }
+            })
+            .collect();
+
+        let mut transformed_metadata = record.metadata.clone();
+        transformed_metadata.insert(
+            "processed_timestamp".to_string(),
+            chrono::Utc::now().timestamp().to_string(),
+        );
+        transformed_metadata.insert("value_count".to_string(), transformed_values.len().to_string());
+
+        Ok(DataRecord {
+            id: record.id,
+            timestamp: record.timestamp,
+            values: transformed_values,
+            metadata: transformed_metadata,
+        })
+    }
+
+    pub fn batch_process(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> Result<Vec<DataRecord>, ProcessingError> {
+        let mut results = Vec::with_capacity(records.len());
+        let mut errors = Vec::new();
+
+        for record in records {
+            match self.transform_record(record) {
+                Ok(transformed) => results.push(transformed),
+                Err(e) => errors.push(e.to_string()),
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(ProcessingError::ProcessingError(format!(
+                "Batch processing completed with {} errors: {:?}",
+                errors.len(),
+                errors
+            )));
+        }
+
+        Ok(results)
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> Result<Statistics, ProcessingError> {
+        if records.is_empty() {
+            return Err(ProcessingError::InvalidData("No records provided".to_string()));
+        }
+
+        let mut total_values = 0;
+        let mut sum = 0.0;
+        let mut min = f64::MAX;
+        let mut max = f64::MIN;
+
+        for record in records {
+            self.validate_record(record)?;
+            total_values += record.values.len();
+            
+            for &value in &record.values {
+                if value.is_nan() || value.is_infinite() {
+                    continue;
+                }
+                sum += value;
+                min = min.min(value);
+                max = max.max(value);
+            }
+        }
+
+        let average = if total_values > 0 {
+            sum / total_values as f64
+        } else {
+            0.0
+        };
+
+        Ok(Statistics {
+            total_records: records.len(),
+            total_values,
+            average,
+            min,
+            max,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Statistics {
+    pub total_records: usize,
+    pub total_values: usize,
+    pub average: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_record() -> DataRecord {
+        DataRecord {
+            id: 1,
+            timestamp: 1000,
+            values: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("source".to_string(), "test".to_string());
+                map
+            },
+        }
+    }
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(ProcessingConfig::default());
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_too_many_values() {
+        let config = ProcessingConfig {
+            max_values: 3,
+            ..Default::default()
+        };
+        let processor = DataProcessor::new(config);
+        let record = create_test_record();
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let processor = DataProcessor::new(ProcessingConfig::default());
+        let record = create_test_record();
+        let result = processor.transform_record(record);
+        assert!(result.is_ok());
+        
+        let transformed = result.unwrap();
+        assert!(transformed.metadata.contains_key("processed_timestamp"));
+        assert!(transformed.metadata.contains_key("value_count"));
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(ProcessingConfig::default());
+        let records = vec![create_test_record()];
+        let stats = processor.calculate_statistics(&records);
+        assert!(stats.is_ok());
+        
+        let stats = stats.unwrap();
+        assert_eq!(stats.total_records, 1);
+        assert_eq!(stats.total_values, 5);
+        assert_eq!(stats.average, 3.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+    }
+}
