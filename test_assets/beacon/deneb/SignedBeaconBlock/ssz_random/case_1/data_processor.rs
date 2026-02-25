@@ -1,158 +1,106 @@
 
-use std::collections::HashMap;
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
 
 pub struct DataProcessor {
-    validators: HashMap<String, Box<dyn Fn(&str) -> bool>>,
-    transformers: HashMap<String, Box<dyn Fn(String) -> String>>,
+    records: Vec<Record>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
-        let mut processor = DataProcessor {
-            validators: HashMap::new(),
-            transformers: HashMap::new(),
-        };
-        
-        processor.register_default_validators();
-        processor.register_default_transformers();
-        
-        processor
-    }
-    
-    fn register_default_validators(&mut self) {
-        self.validators.insert(
-            "email".to_string(),
-            Box::new(|input: &str| {
-                input.contains('@') && input.contains('.') && input.len() > 5
-            })
-        );
-        
-        self.validators.insert(
-            "numeric".to_string(),
-            Box::new(|input: &str| {
-                input.parse::<f64>().is_ok()
-            })
-        );
-        
-        self.validators.insert(
-            "alphanumeric".to_string(),
-            Box::new(|input: &str| {
-                !input.is_empty() && input.chars().all(|c| c.is_alphanumeric())
-            })
-        );
-    }
-    
-    fn register_default_transformers(&mut self) {
-        self.transformers.insert(
-            "uppercase".to_string(),
-            Box::new(|input: String| {
-                input.to_uppercase()
-            })
-        );
-        
-        self.transformers.insert(
-            "trim".to_string(),
-            Box::new(|input: String| {
-                input.trim().to_string()
-            })
-        );
-        
-        self.transformers.insert(
-            "reverse".to_string(),
-            Box::new(|input: String| {
-                input.chars().rev().collect()
-            })
-        );
-    }
-    
-    pub fn validate(&self, validator_name: &str, input: &str) -> bool {
-        match self.validators.get(validator_name) {
-            Some(validator) => validator(input),
-            None => false,
+        DataProcessor {
+            records: Vec::new(),
         }
     }
-    
-    pub fn transform(&self, transformer_name: &str, input: String) -> Option<String> {
-        self.transformers.get(transformer_name)
-            .map(|transformer| transformer(input))
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
     }
-    
-    pub fn process_pipeline(&self, input: &str, operations: Vec<(&str, &str)>) -> Result<String, String> {
-        let mut result = input.to_string();
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value >= 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn group_by_category(&self) -> std::collections::HashMap<String, Vec<&Record>> {
+        let mut map = std::collections::HashMap::new();
         
-        for (op_type, op_name) in operations {
-            match op_type {
-                "validate" => {
-                    if !self.validate(op_name, &result) {
-                        return Err(format!("Validation '{}' failed for input: {}", op_name, result));
-                    }
-                }
-                "transform" => {
-                    if let Some(transformed) = self.transform(op_name, result) {
-                        result = transformed;
-                    } else {
-                        return Err(format!("Unknown transformer: {}", op_name));
-                    }
-                }
-                _ => return Err(format!("Unknown operation type: {}", op_type)),
-            }
+        for record in &self.records {
+            map.entry(record.category.clone())
+               .or_insert_with(Vec::new)
+               .push(record);
         }
         
-        Ok(result)
+        map
     }
-    
-    pub fn register_validator<F>(&mut self, name: &str, validator: F)
-    where
-        F: Fn(&str) -> bool + 'static,
-    {
-        self.validators.insert(name.to_string(), Box::new(validator));
-    }
-    
-    pub fn register_transformer<F>(&mut self, name: &str, transformer: F)
-    where
-        F: Fn(String) -> String + 'static,
-    {
-        self.transformers.insert(name.to_string(), Box::new(transformer));
+
+    pub fn get_statistics(&self) -> (f64, f64, f64) {
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        
+        if values.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+        (mean, min, max)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
     #[test]
-    fn test_email_validation() {
-        let processor = DataProcessor::new();
-        assert!(processor.validate("email", "test@example.com"));
-        assert!(!processor.validate("email", "invalid-email"));
-    }
-    
-    #[test]
-    fn test_numeric_validation() {
-        let processor = DataProcessor::new();
-        assert!(processor.validate("numeric", "123.45"));
-        assert!(!processor.validate("numeric", "abc"));
-    }
-    
-    #[test]
-    fn test_transformation_pipeline() {
-        let processor = DataProcessor::new();
-        let operations = vec![
-            ("validate", "alphanumeric"),
-            ("transform", "uppercase"),
-            ("transform", "reverse"),
-        ];
-        
-        let result = processor.process_pipeline("hello123", operations);
-        assert_eq!(result, Ok("321OLLEH".to_string()));
-    }
-    
-    #[test]
-    fn test_custom_validator() {
+    fn test_data_processing() {
         let mut processor = DataProcessor::new();
-        processor.register_validator("even_length", |s| s.len() % 2 == 0);
         
-        assert!(processor.validate("even_length", "ab"));
-        assert!(!processor.validate("even_length", "abc"));
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,Category1").unwrap();
+        writeln!(temp_file, "2,ItemB,20.3,Category2").unwrap();
+        writeln!(temp_file, "3,ItemC,15.7,Category1").unwrap();
+        
+        let result = processor.load_from_csv(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let valid_records = processor.validate_records();
+        assert_eq!(valid_records.len(), 3);
+        
+        let total = processor.calculate_total();
+        assert!((total - 46.5).abs() < 0.001);
+        
+        let (mean, min, max) = processor.get_statistics();
+        assert!((mean - 15.5).abs() < 0.001);
+        assert!((min - 10.5).abs() < 0.001);
+        assert!((max - 20.3).abs() < 0.001);
     }
 }
