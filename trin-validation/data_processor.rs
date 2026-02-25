@@ -1,442 +1,63 @@
-
-use csv::Reader;
-use serde::Deserialize;
 use std::error::Error;
+use std::fmt;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    message: String,
 }
 
-pub fn process_csv_data(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let mut reader = Reader::from_path(file_path)?;
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        if record.value >= 0.0 {
-            records.push(record);
-        }
-    }
-
-    Ok(records)
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let count = records.len();
-    let average = if count > 0 { sum / count as f64 } else { 0.0 };
-    
-    (sum, average, count)
-}
-
-pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
-    records.into_iter()
-        .filter(|r| r.category == category)
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
-
-    #[test]
-    fn test_process_csv() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "id,name,value,category").unwrap();
-        writeln!(file, "1,Test1,10.5,A").unwrap();
-        writeln!(file, "2,Test2,20.0,B").unwrap();
-        
-        let result = process_csv_data(file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 2);
-    }
-}use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
-
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
-
-pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        validate_record(&record)?;
-        records.push(record);
-    }
-
-    Ok(records)
-}
-
-fn validate_record(record: &Record) -> Result<(), Box<dyn Error>> {
-    if record.name.is_empty() {
-        return Err("Name cannot be empty".into());
-    }
-    if record.value < 0.0 {
-        return Err("Value must be non-negative".into());
-    }
-    if !["A", "B", "C"].contains(&record.category.as_str()) {
-        return Err("Invalid category".into());
-    }
-    Ok(())
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    if count == 0.0 {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count;
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    let std_dev = variance.sqrt();
-
-    (mean, variance, std_dev)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_valid_data_processing() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id,name,value,category").unwrap();
-        writeln!(temp_file, "1,Item1,10.5,A").unwrap();
-        writeln!(temp_file, "2,Item2,20.0,B").unwrap();
-
-        let records = process_data_file(temp_file.path().to_str().unwrap()).unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].name, "Item1");
-        assert_eq!(records[1].value, 20.0);
-    }
-
-    #[test]
-    fn test_statistics_calculation() {
-        let records = vec![
-            Record { id: 1, name: "Test1".to_string(), value: 10.0, category: "A".to_string() },
-            Record { id: 2, name: "Test2".to_string(), value: 20.0, category: "B".to_string() },
-            Record { id: 3, name: "Test3".to_string(), value: 30.0, category: "C".to_string() },
-        ];
-
-        let (mean, variance, std_dev) = calculate_statistics(&records);
-        assert_eq!(mean, 20.0);
-        assert_eq!(variance, 66.66666666666667);
-        assert_eq!(std_dev, 8.16496580927726);
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
     }
 }
-use csv::Reader;
-use serde::Deserialize;
-use std::error::Error;
-use std::fs::File;
 
-#[derive(Debug, Deserialize)]
-struct Record {
-    id: u32,
-    name: String,
-    value: f64,
-    category: String,
-}
-
-pub fn process_csv_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
-    let file = File::open(file_path)?;
-    let mut reader = Reader::from_reader(file);
-    let mut records = Vec::new();
-
-    for result in reader.deserialize() {
-        let record: Record = result?;
-        validate_record(&record)?;
-        records.push(record);
-    }
-
-    Ok(records)
-}
-
-fn validate_record(record: &Record) -> Result<(), String> {
-    if record.id == 0 {
-        return Err("ID cannot be zero".to_string());
-    }
-    if record.name.trim().is_empty() {
-        return Err("Name cannot be empty".to_string());
-    }
-    if record.value < 0.0 {
-        return Err("Value cannot be negative".to_string());
-    }
-    if record.category.len() > 50 {
-        return Err("Category too long".to_string());
-    }
-    Ok(())
-}
-
-pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
-    let count = records.len() as f64;
-    if count == 0.0 {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let sum: f64 = records.iter().map(|r| r.value).sum();
-    let mean = sum / count;
-    let variance: f64 = records.iter()
-        .map(|r| (r.value - mean).powi(2))
-        .sum::<f64>() / count;
-    let std_dev = variance.sqrt();
-
-    (sum, mean, std_dev)
-}
-
-pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
-    records.into_iter()
-        .filter(|r| r.category == category)
-        .collect()
-}
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+impl Error for ValidationError {}
 
 pub struct DataProcessor {
-    delimiter: char,
-    has_header: bool,
+    threshold: f64,
 }
 
 impl DataProcessor {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
-        DataProcessor {
-            delimiter,
-            has_header,
+    pub fn new(threshold: f64) -> Result<Self, ValidationError> {
+        if threshold < 0.0 || threshold > 1.0 {
+            return Err(ValidationError {
+                message: format!("Threshold {} must be between 0.0 and 1.0", threshold),
+            });
         }
+        Ok(Self { threshold })
     }
 
-    pub fn process_file<P: AsRef<Path>>(&self, file_path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-        let mut lines = reader.lines();
+    pub fn process_values(&self, values: &[f64]) -> Vec<f64> {
+        values
+            .iter()
+            .filter(|&&v| v >= self.threshold)
+            .map(|&v| v * 2.0)
+            .collect()
+    }
 
-        if self.has_header {
-            lines.next();
-        }
-
-        for line_result in lines {
-            let line = line_result?;
-            let fields: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-            
-            if !fields.is_empty() && !fields.iter().all(|f| f.is_empty()) {
-                records.push(fields);
-            }
+    pub fn calculate_statistics(&self, values: &[f64]) -> (f64, f64, f64) {
+        let count = values.len() as f64;
+        if count == 0.0 {
+            return (0.0, 0.0, 0.0);
         }
 
-        Ok(records)
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
+
+        let variance: f64 = values
+            .iter()
+            .map(|&value| {
+                let diff = mean - value;
+                diff * diff
+            })
+            .sum::<f64>()
+            / count;
+
+        let std_dev = variance.sqrt();
+
+        (mean, variance, std_dev)
     }
-
-    pub fn validate_records(&self, records: &[Vec<String>], expected_columns: usize) -> Result<(), String> {
-        for (index, record) in records.iter().enumerate() {
-            if record.len() != expected_columns {
-                return Err(format!(
-                    "Record {} has {} columns, expected {}",
-                    index + 1,
-                    record.len(),
-                    expected_columns
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    pub fn extract_column(&self, records: &[Vec<String>], column_index: usize) -> Result<Vec<String>, String> {
-        if records.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut column_data = Vec::with_capacity(records.len());
-        for (row_index, record) in records.iter().enumerate() {
-            if column_index >= record.len() {
-                return Err(format!(
-                    "Column index {} out of bounds for record {}",
-                    column_index,
-                    row_index + 1
-                ));
-            }
-            column_data.push(record[column_index].clone());
-        }
-        Ok(column_data)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_process_csv() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "name,age,city").unwrap();
-        writeln!(temp_file, "John,30,New York").unwrap();
-        writeln!(temp_file, "Alice,25,London").unwrap();
-
-        let processor = DataProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path()).unwrap();
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
-        assert_eq!(result[1], vec!["Alice", "25", "London"]);
-    }
-
-    #[test]
-    fn test_validate_records() {
-        let records = vec![
-            vec!["a".to_string(), "b".to_string(), "c".to_string()],
-            vec!["d".to_string(), "e".to_string(), "f".to_string()],
-        ];
-        
-        let processor = DataProcessor::new(',', false);
-        assert!(processor.validate_records(&records, 3).is_ok());
-        assert!(processor.validate_records(&records, 2).is_err());
-    }
-
-    #[test]
-    fn test_extract_column() {
-        let records = vec![
-            vec!["apple".to_string(), "red".to_string()],
-            vec!["banana".to_string(), "yellow".to_string()],
-        ];
-        
-        let processor = DataProcessor::new(',', false);
-        let colors = processor.extract_column(&records, 1).unwrap();
-        assert_eq!(colors, vec!["red", "yellow"]);
-    }
-}
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::error::Error;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub timestamp: i64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
-}
-
-#[derive(Debug)]
-pub enum ProcessingError {
-    InvalidData(String),
-    TransformationFailed(String),
-    ValidationError(String),
-}
-
-impl std::fmt::Display for ProcessingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
-            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
-            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
-        }
-    }
-}
-
-impl Error for ProcessingError {}
-
-pub struct DataProcessor {
-    validation_rules: Vec<Box<dyn Fn(&DataRecord) -> Result<(), ProcessingError>>>,
-    transformation_pipeline: Vec<Box<dyn Fn(DataRecord) -> Result<DataRecord, ProcessingError>>>,
-}
-
-impl DataProcessor {
-    pub fn new() -> Self {
-        DataProcessor {
-            validation_rules: Vec::new(),
-            transformation_pipeline: Vec::new(),
-        }
-    }
-
-    pub fn add_validation_rule<F>(&mut self, rule: F)
-    where
-        F: Fn(&DataRecord) -> Result<(), ProcessingError> + 'static,
-    {
-        self.validation_rules.push(Box::new(rule));
-    }
-
-    pub fn add_transformation<F>(&mut self, transform: F)
-    where
-        F: Fn(DataRecord) -> Result<DataRecord, ProcessingError> + 'static,
-    {
-        self.transformation_pipeline.push(Box::new(transform));
-    }
-
-    pub fn process(&self, mut record: DataRecord) -> Result<DataRecord, ProcessingError> {
-        for rule in &self.validation_rules {
-            rule(&record)?;
-        }
-
-        for transform in &self.transformation_pipeline {
-            record = transform(record)?;
-        }
-
-        Ok(record)
-    }
-
-    pub fn batch_process(&self, records: Vec<DataRecord>) -> Vec<Result<DataRecord, ProcessingError>> {
-        records.into_iter().map(|record| self.process(record)).collect()
-    }
-}
-
-pub fn create_default_processor() -> DataProcessor {
-    let mut processor = DataProcessor::new();
-
-    processor.add_validation_rule(|record| {
-        if record.id == 0 {
-            Err(ProcessingError::ValidationError("ID cannot be zero".to_string()))
-        } else {
-            Ok(())
-        }
-    });
-
-    processor.add_validation_rule(|record| {
-        if record.values.is_empty() {
-            Err(ProcessingError::ValidationError("Values cannot be empty".to_string()))
-        } else {
-            Ok(())
-        }
-    });
-
-    processor.add_transformation(|mut record| {
-        let sum: f64 = record.values.iter().sum();
-        record.metadata.insert("values_sum".to_string(), sum.to_string());
-        Ok(record)
-    });
-
-    processor.add_transformation(|mut record| {
-        record.values = record.values.into_iter().map(|v| v * 1.1).collect();
-        Ok(record)
-    });
-
-    processor
 }
 
 #[cfg(test)]
@@ -444,39 +65,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_processing() {
-        let processor = create_default_processor();
-        
-        let mut metadata = HashMap::new();
-        metadata.insert("source".to_string(), "test".to_string());
-        
-        let record = DataRecord {
-            id: 1,
-            timestamp: 1234567890,
-            values: vec![1.0, 2.0, 3.0],
-            metadata,
-        };
-
-        let result = processor.process(record);
-        assert!(result.is_ok());
-        
-        let processed = result.unwrap();
-        assert_eq!(processed.values, vec![1.1, 2.2, 3.3]);
-        assert!(processed.metadata.contains_key("values_sum"));
+    fn test_valid_processor_creation() {
+        let processor = DataProcessor::new(0.5);
+        assert!(processor.is_ok());
     }
 
     #[test]
-    fn test_validation_error() {
-        let processor = create_default_processor();
-        
-        let record = DataRecord {
-            id: 0,
-            timestamp: 1234567890,
-            values: vec![1.0, 2.0],
-            metadata: HashMap::new(),
-        };
+    fn test_invalid_processor_creation() {
+        let processor = DataProcessor::new(1.5);
+        assert!(processor.is_err());
+    }
 
-        let result = processor.process(record);
-        assert!(result.is_err());
+    #[test]
+    fn test_process_values() {
+        let processor = DataProcessor::new(0.3).unwrap();
+        let values = vec![0.1, 0.4, 0.2, 0.5, 0.6];
+        let result = processor.process_values(&values);
+        assert_eq!(result, vec![0.8, 1.0, 1.2]);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(0.0).unwrap();
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, variance, std_dev) = processor.calculate_statistics(&values);
+        
+        assert!((mean - 3.0).abs() < 0.0001);
+        assert!((variance - 2.0).abs() < 0.0001);
+        assert!((std_dev - 1.41421356).abs() < 0.0001);
     }
 }
