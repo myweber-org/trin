@@ -160,3 +160,194 @@ mod tests {
         assert_eq!(average, 200.0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    MissingField,
+    CategoryNotFound,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::InvalidValue => write!(f, "Invalid numeric value"),
+            DataError::MissingField => write!(f, "Required field is missing"),
+            DataError::CategoryNotFound => write!(f, "Category not found in mapping"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    category_mapping: HashMap<String, String>,
+    validation_threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            category_mapping: HashMap::new(),
+            validation_threshold: 0.0,
+        }
+    }
+
+    pub fn with_mapping(mut self, mapping: HashMap<String, String>) -> Self {
+        self.category_mapping = mapping;
+        self
+    }
+
+    pub fn with_threshold(mut self, threshold: f64) -> Self {
+        self.validation_threshold = threshold;
+        self
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.id == 0 {
+            return Err(DataError::InvalidId);
+        }
+
+        if record.value < self.validation_threshold {
+            return Err(DataError::InvalidValue);
+        }
+
+        if record.name.is_empty() || record.category.is_empty() {
+            return Err(DataError::MissingField);
+        }
+
+        Ok(())
+    }
+
+    pub fn transform_category(&self, record: &mut DataRecord) -> Result<(), DataError> {
+        if let Some(mapped_category) = self.category_mapping.get(&record.category) {
+            record.category = mapped_category.clone();
+            Ok(())
+        } else {
+            Err(DataError::CategoryNotFound)
+        }
+    }
+
+    pub fn process_records(&self, records: &mut [DataRecord]) -> Vec<Result<DataRecord, DataError>> {
+        records
+            .iter_mut()
+            .map(|record| {
+                self.validate_record(record)?;
+                self.transform_category(record)?;
+                Ok(record.clone())
+            })
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> (f64, f64, f64) {
+        let values: Vec<f64> = records.iter().map(|r| r.value).collect();
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = if count > 0.0 { sum / count } else { 0.0 };
+        
+        let variance: f64 = if count > 1.0 {
+            values.iter()
+                .map(|&v| (v - mean).powi(2))
+                .sum::<f64>() / (count - 1.0)
+        } else {
+            0.0
+        };
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_validate_record() {
+        let processor = DataProcessor::new().with_threshold(10.0);
+        
+        let valid_record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 15.0,
+            category: "A".to_string(),
+        };
+        
+        assert!(processor.validate_record(&valid_record).is_ok());
+        
+        let invalid_record = DataRecord {
+            id: 0,
+            name: "".to_string(),
+            value: 5.0,
+            category: "".to_string(),
+        };
+        
+        assert!(processor.validate_record(&invalid_record).is_err());
+    }
+
+    #[test]
+    fn test_transform_category() {
+        let mut mapping = HashMap::new();
+        mapping.insert("OLD".to_string(), "NEW".to_string());
+        
+        let processor = DataProcessor::new().with_mapping(mapping);
+        
+        let mut record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 20.0,
+            category: "OLD".to_string(),
+        };
+        
+        assert!(processor.transform_category(&mut record).is_ok());
+        assert_eq!(record.category, "NEW");
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new();
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "A".to_string(),
+                value: 10.0,
+                category: "X".to_string(),
+            },
+            DataRecord {
+                id: 2,
+                name: "B".to_string(),
+                value: 20.0,
+                category: "Y".to_string(),
+            },
+            DataRecord {
+                id: 3,
+                name: "C".to_string(),
+                value: 30.0,
+                category: "Z".to_string(),
+            },
+        ];
+        
+        let (mean, variance, std_dev) = processor.calculate_statistics(&records);
+        
+        assert_eq!(mean, 20.0);
+        assert_eq!(variance, 100.0);
+        assert_eq!(std_dev, 10.0);
+    }
+}
