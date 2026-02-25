@@ -158,4 +158,113 @@ mod tests {
         
         assert!(result.is_err());
     }
+}use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0x55;
+
+pub struct FileEncryptor {
+    key: u8,
+}
+
+impl FileEncryptor {
+    pub fn new(key: Option<u8>) -> Self {
+        FileEncryptor {
+            key: key.unwrap_or(DEFAULT_KEY),
+        }
+    }
+
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path, true)
+    }
+
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path, false)
+    }
+
+    fn process_file(&self, source_path: &Path, dest_path: &Path, is_encrypt: bool) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0u8; 4096];
+        let operation_key = if is_encrypt { self.key } else { self.key };
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            let processed_data: Vec<u8> = buffer[..bytes_read]
+                .iter()
+                .map(|&byte| byte ^ operation_key)
+                .collect();
+
+            dest_file.write_all(&processed_data)?;
+        }
+
+        dest_file.flush()?;
+        Ok(())
+    }
+
+    pub fn encrypt_in_place(&self, file_path: &Path) -> io::Result<()> {
+        let temp_path = file_path.with_extension("tmp");
+        self.encrypt_file(file_path, &temp_path)?;
+        fs::rename(temp_path, file_path)?;
+        Ok(())
+    }
+
+    pub fn decrypt_in_place(&self, file_path: &Path) -> io::Result<()> {
+        let temp_path = file_path.with_extension("tmp");
+        self.decrypt_file(file_path, &temp_path)?;
+        fs::rename(temp_path, file_path)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let original_data = b"Hello, World! This is a test message.";
+        let encryptor = FileEncryptor::new(Some(0x42));
+
+        let mut source_file = NamedTempFile::new().unwrap();
+        source_file.write_all(original_data).unwrap();
+
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        encryptor
+            .encrypt_file(source_file.path(), encrypted_file.path())
+            .unwrap();
+        encryptor
+            .decrypt_file(encrypted_file.path(), decrypted_file.path())
+            .unwrap();
+
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.as_slice(), decrypted_data.as_slice());
+    }
+
+    #[test]
+    fn test_in_place_operations() {
+        let original_data = b"Test data for in-place operations";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(original_data).unwrap();
+
+        let encryptor = FileEncryptor::new(Some(0x99));
+
+        encryptor.encrypt_in_place(temp_file.path()).unwrap();
+        let encrypted_data = fs::read(temp_file.path()).unwrap();
+        assert_ne!(original_data.as_slice(), encrypted_data.as_slice());
+
+        encryptor.decrypt_in_place(temp_file.path()).unwrap();
+        let decrypted_data = fs::read(temp_file.path()).unwrap();
+        assert_eq!(original_data.as_slice(), decrypted_data.as_slice());
+    }
 }
