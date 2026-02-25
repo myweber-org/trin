@@ -165,3 +165,207 @@ mod tests {
         assert_eq!(avg, 20.0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    InvalidCategory,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value must be non-negative"),
+            ValidationError::InvalidCategory => write!(f, "Category must be one of: A, B, C"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        
+        let valid_categories = ["A", "B", "C"];
+        if !valid_categories.contains(&self.category.as_str()) {
+            return Err(ValidationError::InvalidCategory);
+        }
+        
+        Ok(())
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    category_totals: HashMap<String, f64>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            category_totals: HashMap::new(),
+        }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), Box<dyn Error>> {
+        record.validate()?;
+        
+        self.records.push(record.clone());
+        
+        let total = self.category_totals
+            .entry(record.category.clone())
+            .or_insert(0.0);
+        *total += record.value;
+        
+        Ok(())
+    }
+    
+    pub fn get_total_value(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+    
+    pub fn get_category_total(&self, category: &str) -> Option<f64> {
+        self.category_totals.get(category).copied()
+    }
+    
+    pub fn get_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
+        } else {
+            Some(self.get_total_value() / self.records.len() as f64)
+        }
+    }
+    
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+    
+    pub fn transform_values<F>(&mut self, transform_fn: F) 
+    where
+        F: Fn(f64) -> f64,
+    {
+        for record in &mut self.records {
+            record.value = transform_fn(record.value);
+        }
+        
+        self.recalculate_totals();
+    }
+    
+    fn recalculate_totals(&mut self) {
+        self.category_totals.clear();
+        for record in &self.records {
+            let total = self.category_totals
+                .entry(record.category.clone())
+                .or_insert(0.0);
+            *total += record.value;
+        }
+    }
+    
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+        
+        assert!(record.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 100.0,
+            category: "A".to_string(),
+        };
+        
+        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = DataRecord {
+            id: 1,
+            name: "Item1".to_string(),
+            value: 50.0,
+            category: "A".to_string(),
+        };
+        
+        let record2 = DataRecord {
+            id: 2,
+            name: "Item2".to_string(),
+            value: 75.0,
+            category: "B".to_string(),
+        };
+        
+        processor.add_record(record1).unwrap();
+        processor.add_record(record2).unwrap();
+        
+        assert_eq!(processor.get_record_count(), 2);
+        assert_eq!(processor.get_total_value(), 125.0);
+        assert_eq!(processor.get_category_total("A"), Some(50.0));
+        assert_eq!(processor.get_average_value(), Some(62.5));
+    }
+    
+    #[test]
+    fn test_value_transformation() {
+        let mut processor = DataProcessor::new();
+        
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.0,
+            category: "A".to_string(),
+        };
+        
+        processor.add_record(record).unwrap();
+        
+        processor.transform_values(|x| x * 2.0);
+        
+        assert_eq!(processor.get_total_value(), 20.0);
+    }
+}
