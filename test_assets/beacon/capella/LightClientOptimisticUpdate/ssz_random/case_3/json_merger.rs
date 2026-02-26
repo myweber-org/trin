@@ -1,90 +1,76 @@
-use serde_json::{Value, Map};
-use std::collections::HashSet;
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
-pub fn merge_json(base: &mut Value, extension: &Value, deep: bool) {
-    match (base, extension) {
-        (Value::Object(base_map), Value::Object(ext_map)) => {
-            for (key, ext_value) in ext_map {
-                if deep {
-                    if let Some(base_value) = base_map.get_mut(key) {
-                        merge_json(base_value, ext_value, deep);
-                    } else {
-                        base_map.insert(key.clone(), ext_value.clone());
-                    }
-                } else {
-                    base_map.insert(key.clone(), ext_value.clone());
-                }
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                merged_map.insert(key, value);
             }
         }
-        (Value::Array(base_arr), Value::Array(ext_arr)) => {
-            base_arr.extend(ext_arr.clone());
-        }
-        (base_val, ext_val) => {
-            *base_val = ext_val.clone();
-        }
     }
+
+    Ok(Value::Object(merged_map))
 }
 
-pub fn merge_json_with_conflict_resolution(
-    base: &mut Value,
-    extension: &Value,
-    conflict_strategy: ConflictStrategy,
-) {
-    let mut visited_keys = HashSet::new();
-    merge_json_internal(base, extension, &conflict_strategy, &mut visited_keys);
-}
+pub fn merge_json_with_strategy(
+    file_paths: &[&str],
+    strategy: MergeStrategy,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut accumulator: HashMap<String, Value> = HashMap::new();
 
-fn merge_json_internal(
-    base: &mut Value,
-    extension: &Value,
-    strategy: &ConflictStrategy,
-    visited: &mut HashSet<String>,
-) {
-    match (base, extension) {
-        (Value::Object(base_map), Value::Object(ext_map)) => {
-            for (key, ext_value) in ext_map {
-                let path_key = format!("{}.{}", visited.iter().last().unwrap_or(&String::new()), key);
-                visited.insert(path_key.clone());
-                
-                if let Some(base_value) = base_map.get_mut(key) {
-                    match strategy {
-                        ConflictStrategy::PreferBase => continue,
-                        ConflictStrategy::PreferExtension => {
-                            *base_value = ext_value.clone();
-                        }
-                        ConflictStrategy::MergeDeep => {
-                            merge_json_internal(base_value, ext_value, strategy, visited);
-                        }
-                        ConflictStrategy::CombineArrays => {
-                            if let (Value::Array(base_arr), Value::Array(ext_arr)) = (base_value, ext_value) {
-                                let mut combined = base_arr.clone();
-                                combined.extend(ext_arr.clone());
-                                *base_value = Value::Array(combined);
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(obj) = json_value {
+            for (key, value) in obj {
+                match strategy {
+                    MergeStrategy::Overwrite => {
+                        accumulator.insert(key, value);
+                    }
+                    MergeStrategy::CombineArrays => {
+                        if let Some(existing) = accumulator.get(&key) {
+                            if existing.is_array() && value.is_array() {
+                                let mut combined = existing.as_array().unwrap().clone();
+                                combined.extend(value.as_array().unwrap().clone());
+                                accumulator.insert(key, Value::Array(combined));
                             } else {
-                                merge_json_internal(base_value, ext_value, strategy, visited);
+                                accumulator.insert(key, value);
                             }
+                        } else {
+                            accumulator.insert(key, value);
                         }
                     }
-                } else {
-                    base_map.insert(key.clone(), ext_value.clone());
                 }
-                visited.remove(&path_key);
             }
         }
-        (Value::Array(base_arr), Value::Array(ext_arr)) => {
-            base_arr.extend(ext_arr.clone());
-        }
-        (base_val, ext_val) => {
-            *base_val = ext_val.clone();
-        }
     }
+
+    let map: Map<String, Value> = accumulator.into_iter().collect();
+    Ok(Value::Object(map))
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum ConflictStrategy {
-    PreferBase,
-    PreferExtension,
-    MergeDeep,
+pub enum MergeStrategy {
+    Overwrite,
     CombineArrays,
 }
 
@@ -92,65 +78,57 @@ pub enum ConflictStrategy {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_shallow_merge() {
-        let mut base = json!({"a": 1, "b": {"inner": 2}});
-        let extension = json!({"b": 3, "c": 4});
-        
-        merge_json(&mut base, &extension, false);
-        
-        assert_eq!(base["b"], 3);
-        assert_eq!(base["c"], 4);
+    fn test_basic_merge() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let json1 = json!({"name": "Alice", "age": 30});
+        let json2 = json!({"city": "Berlin", "active": true});
+
+        write!(file1, "{}", json1).unwrap();
+        write!(file2, "{}", json2).unwrap();
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ])
+        .unwrap();
+
+        assert_eq!(result["name"], "Alice");
+        assert_eq!(result["age"], 30);
+        assert_eq!(result["city"], "Berlin");
+        assert_eq!(result["active"], true);
     }
 
     #[test]
-    fn test_deep_merge() {
-        let mut base = json!({"a": 1, "b": {"inner": 2, "keep": 5}});
-        let extension = json!({"b": {"inner": 3, "new": 4}});
-        
-        merge_json(&mut base, &extension, true);
-        
-        assert_eq!(base["b"]["inner"], 3);
-        assert_eq!(base["b"]["keep"], 5);
-        assert_eq!(base["b"]["new"], 4);
+    fn test_combine_arrays_strategy() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        let json1 = json!({"tags": ["rust", "json"], "id": 1});
+        let json2 = json!({"tags": ["merge", "utility"], "extra": "data"});
+
+        write!(file1, "{}", json1).unwrap();
+        write!(file2, "{}", json2).unwrap();
+
+        let result = merge_json_with_strategy(
+            &[
+                file1.path().to_str().unwrap(),
+                file2.path().to_str().unwrap(),
+            ],
+            MergeStrategy::CombineArrays,
+        )
+        .unwrap();
+
+        let tags = result["tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 4);
+        assert!(tags.contains(&"rust".into()));
+        assert!(tags.contains(&"merge".into()));
+        assert_eq!(result["id"], 1);
+        assert_eq!(result["extra"], "data");
     }
-}use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufReader, Read};
-use std::path::Path;
-
-pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let mut merged_map = HashMap::new();
-
-    for path_str in file_paths {
-        let path = Path::new(path_str);
-        if !path.exists() {
-            return Err(format!("File not found: {}", path_str).into());
-        }
-
-        let mut file = File::open(path)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-
-        let json_value: serde_json::Value = serde_json::from_str(&contents)?;
-
-        if let serde_json::Value::Object(obj) = json_value {
-            for (key, value) in obj {
-                merged_map.insert(key, value);
-            }
-        } else {
-            return Err("Each JSON file must contain a JSON object".into());
-        }
-    }
-
-    Ok(serde_json::Value::Object(
-        merged_map.into_iter().collect()
-    ))
-}
-
-pub fn write_merged_json(output_path: &str, json_value: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
-    let json_string = serde_json::to_string_pretty(json_value)?;
-    fs::write(output_path, json_string)?;
-    Ok(())
 }
