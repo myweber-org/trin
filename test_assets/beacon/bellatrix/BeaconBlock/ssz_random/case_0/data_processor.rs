@@ -1,125 +1,98 @@
-
-use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 
 #[derive(Debug, Clone)]
-pub struct DataRecord {
-    pub id: u64,
-    pub values: Vec<f64>,
-    pub metadata: HashMap<String, String>,
+struct ValidationError {
+    message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Validation error: {}", self.message)
+    }
+}
+
+impl Error for ValidationError {}
+
+struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
 }
 
 impl DataRecord {
-    pub fn new(id: u64, values: Vec<f64>) -> Self {
-        Self {
+    fn new(id: u32, value: f64, category: &str) -> Result<Self, ValidationError> {
+        if value < 0.0 || value > 1000.0 {
+            return Err(ValidationError {
+                message: format!("Value {} out of range [0, 1000]", value),
+            });
+        }
+        
+        if category.is_empty() {
+            return Err(ValidationError {
+                message: "Category cannot be empty".to_string(),
+            });
+        }
+        
+        Ok(Self {
             id,
-            values,
-            metadata: HashMap::new(),
-        }
+            value,
+            category: category.to_string(),
+        })
     }
-
-    pub fn is_valid(&self) -> bool {
-        !self.values.is_empty() && self.id > 0
+    
+    fn transform(&mut self, multiplier: f64) {
+        self.value *= multiplier;
     }
-
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.values.is_empty() {
-            return None;
-        }
-        let sum: f64 = self.values.iter().sum();
-        Some(sum / self.values.len() as f64)
-    }
-
-    pub fn normalize(&mut self) -> Result<(), &'static str> {
-        let mean = match self.calculate_mean() {
-            Some(m) => m,
-            None => return Err("Cannot normalize empty data"),
-        };
-
-        let std_dev = self.calculate_std_dev().ok_or("Cannot compute standard deviation")?;
-        
-        if std_dev.abs() < f64::EPSILON {
-            return Err("Standard deviation is zero, cannot normalize");
-        }
-
-        for value in &mut self.values {
-            *value = (*value - mean) / std_dev;
-        }
-
-        Ok(())
-    }
-
-    fn calculate_std_dev(&self) -> Option<f64> {
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.values
-            .iter()
-            .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / self.values.len() as f64;
-        
-        Some(variance.sqrt())
-    }
-
-    pub fn add_metadata(&mut self, key: String, value: String) {
-        self.metadata.insert(key, value);
-    }
-
-    pub fn get_metadata(&self, key: &str) -> Option<&String> {
-        self.metadata.get(key)
+    
+    fn display(&self) -> String {
+        format!("ID: {}, Value: {:.2}, Category: {}", 
+                self.id, self.value, self.category)
     }
 }
 
-pub fn process_records(records: &mut [DataRecord]) -> Vec<Result<(), String>> {
-    records
-        .iter_mut()
+fn process_records(records: &mut [DataRecord]) -> Vec<String> {
+    records.iter_mut()
         .map(|record| {
-            if !record.is_valid() {
-                return Err(format!("Record {} is invalid", record.id));
-            }
-            
-            match record.normalize() {
-                Ok(_) => Ok(()),
-                Err(e) => Err(format!("Failed to normalize record {}: {}", record.id, e)),
-            }
+            record.transform(1.05);
+            record.display()
         })
         .collect()
+}
+
+fn validate_and_create_records(data: Vec<(u32, f64, &str)>) -> Result<Vec<DataRecord>, ValidationError> {
+    let mut records = Vec::new();
+    
+    for (id, value, category) in data {
+        let record = DataRecord::new(id, value, category)?;
+        records.push(record);
+    }
+    
+    Ok(records)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    
     #[test]
-    fn test_valid_record() {
-        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        assert!(record.is_valid());
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 500.0, "analytics").unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 500.0);
+        assert_eq!(record.category, "analytics");
     }
-
+    
     #[test]
-    fn test_invalid_record() {
-        let record = DataRecord::new(0, vec![]);
-        assert!(!record.is_valid());
+    fn test_invalid_value() {
+        let result = DataRecord::new(2, 1500.0, "analytics");
+        assert!(result.is_err());
     }
-
+    
     #[test]
-    fn test_mean_calculation() {
-        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(record.calculate_mean(), Some(2.5));
-    }
-
-    #[test]
-    fn test_normalization() {
-        let mut record = DataRecord::new(1, vec![1.0, 2.0, 3.0]);
-        assert!(record.normalize().is_ok());
-        
-        let mean = record.calculate_mean().unwrap();
-        assert!(mean.abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_metadata_operations() {
-        let mut record = DataRecord::new(1, vec![1.0]);
-        record.add_metadata("source".to_string(), "test".to_string());
-        
-        assert_eq!(record.get_metadata("source"), Some(&"test".to_string()));
-        assert_eq!(record.get_metadata("nonexistent"), None);
+    fn test_record_transformation() {
+        let mut record = DataRecord::new(3, 200.0, "metrics").unwrap();
+        record.transform(2.0);
+        assert_eq!(record.value, 400.0);
     }
 }
