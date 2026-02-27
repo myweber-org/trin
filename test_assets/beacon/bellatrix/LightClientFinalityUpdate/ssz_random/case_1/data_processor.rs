@@ -345,4 +345,99 @@ mod tests {
         assert_eq!(top_categories[0].0, "category_a");
         assert_eq!(top_categories[0].1, 2);
     }
+}use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .delimiter(b',')
+            .from_path(path)?;
+
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_records(&self) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.value > 0.0 && !r.name.is_empty())
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn export_valid_records<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let valid_records = self.validate_records();
+        let mut wtr = WriterBuilder::new()
+            .has_headers(true)
+            .delimiter(b',')
+            .from_path(path)?;
+
+        for record in valid_records {
+            wtr.serialize(record)?;
+        }
+
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn get_statistics(&self) -> (usize, f64, f64) {
+        let count = self.records.len();
+        let total = self.calculate_total();
+        let average = if count > 0 { total / count as f64 } else { 0.0 };
+        (count, total, average)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let csv_data = "id,name,value,active\n1,Test1,10.5,true\n2,Test2,0.0,false\n3,,15.3,true";
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), csv_data).unwrap();
+
+        assert!(processor.load_from_csv(temp_file.path()).is_ok());
+        assert_eq!(processor.records.len(), 3);
+        
+        let valid = processor.validate_records();
+        assert_eq!(valid.len(), 2);
+        
+        let stats = processor.get_statistics();
+        assert_eq!(stats.0, 3);
+        assert_eq!(stats.1, 25.8);
+    }
 }
