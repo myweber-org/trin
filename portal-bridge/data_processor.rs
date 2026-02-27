@@ -308,3 +308,101 @@ pub fn calculate_statistics(path: &str) -> Result<(f64, f64, usize), Box<dyn Err
     let average = if count > 0 { sum / count as f64 } else { 0.0 };
     Ok((average, max_value, count))
 }
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidValue(f64),
+    InvalidTimestamp(i64),
+    MissingField(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidValue(v) => write!(f, "Invalid value: {}", v),
+            ProcessingError::InvalidTimestamp(t) => write!(f, "Invalid timestamp: {}", t),
+            ProcessingError::MissingField(field) => write!(f, "Missing field: {}", field),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub fn validate_record(record: &DataRecord) -> Result<(), ProcessingError> {
+    if record.value < 0.0 || record.value > 1000.0 {
+        return Err(ProcessingError::InvalidValue(record.value));
+    }
+    
+    if record.timestamp < 0 {
+        return Err(ProcessingError::InvalidTimestamp(record.timestamp));
+    }
+    
+    Ok(())
+}
+
+pub fn transform_record(record: &DataRecord) -> DataRecord {
+    DataRecord {
+        id: record.id,
+        value: record.value * 1.1,
+        timestamp: record.timestamp + 3600,
+    }
+}
+
+pub fn process_records(records: Vec<DataRecord>) -> Result<Vec<DataRecord>, ProcessingError> {
+    let mut processed_records = Vec::with_capacity(records.len());
+    
+    for record in records {
+        validate_record(&record)?;
+        let transformed = transform_record(&record);
+        processed_records.push(transformed);
+    }
+    
+    Ok(processed_records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_record_valid() {
+        let record = DataRecord {
+            id: 1,
+            value: 500.0,
+            timestamp: 1625097600,
+        };
+        assert!(validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_record_invalid_value() {
+        let record = DataRecord {
+            id: 1,
+            value: -10.0,
+            timestamp: 1625097600,
+        };
+        assert!(matches!(validate_record(&record), Err(ProcessingError::InvalidValue(_))));
+    }
+
+    #[test]
+    fn test_transform_record() {
+        let record = DataRecord {
+            id: 1,
+            value: 100.0,
+            timestamp: 1625097600,
+        };
+        let transformed = transform_record(&record);
+        assert_eq!(transformed.value, 110.0);
+        assert_eq!(transformed.timestamp, 1625101200);
+    }
+}
