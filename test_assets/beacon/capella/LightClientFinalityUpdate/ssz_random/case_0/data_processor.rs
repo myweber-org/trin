@@ -707,4 +707,197 @@ mod tests {
         let filtered = processor.filter_outliers(2.0);
         assert_eq!(filtered.len(), 5);
     }
+}use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Value out of range: {0}")]
+    OutOfRange(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+pub struct DataProcessor {
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_validation_rule(&mut self, field: String, rule: ValidationRule) {
+        self.validation_rules.insert(field, rule);
+    }
+
+    pub fn process_record(&self, record: &DataRecord) -> Result<ProcessedRecord, DataError> {
+        self.validate_record(record)?;
+        
+        let processed_values = record.values
+            .iter()
+            .map(|&v| v * 2.0)
+            .collect();
+        
+        let normalized_metadata = record.metadata
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), v.trim().to_string()))
+            .collect();
+        
+        Ok(ProcessedRecord {
+            original_id: record.id,
+            processed_timestamp: record.timestamp + 3600,
+            processed_values,
+            normalized_metadata,
+            processing_version: 1,
+        })
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.values.is_empty() {
+            return Err(DataError::InvalidFormat);
+        }
+
+        if record.timestamp < 0 {
+            return Err(DataError::OutOfRange("timestamp".to_string()));
+        }
+
+        for (field, rule) in &self.validation_rules {
+            if let Some(value) = record.metadata.get(field) {
+                if !rule.validate(value) {
+                    return Err(DataError::OutOfRange(field.clone()));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationRule {
+    pub min_length: Option<usize>,
+    pub max_length: Option<usize>,
+    pub pattern: Option<String>,
+}
+
+impl ValidationRule {
+    pub fn validate(&self, value: &str) -> bool {
+        if let Some(min) = self.min_length {
+            if value.len() < min {
+                return false;
+            }
+        }
+
+        if let Some(max) = self.max_length {
+            if value.len() > max {
+                return false;
+            }
+        }
+
+        if let Some(pattern) = &self.pattern {
+            // Simplified pattern matching - in production use regex crate
+            value.contains(pattern)
+        } else {
+            true
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessedRecord {
+    pub original_id: u32,
+    pub processed_timestamp: i64,
+    pub processed_values: Vec<f64>,
+    pub normalized_metadata: HashMap<String, String>,
+    pub processing_version: u8,
+}
+
+pub fn calculate_statistics(values: &[f64]) -> Statistics {
+    if values.is_empty() {
+        return Statistics::default();
+    }
+
+    let sum: f64 = values.iter().sum();
+    let mean = sum / values.len() as f64;
+    
+    let variance: f64 = values.iter()
+        .map(|&v| (v - mean).powi(2))
+        .sum::<f64>() / values.len() as f64;
+    
+    let std_dev = variance.sqrt();
+    
+    let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    Statistics {
+        count: values.len(),
+        mean,
+        std_dev,
+        min,
+        max,
+        sum,
+    }
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub sum: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        
+        let mut metadata = HashMap::new();
+        metadata.insert("category".to_string(), "sample".to_string());
+        
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![1.0, 2.0, 3.0],
+            metadata,
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.original_id, 1);
+        assert_eq!(processed.processed_values, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let stats = calculate_statistics(&values);
+        
+        assert_eq!(stats.count, 5);
+        assert_eq!(stats.mean, 3.0);
+        assert_eq!(stats.sum, 15.0);
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 5.0);
+    }
 }
