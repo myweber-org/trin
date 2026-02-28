@@ -164,4 +164,99 @@ pub fn interactive_decrypt() -> Result<(), String> {
     decrypt_file(input_path, output_path, password)?;
     println!("File decrypted successfully!");
     Ok(())
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHasher, SaltString
+    },
+    Argon2
+};
+use std::{
+    fs::{self, File},
+    io::{Read, Write},
+    path::Path
+};
+
+const NONCE_SIZE: usize = 12;
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        let key_bytes = password_hash.hash.unwrap().as_bytes();
+        
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes[..32]);
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(FileEncryptor { cipher })
+    }
+    
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = File::open(input_path)?;
+        let mut plaintext = Vec::new();
+        file.read_to_end(&mut plaintext)?;
+        
+        let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
+        let ciphertext = self.cipher.encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        let mut output_file = File::create(output_path)?;
+        output_file.write_all(&ciphertext)?;
+        
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = File::open(input_path)?;
+        let mut ciphertext = Vec::new();
+        file.read_to_end(&mut ciphertext)?;
+        
+        let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
+        let plaintext = self.cipher.decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        let mut output_file = File::create(output_path)?;
+        output_file.write_all(&plaintext)?;
+        
+        Ok(())
+    }
+}
+
+pub fn process_directory(
+    encryptor: &FileEncryptor,
+    dir_path: &Path,
+    operation: &str
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        
+        if path.is_file() {
+            let output_path = path.with_extension(match operation {
+                "encrypt" => "enc",
+                "decrypt" => "dec",
+                _ => return Err("Invalid operation".into())
+            });
+            
+            match operation {
+                "encrypt" => encryptor.encrypt_file(&path, &output_path)?,
+                "decrypt" => encryptor.decrypt_file(&path, &output_path)?,
+                _ => unreachable!()
+            }
+            
+            println!("Processed: {:?} -> {:?}", path, output_path);
+        }
+    }
+    
+    Ok(())
 }
