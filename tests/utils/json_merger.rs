@@ -197,4 +197,139 @@ mod tests {
 
         assert_eq!(result, expected);
     }
+}use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str).into());
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
+            }
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
+        }
+    }
+
+    Ok(Value::Object(merged_map))
+}
+
+pub fn merge_json_with_strategy(
+    file_paths: &[&str],
+    strategy: MergeStrategy,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut accumulator: HashMap<String, Vec<Value>> = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                accumulator.entry(key).or_insert_with(Vec::new).push(value);
+            }
+        } else {
+            return Err("Each JSON file must contain a JSON object".into());
+        }
+    }
+
+    let mut result_map = Map::new();
+    for (key, values) in accumulator {
+        let merged_value = match strategy {
+            MergeStrategy::Overwrite => values.last().unwrap().clone(),
+            MergeStrategy::CombineArrays => {
+                let mut combined = Vec::new();
+                for v in values {
+                    if let Value::Array(arr) = v {
+                        combined.extend(arr);
+                    } else {
+                        combined.push(v);
+                    }
+                }
+                Value::Array(combined)
+            }
+            MergeStrategy::KeepFirst => values.first().unwrap().clone(),
+        };
+        result_map.insert(key, merged_value);
+    }
+
+    Ok(Value::Object(result_map))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MergeStrategy {
+    Overwrite,
+    CombineArrays,
+    KeepFirst,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_merge() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        file1.write_all(b"{\"a\": 1, \"b\": 2}").unwrap();
+        file2.write_all(b"{\"c\": 3, \"d\": 4}").unwrap();
+
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ])
+        .unwrap();
+
+        let expected = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "d": 4
+        });
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_overwrite_strategy() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
+
+        file1.write_all(b"{\"a\": 1, \"b\": 2}").unwrap();
+        file2.write_all(b"{\"b\": 99, \"c\": 3}").unwrap();
+
+        let result = merge_json_with_strategy(
+            &[
+                file1.path().to_str().unwrap(),
+                file2.path().to_str().unwrap(),
+            ],
+            MergeStrategy::Overwrite,
+        )
+        .unwrap();
+
+        let expected = json!({
+            "a": 1,
+            "b": 99,
+            "c": 3
+        });
+
+        assert_eq!(result, expected);
+    }
 }
