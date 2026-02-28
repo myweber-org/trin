@@ -95,3 +95,158 @@ mod tests {
         assert!(processor.validate_records(&records).is_ok());
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Error, Debug)]
+pub enum ProcessingError {
+    #[error("Invalid data format")]
+    InvalidFormat,
+    #[error("Data validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Transformation error: {0}")]
+    TransformationError(String),
+}
+
+pub struct DataProcessor {
+    validation_threshold: f64,
+    normalization_factor: f64,
+}
+
+impl DataProcessor {
+    pub fn new(validation_threshold: f64, normalization_factor: f64) -> Self {
+        Self {
+            validation_threshold,
+            normalization_factor,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.values.is_empty() {
+            return Err(ProcessingError::ValidationFailed(
+                "Empty values array".to_string(),
+            ));
+        }
+
+        for value in &record.values {
+            if value.is_nan() || value.is_infinite() {
+                return Err(ProcessingError::ValidationFailed(
+                    "Invalid numeric value".to_string(),
+                ));
+            }
+
+            if value.abs() > self.validation_threshold {
+                return Err(ProcessingError::ValidationFailed(format!(
+                    "Value {} exceeds threshold {}",
+                    value, self.validation_threshold
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, record: &mut DataRecord) -> Result<(), ProcessingError> {
+        if self.normalization_factor == 0.0 {
+            return Err(ProcessingError::TransformationError(
+                "Normalization factor cannot be zero".to_string(),
+            ));
+        }
+
+        for value in &mut record.values {
+            *value /= self.normalization_factor;
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        let mut all_values = Vec::new();
+
+        for record in records {
+            all_values.extend(&record.values);
+        }
+
+        if !all_values.is_empty() {
+            let sum: f64 = all_values.iter().sum();
+            let count = all_values.len() as f64;
+            let mean = sum / count;
+
+            let variance: f64 = all_values
+                .iter()
+                .map(|v| (v - mean).powi(2))
+                .sum::<f64>()
+                / count;
+
+            stats.insert("mean".to_string(), mean);
+            stats.insert("variance".to_string(), variance);
+            stats.insert("count".to_string(), count);
+            stats.insert("sum".to_string(), sum);
+        }
+
+        stats
+    }
+
+    pub fn filter_records(
+        &self,
+        records: Vec<DataRecord>,
+        predicate: impl Fn(&DataRecord) -> bool,
+    ) -> Vec<DataRecord> {
+        records.into_iter().filter(predicate).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_success() {
+        let processor = DataProcessor::new(1000.0, 1.0);
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![10.5, 20.3, 30.7],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let processor = DataProcessor::new(10.0, 1.0);
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![10.5, 25.3, 30.7],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.validate_record(&record).is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let processor = DataProcessor::new(1000.0, 10.0);
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![100.0, 200.0, 300.0],
+            metadata: HashMap::new(),
+        };
+
+        assert!(processor.normalize_values(&mut record).is_ok());
+        assert_eq!(record.values, vec![10.0, 20.0, 30.0]);
+    }
+}
