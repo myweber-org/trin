@@ -429,3 +429,197 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub value: f64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidValue,
+    InvalidTimestamp,
+    MissingField,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidValue => write!(f, "Invalid data value"),
+            DataError::InvalidTimestamp => write!(f, "Invalid timestamp"),
+            DataError::MissingField => write!(f, "Missing required field"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+pub struct DataProcessor {
+    threshold: f64,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64) -> Self {
+        DataProcessor { threshold }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.value.is_nan() || record.value.is_infinite() {
+            return Err(DataError::InvalidValue);
+        }
+
+        if record.timestamp < 0 {
+            return Err(DataError::InvalidTimestamp);
+        }
+
+        Ok(())
+    }
+
+    pub fn process_record(&self, record: &DataRecord) -> Result<DataRecord, DataError> {
+        self.validate_record(record)?;
+
+        let processed_value = if record.value > self.threshold {
+            record.value * 0.9
+        } else {
+            record.value * 1.1
+        };
+
+        Ok(DataRecord {
+            id: record.id,
+            value: processed_value,
+            timestamp: record.timestamp,
+        })
+    }
+
+    pub fn batch_process(
+        &self,
+        records: Vec<DataRecord>,
+    ) -> (Vec<DataRecord>, Vec<(DataRecord, DataError)>) {
+        let mut processed = Vec::new();
+        let mut errors = Vec::new();
+
+        for record in records {
+            match self.process_record(&record) {
+                Ok(processed_record) => processed.push(processed_record),
+                Err(err) => errors.push((record, err)),
+            }
+        }
+
+        (processed, errors)
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> Option<(f64, f64, f64)> {
+        if records.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = records.iter().map(|r| r.value).sum();
+        let count = records.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = records
+            .iter()
+            .map(|r| (r.value - mean).powi(2))
+            .sum::<f64>()
+            / count;
+
+        let std_dev = variance.sqrt();
+
+        Some((mean, variance, std_dev))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_valid_record() {
+        let processor = DataProcessor::new(100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 50.0,
+            timestamp: 1625097600,
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_value() {
+        let processor = DataProcessor::new(100.0);
+        let record = DataRecord {
+            id: 1,
+            value: f64::NAN,
+            timestamp: 1625097600,
+        };
+
+        assert!(matches!(
+            processor.validate_record(&record),
+            Err(DataError::InvalidValue)
+        ));
+    }
+
+    #[test]
+    fn test_process_record_above_threshold() {
+        let processor = DataProcessor::new(100.0);
+        let record = DataRecord {
+            id: 1,
+            value: 150.0,
+            timestamp: 1625097600,
+        };
+
+        let result = processor.process_record(&record).unwrap();
+        assert_eq!(result.value, 135.0);
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let processor = DataProcessor::new(100.0);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 50.0,
+                timestamp: 1625097600,
+            },
+            DataRecord {
+                id: 2,
+                value: f64::INFINITY,
+                timestamp: 1625097600,
+            },
+        ];
+
+        let (processed, errors) = processor.batch_process(records);
+        assert_eq!(processed.len(), 1);
+        assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(100.0);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                value: 10.0,
+                timestamp: 1625097600,
+            },
+            DataRecord {
+                id: 2,
+                value: 20.0,
+                timestamp: 1625097600,
+            },
+            DataRecord {
+                id: 3,
+                value: 30.0,
+                timestamp: 1625097600,
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records).unwrap();
+        assert_eq!(stats.0, 20.0);
+    }
+}
