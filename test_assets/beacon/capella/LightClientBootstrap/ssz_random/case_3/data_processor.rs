@@ -747,3 +747,136 @@ mod tests {
         assert_eq!(score, 10.0 + 5.0);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter: ',',
+        }
+    }
+
+    pub fn with_delimiter(mut self, delimiter: char) -> Self {
+        self.delimiter = delimiter;
+        self
+    }
+
+    pub fn process(&self) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut records = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let fields: Vec<String> = line
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if !fields.is_empty() {
+                records.push(fields);
+            }
+        }
+
+        Ok(records)
+    }
+
+    pub fn filter_records<F>(&self, predicate: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        let records = self.process()?;
+        let filtered: Vec<Vec<String>> = records
+            .into_iter()
+            .filter(|record| predicate(record))
+            .collect();
+
+        Ok(filtered)
+    }
+
+    pub fn get_column(&self, column_index: usize) -> Result<Vec<String>, Box<dyn Error>> {
+        let records = self.process()?;
+        let column_data: Vec<String> = records
+            .iter()
+            .filter_map(|record| record.get(column_index).cloned())
+            .collect();
+
+        Ok(column_data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor.process().unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], vec!["name", "age", "city"]);
+        assert_eq!(result[1], vec!["Alice", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_filter_records() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+        writeln!(temp_file, "Charlie,35,Paris").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let filtered = processor
+            .filter_records(|record| {
+                if let Some(age_str) = record.get(1) {
+                    if let Ok(age) = age_str.parse::<i32>() {
+                        return age > 25;
+                    }
+                }
+                false
+            })
+            .unwrap();
+
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0], vec!["Alice", "30", "New York"]);
+        assert_eq!(filtered[1], vec!["Charlie", "35", "Paris"]);
+    }
+
+    #[test]
+    fn test_get_column() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "name,age,city").unwrap();
+        writeln!(temp_file, "Alice,30,New York").unwrap();
+        writeln!(temp_file, "Bob,25,London").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let names = processor.get_column(0).unwrap();
+
+        assert_eq!(names, vec!["name", "Alice", "Bob"]);
+    }
+}
