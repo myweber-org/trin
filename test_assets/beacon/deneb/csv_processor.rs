@@ -12,123 +12,70 @@ pub struct CsvRecord {
     pub active: bool,
 }
 
-#[derive(Debug)]
-pub enum CsvError {
-    IoError(std::io::Error),
-    ParseError(String),
-    ValidationError(String),
-}
-
-impl From<std::io::Error> for CsvError {
-    fn from(err: std::io::Error) -> Self {
-        CsvError::IoError(err)
+impl CsvRecord {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".to_string());
+        }
+        Ok(())
     }
 }
 
-pub struct CsvProcessor {
-    delimiter: char,
-    strict_mode: bool,
+pub fn parse_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    let mut line_number = 0;
+
+    for line in reader.lines() {
+        line_number += 1;
+        let line = line?;
+        
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() != 4 {
+            return Err(format!("Invalid field count at line {}", line_number).into());
+        }
+
+        let id = fields[0].parse::<u32>()
+            .map_err(|e| format!("Invalid ID at line {}: {}", line_number, e))?;
+        
+        let name = fields[1].trim().to_string();
+        
+        let value = fields[2].parse::<f64>()
+            .map_err(|e| format!("Invalid value at line {}: {}", line_number, e))?;
+        
+        let active = fields[3].parse::<bool>()
+            .map_err(|e| format!("Invalid boolean at line {}: {}", line_number, e))?;
+
+        let record = CsvRecord { id, name, value, active };
+        
+        record.validate()
+            .map_err(|e| format!("Validation failed at line {}: {}", line_number, e))?;
+        
+        records.push(record);
+    }
+
+    Ok(records)
 }
 
-impl Default for CsvProcessor {
-    fn default() -> Self {
-        CsvProcessor {
-            delimiter: ',',
-            strict_mode: false,
-        }
-    }
+pub fn calculate_total_value(records: &[CsvRecord]) -> f64 {
+    records.iter()
+        .filter(|r| r.active)
+        .map(|r| r.value)
+        .sum()
 }
 
-impl CsvProcessor {
-    pub fn new(delimiter: char, strict_mode: bool) -> Self {
-        CsvProcessor {
-            delimiter,
-            strict_mode,
-        }
-    }
-
-    pub fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<CsvRecord>, CsvError> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        
-        let mut records = Vec::new();
-        let mut line_number = 0;
-
-        for line in reader.lines() {
-            line_number += 1;
-            let line_content = line?;
-            
-            if line_content.trim().is_empty() || line_content.starts_with('#') {
-                continue;
-            }
-
-            let record = self.parse_line(&line_content, line_number)?;
-            records.push(record);
-        }
-
-        Ok(records)
-    }
-
-    fn parse_line(&self, line: &str, line_number: usize) -> Result<CsvRecord, CsvError> {
-        let parts: Vec<&str> = line.split(self.delimiter).collect();
-        
-        if parts.len() != 4 {
-            return Err(CsvError::ParseError(format!(
-                "Line {}: Expected 4 fields, found {}",
-                line_number,
-                parts.len()
-            )));
-        }
-
-        let id = parts[0].parse::<u32>()
-            .map_err(|e| CsvError::ParseError(format!("Line {}: Invalid ID: {}", line_number, e)))?;
-
-        let name = parts[1].trim().to_string();
-        if name.is_empty() && self.strict_mode {
-            return Err(CsvError::ValidationError(format!(
-                "Line {}: Name cannot be empty",
-                line_number
-            )));
-        }
-
-        let value = parts[2].parse::<f64>()
-            .map_err(|e| CsvError::ParseError(format!("Line {}: Invalid value: {}", line_number, e)))?;
-
-        let active = match parts[3].trim().to_lowercase().as_str() {
-            "true" | "1" | "yes" => true,
-            "false" | "0" | "no" => false,
-            _ => return Err(CsvError::ParseError(format!(
-                "Line {}: Invalid boolean value: {}",
-                line_number,
-                parts[3]
-            ))),
-        };
-
-        Ok(CsvRecord {
-            id,
-            name,
-            value,
-            active,
-        })
-    }
-
-    pub fn calculate_statistics(records: &[CsvRecord]) -> (f64, f64, usize) {
-        if records.is_empty() {
-            return (0.0, 0.0, 0);
-        }
-
-        let sum: f64 = records.iter().map(|r| r.value).sum();
-        let count = records.len();
-        let average = sum / count as f64;
-        
-        let variance: f64 = records.iter()
-            .map(|r| (r.value - average).powi(2))
-            .sum::<f64>() / count as f64;
-        
-        let std_dev = variance.sqrt();
-
-        (average, std_dev, count)
-    }
+pub fn find_max_value_record(records: &[CsvRecord]) -> Option<&CsvRecord> {
+    records.iter()
+        .filter(|r| r.active)
+        .max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
 }
 
 #[cfg(test)]
@@ -138,46 +85,47 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_csv_parsing() {
+    fn test_parse_valid_csv() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "1,Alice,42.5,true").unwrap();
-        writeln!(temp_file, "2,Bob,37.2,false").unwrap();
-        writeln!(temp_file, "# This is a comment").unwrap();
-        writeln!(temp_file, "").unwrap();
-        writeln!(temp_file, "3,Charlie,29.8,yes").unwrap();
-
-        let processor = CsvProcessor::default();
-        let records = processor.process_file(temp_file.path()).unwrap();
+        writeln!(temp_file, "1,Alice,100.5,true").unwrap();
+        writeln!(temp_file, "2,Bob,200.0,false").unwrap();
+        writeln!(temp_file, "3,Charlie,300.75,true").unwrap();
         
+        let records = parse_csv_file(temp_file.path()).unwrap();
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].name, "Alice");
-        assert_eq!(records[1].active, false);
-        assert_eq!(records[2].id, 3);
+        assert_eq!(records[1].value, 200.0);
+        assert!(!records[1].active);
     }
 
     #[test]
-    fn test_statistics_calculation() {
+    fn test_calculate_total_value() {
         let records = vec![
             CsvRecord { id: 1, name: "Test1".to_string(), value: 10.0, active: true },
             CsvRecord { id: 2, name: "Test2".to_string(), value: 20.0, active: false },
             CsvRecord { id: 3, name: "Test3".to_string(), value: 30.0, active: true },
         ];
-
-        let (avg, std_dev, count) = CsvProcessor::calculate_statistics(&records);
         
-        assert_eq!(count, 3);
-        assert!((avg - 20.0).abs() < 0.0001);
-        assert!((std_dev - 8.164965).abs() < 0.0001);
+        let total = calculate_total_value(&records);
+        assert_eq!(total, 40.0);
     }
 
     #[test]
-    fn test_strict_mode_validation() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "1,,42.5,true").unwrap();
+    fn test_validation() {
+        let valid_record = CsvRecord {
+            id: 1,
+            name: "Valid".to_string(),
+            value: 50.0,
+            active: true,
+        };
+        assert!(valid_record.validate().is_ok());
 
-        let processor = CsvProcessor::new(',', true);
-        let result = processor.process_file(temp_file.path());
-        
-        assert!(matches!(result, Err(CsvError::ValidationError(_))));
+        let invalid_record = CsvRecord {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            active: true,
+        };
+        assert!(invalid_record.validate().is_err());
     }
 }
