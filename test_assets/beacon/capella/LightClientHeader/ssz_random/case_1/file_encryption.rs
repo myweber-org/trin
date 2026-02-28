@@ -148,3 +148,79 @@ mod tests {
         Ok(())
     }
 }
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+pub struct XorCipher {
+    key: Vec<u8>,
+}
+
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        self.process_file(input_path, output_path)
+    }
+
+    fn process_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
+        let mut input_file = fs::File::open(input_path)?;
+        let mut output_file = fs::File::create(output_path)?;
+
+        let mut buffer = [0; 4096];
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = input_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            for i in 0..bytes_read {
+                buffer[i] ^= self.key[key_index];
+                key_index = (key_index + 1) % self.key.len();
+            }
+
+            output_file.write_all(&buffer[..bytes_read])?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_xor_cipher() {
+        let cipher = XorCipher::new("secret_key");
+        let original_data = b"Hello, World! This is a test message.";
+
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_data).unwrap();
+
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        cipher
+            .encrypt_file(input_file.path(), encrypted_file.path())
+            .unwrap();
+        cipher
+            .decrypt_file(encrypted_file.path(), decrypted_file.path())
+            .unwrap();
+
+        let decrypted_data = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_data.to_vec(), decrypted_data);
+    }
+}
