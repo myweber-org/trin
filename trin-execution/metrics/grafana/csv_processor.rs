@@ -210,4 +210,55 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].columns[0], "Bob");
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+fn process_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = Reader::from_reader(input_file);
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = Writer::from_writer(output_file);
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        let transformed_record = Record {
+            id: record.id * 2,
+            name: record.name.to_uppercase(),
+            value: record.value * 1.1,
+            active: !record.active,
+        };
+        
+        writer.serialize(transformed_record)?;
+    }
+    
+    writer.flush()?;
+    Ok(())
+}
+
+fn validate_record(record: &Record) -> bool {
+    record.id > 0 && !record.name.is_empty() && record.value >= 0.0
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let input_file = "data/input.csv";
+    let output_file = "data/output.csv";
+    
+    match process_csv(input_file, output_file) {
+        Ok(_) => println!("CSV processing completed successfully"),
+        Err(e) => eprintln!("Error processing CSV: {}", e),
+    }
+    
+    Ok(())
 }
