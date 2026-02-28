@@ -606,3 +606,152 @@ mod tests {
         assert_eq!(count, 2);
     }
 }
+use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+impl Record {
+    pub fn new(id: u32, name: String, value: f64, category: String) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            category,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+
+    pub fn transform(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut reader = Reader::from_path(path)?;
+        for result in reader.deserialize() {
+            let record: Record = result?;
+            if record.is_valid() {
+                self.records.push(record);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let mut writer = Writer::from_path(path)?;
+        for record in &self.records {
+            writer.serialize(record)?;
+        }
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn process_records(&mut self, multiplier: f64) {
+        for record in &mut self.records {
+            record.transform(multiplier);
+        }
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_total(&self) -> f64 {
+        self.records.iter().map(|r| r.value).sum()
+    }
+
+    pub fn add_record(&mut self, record: Record) {
+        if record.is_valid() {
+            self.records.push(record);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record::new(1, "Test".to_string(), 10.5, "A".to_string());
+        assert!(valid_record.is_valid());
+
+        let invalid_record = Record::new(2, "".to_string(), -5.0, "B".to_string());
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let record1 = Record::new(1, "Item1".to_string(), 100.0, "CategoryA".to_string());
+        let record2 = Record::new(2, "Item2".to_string(), 200.0, "CategoryB".to_string());
+        
+        processor.add_record(record1.clone());
+        processor.add_record(record2.clone());
+        
+        assert_eq!(processor.count(), 2);
+        assert_eq!(processor.calculate_total(), 300.0);
+        
+        processor.process_records(2.0);
+        assert_eq!(processor.calculate_total(), 600.0);
+        
+        let filtered = processor.filter_by_category("CategoryA");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "Item1");
+    }
+
+    #[test]
+    fn test_csv_operations() -> Result<(), Box<dyn Error>> {
+        let mut processor = DataProcessor::new();
+        let record = Record::new(1, "Test".to_string(), 50.0, "Sample".to_string());
+        processor.add_record(record);
+        
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+        
+        processor.save_to_csv(path)?;
+        
+        let mut new_processor = DataProcessor::new();
+        new_processor.load_from_csv(path)?;
+        
+        assert_eq!(new_processor.count(), 1);
+        assert_eq!(new_processor.calculate_total(), 50.0);
+        
+        Ok(())
+    }
+}
