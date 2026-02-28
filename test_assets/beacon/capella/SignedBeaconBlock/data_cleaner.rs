@@ -129,4 +129,46 @@ mod tests {
         let results = cleaner.validate_records();
         assert_eq!(results, vec![true, false, false]);
     }
+}use regex::Regex;
+
+pub fn sanitize_input(input: &str) -> String {
+    let trimmed = input.trim();
+    
+    let re = Regex::new(r"\s+").unwrap();
+    let normalized_whitespace = re.replace_all(trimmed, " ");
+    
+    let re_special = Regex::new(r"[^\w\s\-.,!?]").unwrap();
+    let cleaned = re_special.replace_all(&normalized_whitespace, "");
+    
+    cleaned.to_string()
+}
+
+pub fn normalize_case(input: &str, mode: &str) -> String {
+    match mode {
+        "upper" => input.to_uppercase(),
+        "lower" => input.to_lowercase(),
+        "title" => {
+            let mut result = String::new();
+            let mut capitalize_next = true;
+            
+            for c in input.chars() {
+                if c.is_whitespace() {
+                    capitalize_next = true;
+                    result.push(c);
+                } else if capitalize_next {
+                    result.push(c.to_ascii_uppercase());
+                    capitalize_next = false;
+                } else {
+                    result.push(c.to_ascii_lowercase());
+                }
+            }
+            result
+        }
+        _ => input.to_string()
+    }
+}
+
+pub fn remove_duplicate_spaces(input: &str) -> String {
+    let re = Regex::new(r"\s{2,}").unwrap();
+    re.replace_all(input, " ").to_string()
 }
