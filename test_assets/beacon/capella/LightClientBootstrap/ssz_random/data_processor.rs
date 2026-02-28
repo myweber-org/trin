@@ -273,4 +273,74 @@ impl ValidationRule {
             required,
         }
     }
+}use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn process_data_file(file_path: &str) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let mut rdr = Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        if record.value >= 0.0 {
+            records.push(record);
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len();
+    let average = if count > 0 { sum / count as f64 } else { 0.0 };
+    
+    let valid_count = records.iter()
+        .filter(|r| r.value > 0.0 && !r.name.is_empty())
+        .count();
+
+    (sum, average, valid_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_process_valid_data() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value,category").unwrap();
+        writeln!(temp_file, "1,ItemA,10.5,CategoryX").unwrap();
+        writeln!(temp_file, "2,ItemB,15.3,CategoryY").unwrap();
+
+        let records = process_data_file(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].name, "ItemA");
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            Record { id: 1, name: "Test1".to_string(), value: 10.0, category: "A".to_string() },
+            Record { id: 2, name: "Test2".to_string(), value: 20.0, category: "B".to_string() },
+        ];
+        
+        let (sum, avg, valid) = calculate_statistics(&records);
+        assert_eq!(sum, 30.0);
+        assert_eq!(avg, 15.0);
+        assert_eq!(valid, 2);
+    }
 }
