@@ -1,45 +1,49 @@
 use std::collections::HashSet;
 
 pub struct DataCleaner {
-    pub remove_duplicates: bool,
-    pub normalize_case: bool,
+    deduplication_cache: HashSet<String>,
 }
 
 impl DataCleaner {
-    pub fn new(remove_duplicates: bool, normalize_case: bool) -> Self {
+    pub fn new() -> Self {
         DataCleaner {
-            remove_duplicates,
-            normalize_case,
+            deduplication_cache: HashSet::new(),
         }
     }
 
-    pub fn clean(&self, data: Vec<String>) -> Vec<String> {
-        let mut processed_data = data;
-
-        if self.normalize_case {
-            processed_data = processed_data
-                .into_iter()
-                .map(|s| s.to_lowercase())
-                .collect();
-        }
-
-        if self.remove_duplicates {
-            let unique_set: HashSet<String> = processed_data.into_iter().collect();
-            processed_data = unique_set.into_iter().collect();
-        }
-
-        processed_data.sort();
-        processed_data
+    pub fn normalize_text(&self, input: &str) -> String {
+        input
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect()
     }
 
-    pub fn validate_email(&self, email: &str) -> bool {
-        let email_parts: Vec<&str> = email.split('@').collect();
-        if email_parts.len() != 2 {
-            return false;
+    pub fn deduplicate(&mut self, item: &str) -> bool {
+        let normalized = self.normalize_text(item);
+        if self.deduplication_cache.contains(&normalized) {
+            false
+        } else {
+            self.deduplication_cache.insert(normalized);
+            true
         }
+    }
 
-        let domain_parts: Vec<&str> = email_parts[1].split('.').collect();
-        domain_parts.len() >= 2 && !email_parts[0].is_empty()
+    pub fn batch_process(&mut self, items: Vec<&str>) -> Vec<String> {
+        items
+            .into_iter()
+            .filter(|item| self.deduplicate(item))
+            .map(|item| self.normalize_text(item))
+            .collect()
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.deduplication_cache.clear();
+    }
+
+    pub fn get_processed_count(&self) -> usize {
+        self.deduplication_cache.len()
     }
 }
 
@@ -48,31 +52,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clean_with_duplicates() {
-        let cleaner = DataCleaner::new(true, false);
-        let data = vec![
-            "apple".to_string(),
-            "banana".to_string(),
-            "apple".to_string(),
-            "cherry".to_string(),
-        ];
-        let result = cleaner.clean(data);
-        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    fn test_normalization() {
+        let cleaner = DataCleaner::new();
+        assert_eq!(cleaner.normalize_text("  HELLO World!  "), "hello world");
+        assert_eq!(cleaner.normalize_text("Data@123"), "data123");
     }
 
     #[test]
-    fn test_clean_with_case_normalization() {
-        let cleaner = DataCleaner::new(false, true);
-        let data = vec!["Apple".to_string(), "BANANA".to_string(), "cherry".to_string()];
-        let result = cleaner.clean(data);
-        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        assert!(cleaner.deduplicate("Hello"));
+        assert!(!cleaner.deduplicate("hello"));
+        assert!(!cleaner.deduplicate("  HELLO  "));
     }
 
     #[test]
-    fn test_validate_email() {
-        let cleaner = DataCleaner::new(false, false);
-        assert!(cleaner.validate_email("test@example.com"));
-        assert!(!cleaner.validate_email("invalid-email"));
-        assert!(!cleaner.validate_email("@domain.com"));
+    fn test_batch_processing() {
+        let mut cleaner = DataCleaner::new();
+        let input = vec!["Apple", "apple", "Banana", "  banana  "];
+        let result = cleaner.batch_process(input);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result, vec!["apple", "banana"]);
     }
 }
