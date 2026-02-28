@@ -1,100 +1,92 @@
-
 use serde_json::{Value, Map};
-use std::fs;
-use std::path::Path;
+use std::collections::HashSet;
 
-pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], output_path: P) -> Result<(), Box<dyn std::error::Error>> {
-    let mut merged = Map::new();
-    
-    for path in paths {
-        let content = fs::read_to_string(path)?;
-        let json: Value = serde_json::from_str(&content)?;
-        
-        if let Value::Object(obj) = json {
-            merge_objects(&mut merged, obj);
-        }
-    }
-    
-    let output_json = Value::Object(merged);
-    let output_str = serde_json::to_string_pretty(&output_json)?;
-    fs::write(output_path, output_str)?;
-    
-    Ok(())
-}
-
-fn merge_objects(base: &mut Map<String, Value>, new: Map<String, Value>) {
-    for (key, new_value) in new {
-        match base.get_mut(&key) {
-            Some(existing_value) => {
-                if let (Value::Object(mut existing_obj), Value::Object(new_obj)) = (existing_value.clone(), new_value) {
-                    let mut existing_map = if let Value::Object(obj) = existing_obj {
-                        obj
-                    } else {
-                        Map::new()
-                    };
-                    merge_objects(&mut existing_map, new_obj);
-                    base.insert(key, Value::Object(existing_map));
-                } else if existing_value != &new_value {
-                    let merged_array = Value::Array(vec![existing_value.clone(), new_value]);
-                    base.insert(key, merged_array);
+pub fn merge_json(base: &mut Value, extension: &Value, overwrite_arrays: bool) {
+    match (base, extension) {
+        (Value::Object(base_map), Value::Object(ext_map)) => {
+            for (key, ext_value) in ext_map {
+                if let Some(base_value) = base_map.get_mut(key) {
+                    merge_json(base_value, ext_value, overwrite_arrays);
+                } else {
+                    base_map.insert(key.clone(), ext_value.clone());
                 }
             }
-            None => {
-                base.insert(key, new_value);
+        }
+        (Value::Array(base_arr), Value::Array(ext_arr)) => {
+            if overwrite_arrays {
+                *base_arr = ext_arr.clone();
+            } else {
+                let mut seen = HashSet::new();
+                for item in base_arr.iter() {
+                    if let Value::Object(map) = item {
+                        if let Some(Value::String(id)) = map.get("id") {
+                            seen.insert(id.clone());
+                        }
+                    }
+                }
+                
+                for item in ext_arr {
+                    if let Value::Object(map) = item {
+                        if let Some(Value::String(id)) = map.get("id") {
+                            if !seen.contains(id) {
+                                base_arr.push(item.clone());
+                                seen.insert(id.clone());
+                            }
+                        } else {
+                            base_arr.push(item.clone());
+                        }
+                    } else {
+                        base_arr.push(item.clone());
+                    }
+                }
             }
         }
-    }
-}use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-
-pub fn merge_json_files(file_paths: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let mut merged_map = HashMap::new();
-
-    for path_str in file_paths {
-        let path = Path::new(path_str);
-        if !path.exists() {
-            continue;
-        }
-
-        let content = fs::read_to_string(path)?;
-        let json_value: serde_json::Value = serde_json::from_str(&content)?;
-
-        if let serde_json::Value::Object(obj) = json_value {
-            for (key, value) in obj {
-                merged_map.insert(key, value);
-            }
+        (base, extension) => {
+            *base = extension.clone();
         }
     }
+}
 
-    Ok(serde_json::Value::Object(merged_map.into_iter().collect()))
+pub fn merge_json_with_strategy(
+    base: &str,
+    extension: &str,
+    overwrite_arrays: bool
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut base_value: Value = serde_json::from_str(base)?;
+    let extension_value: Value = serde_json::from_str(extension)?;
+    
+    merge_json(&mut base_value, &extension_value, overwrite_arrays);
+    
+    Ok(serde_json::to_string_pretty(&base_value)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
+    
     #[test]
-    fn test_merge_json_files() {
-        let mut file1 = NamedTempFile::new().unwrap();
-        let mut file2 = NamedTempFile::new().unwrap();
-
-        writeln!(file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
-        writeln!(file2, r#"{"city": "London", "active": true}"#).unwrap();
-
-        let paths = [
-            file1.path().to_str().unwrap(),
-            file2.path().to_str().unwrap(),
-        ];
-
-        let result = merge_json_files(&paths).unwrap();
-        let obj = result.as_object().unwrap();
-
-        assert_eq!(obj.get("name").unwrap(), "Alice");
-        assert_eq!(obj.get("age").unwrap(), 30);
-        assert_eq!(obj.get("city").unwrap(), "London");
-        assert_eq!(obj.get("active").unwrap(), true);
+    fn test_basic_merge() {
+        let base = r#"{"name": "Alice", "age": 30}"#;
+        let extension = r#"{"age": 31, "city": "New York"}"#;
+        
+        let result = merge_json_with_strategy(base, extension, false).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        
+        assert_eq!(parsed["name"], "Alice");
+        assert_eq!(parsed["age"], 31);
+        assert_eq!(parsed["city"], "New York");
+    }
+    
+    #[test]
+    fn test_nested_merge() {
+        let base = r#"{"user": {"name": "Alice", "settings": {"theme": "dark"}}}"#;
+        let extension = r#"{"user": {"settings": {"language": "en"}}}"#;
+        
+        let result = merge_json_with_strategy(base, extension, false).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        
+        assert_eq!(parsed["user"]["name"], "Alice");
+        assert_eq!(parsed["user"]["settings"]["theme"], "dark");
+        assert_eq!(parsed["user"]["settings"]["language"], "en");
     }
 }
