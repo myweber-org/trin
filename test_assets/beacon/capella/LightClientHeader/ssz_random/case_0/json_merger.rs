@@ -1,134 +1,56 @@
 
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{self, BufReader, Write};
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
-use serde_json::{Map, Value};
+type JsonValue = serde_json::Value;
 
-pub fn merge_json_files<P: AsRef<Path>>(input_paths: &[P], output_path: P) -> io::Result<()> {
-    let mut merged_map = Map::new();
+pub fn merge_json_files(file_paths: &[&str]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
 
-    for path in input_paths {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let json_value: Value = serde_json::from_reader(reader)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let mut file = File::open(path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
 
-        if let Value::Object(map) = json_value {
+        let json_data: JsonValue = serde_json::from_str(&contents)?;
+
+        if let JsonValue::Object(map) = json_data {
             for (key, value) in map {
                 merged_map.insert(key, value);
             }
         } else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "JSON root must be an object",
-            ));
+            return Err("Each JSON file must contain a JSON object".into());
         }
     }
 
-    let output_file = File::create(output_path)?;
-    serde_json::to_writer_pretty(output_file, &Value::Object(merged_map))
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    Ok(())
-}
-
-pub fn merge_json_with_strategy<P: AsRef<Path>>(
-    input_paths: &[P],
-    output_path: P,
-    conflict_strategy: ConflictStrategy,
-) -> io::Result<()> {
-    let mut merged: HashMap<String, Value> = HashMap::new();
-
-    for path in input_paths {
-        let content = fs::read_to_string(path)?;
-        let json_value: Value = serde_json::from_str(&content)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        if let Value::Object(map) = json_value {
-            for (key, value) in map {
-                match conflict_strategy {
-                    ConflictStrategy::Overwrite => {
-                        merged.insert(key, value);
-                    }
-                    ConflictStrategy::Skip => {
-                        merged.entry(key).or_insert(value);
-                    }
-                    ConflictStrategy::MergeObjects => {
-                        if let Some(existing) = merged.get_mut(&key) {
-                            if existing.is_object() && value.is_object() {
-                                merge_json_objects(existing, &value);
-                            } else {
-                                merged.insert(key, value);
-                            }
-                        } else {
-                            merged.insert(key, value);
-                        }
-                    }
-                }
-            }
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "JSON root must be an object",
-            ));
-        }
-    }
-
-    let output_value: Value = serde_json::to_value(&merged)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    let output_file = File::create(output_path)?;
-    serde_json::to_writer_pretty(output_file, &output_value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    Ok(())
-}
-
-fn merge_json_objects(target: &mut Value, source: &Value) {
-    if let (Value::Object(target_map), Value::Object(source_map)) = (target, source) {
-        for (key, value) in source_map {
-            if let Some(existing) = target_map.get_mut(key) {
-                if existing.is_object() && value.is_object() {
-                    merge_json_objects(existing, value);
-                } else {
-                    target_map.insert(key.clone(), value.clone());
-                }
-            } else {
-                target_map.insert(key.clone(), value.clone());
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ConflictStrategy {
-    Overwrite,
-    Skip,
-    MergeObjects,
+    Ok(JsonValue::Object(serde_json::Map::from_iter(merged_map)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_basic_merge() {
-        let file1 = NamedTempFile::new().unwrap();
-        let file2 = NamedTempFile::new().unwrap();
-        let output = NamedTempFile::new().unwrap();
+    fn test_merge_json_files() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
 
-        fs::write(&file1, r#"{"a": 1, "b": 2}"#).unwrap();
-        fs::write(&file2, r#"{"c": 3, "d": 4}"#).unwrap();
+        writeln!(file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
+        writeln!(file2, r#"{"city": "Berlin", "active": true}"#).unwrap();
 
-        merge_json_files(&[file1.path(), file2.path()], output.path()).unwrap();
+        let result = merge_json_files(&[
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ]).unwrap();
 
-        let content = fs::read_to_string(output.path()).unwrap();
-        let parsed: Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["a"], 1);
-        assert_eq!(parsed["b"], 2);
-        assert_eq!(parsed["c"], 3);
-        assert_eq!(parsed["d"], 4);
+        assert_eq!(result["name"], "Alice");
+        assert_eq!(result["age"], 30);
+        assert_eq!(result["city"], "Berlin");
+        assert_eq!(result["active"], true);
     }
 }
