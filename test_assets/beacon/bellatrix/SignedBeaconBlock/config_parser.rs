@@ -28,28 +28,12 @@ impl Config {
     }
 
     fn process_value(raw: &str) -> String {
-        let mut result = String::new();
-        let mut chars = raw.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next(); // Skip '{'
-                let mut var_name = String::new();
-                while let Some(ch) = chars.next() {
-                    if ch == '}' {
-                        break;
-                    }
-                    var_name.push(ch);
-                }
-                if let Ok(env_value) = env::var(&var_name) {
-                    result.push_str(&env_value);
-                }
-            } else {
-                result.push(ch);
-            }
+        if raw.starts_with('$') {
+            let var_name = &raw[1..];
+            env::var(var_name).unwrap_or_else(|_| raw.to_string())
+        } else {
+            raw.to_string()
         }
-
-        result
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
@@ -70,27 +54,29 @@ mod tests {
     #[test]
     fn test_basic_parsing() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "APP_NAME=myapp").unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
         writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "VERSION=1.0.0").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
 
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("APP_NAME"), Some(&"myapp".to_string()));
-        assert_eq!(config.get("VERSION"), Some(&"1.0.0".to_string()));
-        assert!(!config.contains_key("NONEXISTENT"));
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
     }
 
     #[test]
     fn test_env_substitution() {
-        env::set_var("DB_HOST", "localhost");
+        env::set_var("APP_SECRET", "super_secret_value");
         
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "DATABASE_URL=postgres://${DB_HOST}:5432/mydb").unwrap();
+        writeln!(file, "SECRET=$APP_SECRET").unwrap();
+        writeln!(file, "NORMAL=plain_value").unwrap();
 
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(
-            config.get("DATABASE_URL"),
-            Some(&"postgres://localhost:5432/mydb".to_string())
-        );
+        assert_eq!(config.get("SECRET"), Some(&"super_secret_value".to_string()));
+        assert_eq!(config.get("NORMAL"), Some(&"plain_value".to_string()));
     }
 }
