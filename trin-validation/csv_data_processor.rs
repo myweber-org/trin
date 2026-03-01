@@ -276,3 +276,79 @@ pub fn process_data_sample() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+pub fn load_csv<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut csv_reader = csv::Reader::from_reader(reader);
+    
+    let mut records = Vec::new();
+    for result in csv_reader.deserialize() {
+        let record: Record = result?;
+        records.push(record);
+    }
+    
+    Ok(records)
+}
+
+pub fn validate_records(records: &[Record]) -> Result<(), Box<dyn Error>> {
+    for record in records {
+        if record.name.is_empty() {
+            return Err("Record name cannot be empty".into());
+        }
+        
+        if record.value < 0.0 {
+            return Err("Record value cannot be negative".into());
+        }
+        
+        if !["A", "B", "C", "D"].contains(&record.category.as_str()) {
+            return Err("Invalid category value".into());
+        }
+    }
+    
+    Ok(())
+}
+
+pub fn transform_records(records: &mut [Record]) {
+    for record in records {
+        record.name = record.name.to_uppercase();
+        record.value = (record.value * 100.0).round() / 100.0;
+    }
+}
+
+pub fn save_csv<P: AsRef<Path>>(records: &[Record], path: P) -> Result<(), Box<dyn Error>> {
+    let file = File::create(path)?;
+    let writer = BufWriter::new(file);
+    let mut csv_writer = csv::Writer::from_writer(writer);
+    
+    for record in records {
+        csv_writer.serialize(record)?;
+    }
+    
+    csv_writer.flush()?;
+    Ok(())
+}
+
+pub fn process_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let mut records = load_csv(input_path)?;
+    validate_records(&records)?;
+    transform_records(&mut records);
+    save_csv(&records, output_path)?;
+    
+    println!("Processed {} records successfully", records.len());
+    Ok(())
+}
