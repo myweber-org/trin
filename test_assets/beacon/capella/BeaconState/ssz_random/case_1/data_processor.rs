@@ -410,3 +410,67 @@ mod tests {
         assert_eq!(invalid_result, None);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_numeric_data(&mut self, key: &str, data: Vec<f64>) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty data provided".to_string());
+        }
+
+        if data.iter().any(|&x| !x.is_finite()) {
+            return Err("Invalid numeric values detected".to_string());
+        }
+
+        let processed: Vec<f64> = data
+            .iter()
+            .map(|&x| x * 2.0)
+            .collect();
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn calculate_statistics(data: &[f64]) -> (f64, f64) {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        (mean, variance.sqrt())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_valid_data() {
+        let mut processor = DataProcessor::new();
+        let result = processor.process_numeric_data("test", vec![1.0, 2.0, 3.0]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, std_dev) = DataProcessor::calculate_statistics(&data);
+        assert!((mean - 3.0).abs() < 0.0001);
+        assert!((std_dev - 1.4142).abs() < 0.0001);
+    }
+}
