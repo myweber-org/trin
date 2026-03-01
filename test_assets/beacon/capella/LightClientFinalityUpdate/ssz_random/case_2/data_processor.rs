@@ -370,3 +370,218 @@ mod tests {
         assert_eq!(std_dev, 2.0_f64.sqrt());
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ValidationError {
+    InvalidId,
+    InvalidTimestamp,
+    EmptyValues,
+    ValueOutOfRange(f64, f64),
+}
+
+pub struct DataProcessor {
+    value_range: (f64, f64),
+}
+
+impl DataProcessor {
+    pub fn new(min_value: f64, max_value: f64) -> Self {
+        DataProcessor {
+            value_range: (min_value, max_value),
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), ValidationError> {
+        if record.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+
+        if record.timestamp < 0 {
+            return Err(ValidationError::InvalidTimestamp);
+        }
+
+        if record.values.is_empty() {
+            return Err(ValidationError::EmptyValues);
+        }
+
+        for &value in &record.values {
+            if value < self.value_range.0 || value > self.value_range.1 {
+                return Err(ValidationError::ValueOutOfRange(
+                    self.value_range.0,
+                    self.value_range.1,
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&self, record: &mut DataRecord) {
+        let min_val = record
+            .values
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let max_val = record
+            .values
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        if max_val > min_val {
+            for value in &mut record.values {
+                *value = (*value - min_val) / (max_val - min_val);
+            }
+        }
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+
+        if records.is_empty() {
+            return stats;
+        }
+
+        let total_values: Vec<f64> = records.iter().flat_map(|r| r.values.clone()).collect();
+
+        let sum: f64 = total_values.iter().sum();
+        let count = total_values.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = total_values
+            .iter()
+            .map(|&value| (value - mean).powi(2))
+            .sum::<f64>()
+            / count;
+
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("min".to_string(), total_values.iter().copied().fold(f64::INFINITY, f64::min));
+        stats.insert("max".to_string(), total_values.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+        stats.insert("count".to_string(), count);
+
+        stats
+    }
+
+    pub fn filter_by_metadata(
+        &self,
+        records: &[DataRecord],
+        key: &str,
+        value: &str,
+    ) -> Vec<DataRecord> {
+        records
+            .iter()
+            .filter(|record| record.metadata.get(key).map_or(false, |v| v == value))
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation_valid_record() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "sensor_a".to_string());
+
+        let record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![10.0, 20.0, 30.0],
+            metadata,
+        };
+
+        assert!(processor.validate_record(&record).is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_id() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let record = DataRecord {
+            id: 0,
+            timestamp: 1625097600,
+            values: vec![10.0],
+            metadata: HashMap::new(),
+        };
+
+        assert_eq!(processor.validate_record(&record), Err(ValidationError::InvalidId));
+    }
+
+    #[test]
+    fn test_normalize_values() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let mut record = DataRecord {
+            id: 1,
+            timestamp: 1625097600,
+            values: vec![10.0, 20.0, 30.0],
+            metadata: HashMap::new(),
+        };
+
+        processor.normalize_values(&mut record);
+        assert_eq!(record.values, vec![0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1625097600,
+                values: vec![10.0, 20.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1625097601,
+                values: vec![30.0, 40.0],
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let stats = processor.calculate_statistics(&records);
+        assert_eq!(stats.get("mean"), Some(&25.0));
+        assert_eq!(stats.get("count"), Some(&4.0));
+    }
+
+    #[test]
+    fn test_filter_by_metadata() {
+        let processor = DataProcessor::new(0.0, 100.0);
+        let mut metadata1 = HashMap::new();
+        metadata1.insert("type".to_string(), "temperature".to_string());
+
+        let mut metadata2 = HashMap::new();
+        metadata2.insert("type".to_string(), "humidity".to_string());
+
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1625097600,
+                values: vec![10.0],
+                metadata: metadata1,
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 1625097601,
+                values: vec![20.0],
+                metadata: metadata2,
+            },
+        ];
+
+        let filtered = processor.filter_by_metadata(&records, "type", "temperature");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 1);
+    }
+}
