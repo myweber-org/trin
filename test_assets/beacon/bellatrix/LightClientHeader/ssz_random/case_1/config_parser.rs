@@ -1,99 +1,99 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
 use std::fs;
-use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AppConfig {
-    pub server: ServerConfig,
-    pub database: DatabaseConfig,
-    pub logging: LoggingConfig,
+pub struct Config {
+    values: HashMap<String, String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerConfig {
-    pub host: String,
-    pub port: u16,
-    pub timeout_seconds: u64,
-}
+impl Config {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path)?;
+        let mut values = HashMap::new();
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    pub url: String,
-    pub max_connections: u32,
-    pub min_connections: u32,
-    pub connect_timeout: u64,
-}
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub file_path: Option<String>,
-    pub max_files: usize,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        AppConfig {
-            server: ServerConfig {
-                host: "127.0.0.1".to_string(),
-                port: 8080,
-                timeout_seconds: 30,
-            },
-            database: DatabaseConfig {
-                url: "postgresql://localhost:5432/mydb".to_string(),
-                max_connections: 20,
-                min_connections: 5,
-                connect_timeout: 10,
-            },
-            logging: LoggingConfig {
-                level: "info".to_string(),
-                file_path: Some("logs/app.log".to_string()),
-                max_files: 10,
-            },
+            if let Some((key, value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let processed_value = Self::process_value(value.trim());
+                values.insert(key, processed_value);
+            }
         }
+
+        Ok(Config { values })
     }
-}
 
-pub fn load_config<P: AsRef<Path>>(path: P) -> Result<AppConfig, Box<dyn std::error::Error>> {
-    let config_str = fs::read_to_string(path)?;
-    let config: AppConfig = toml::from_str(&config_str)?;
-    validate_config(&config)?;
-    Ok(config)
-}
+    fn process_value(raw: &str) -> String {
+        let mut result = String::new();
+        let mut chars = raw.chars().peekable();
 
-pub fn load_config_or_default<P: AsRef<Path>>(path: P) -> AppConfig {
-    match load_config(path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Failed to load config: {}, using defaults", e);
-            AppConfig::default()
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // Skip '{'
+                let mut var_name = String::new();
+                while let Some(ch) = chars.next() {
+                    if ch == '}' {
+                        break;
+                    }
+                    var_name.push(ch);
+                }
+                let env_value = env::var(&var_name).unwrap_or_else(|_| String::new());
+                result.push_str(&env_value);
+            } else {
+                result.push(ch);
+            }
         }
+
+        result
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key).map(|s| s.as_str()).unwrap_or(default).to_string()
     }
 }
 
-fn validate_config(config: &AppConfig) -> Result<(), String> {
-    if config.server.port == 0 {
-        return Err("Server port cannot be 0".to_string());
-    }
-    
-    if config.database.max_connections < config.database.min_connections {
-        return Err("Max connections must be greater than or equal to min connections".to_string());
-    }
-    
-    if config.database.max_connections == 0 {
-        return Err("Max connections cannot be 0".to_string());
-    }
-    
-    let valid_log_levels = ["error", "warn", "info", "debug", "trace"];
-    if !valid_log_levels.contains(&config.logging.level.as_str()) {
-        return Err(format!("Invalid log level: {}", config.logging.level));
-    }
-    
-    Ok(())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-pub fn save_config<P: AsRef<Path>>(config: &AppConfig, path: P) -> Result<(), Box<dyn std::error::Error>> {
-    let toml_string = toml::to_string_pretty(config)?;
-    fs::write(path, toml_string)?;
-    Ok(())
+    #[test]
+    fn test_basic_parsing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "HOST=localhost").unwrap();
+        writeln!(file, "PORT=8080").unwrap();
+        writeln!(file, "# This is a comment").unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "TIMEOUT=30").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("TIMEOUT"), Some(&"30".to_string()));
+        assert_eq!(config.get("MISSING"), None);
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("DB_PASSWORD", "secret123");
+        
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DB_HOST=localhost").unwrap();
+        writeln!(file, "DB_PASS=${{DB_PASSWORD}}").unwrap();
+        writeln!(file, "MULTI=prefix_${{DB_PASSWORD}}_suffix").unwrap();
+
+        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config.get("DB_HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("DB_PASS"), Some(&"secret123".to_string()));
+        assert_eq!(config.get("MULTI"), Some(&"prefix_secret123_suffix".to_string()));
+    }
 }
