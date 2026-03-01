@@ -1,115 +1,54 @@
+use serde_json::{Map, Value};
+use std::fs;
+use std::path::Path;
 
-use serde_json::{Value, Map};
-use std::collections::HashSet;
+pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
 
-pub enum ConflictResolution {
-    PreferFirst,
-    PreferSecond,
-    MergeArrays,
-    FailOnConflict,
-}
-
-pub fn merge_json(
-    first: &Value,
-    second: &Value,
-    resolution: ConflictResolution,
-) -> Result<Value, String> {
-    match (first, second) {
-        (Value::Object(first_map), Value::Object(second_map)) => {
-            merge_objects(first_map, second_map, resolution)
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            continue;
         }
-        (Value::Array(first_arr), Value::Array(second_arr)) => {
-            merge_arrays(first_arr, second_arr, resolution)
-        }
-        _ => handle_primitive_conflict(first, second, resolution),
-    }
-}
 
-fn merge_objects(
-    first: &Map<String, Value>,
-    second: &Map<String, Value>,
-    resolution: ConflictResolution,
-) -> Result<Value, String> {
-    let mut result = Map::new();
-    let all_keys: HashSet<_> = first.keys().chain(second.keys()).collect();
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
 
-    for key in all_keys {
-        let first_val = first.get(key);
-        let second_val = second.get(key);
-
-        match (first_val, second_val) {
-            (Some(f), Some(s)) => {
-                let merged = merge_json(f, s, resolution.clone())?;
-                result.insert(key.clone(), merged);
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                merged_map.insert(key, value);
             }
-            (Some(val), None) | (None, Some(val)) => {
-                result.insert(key.clone(), val.clone());
-            }
-            (None, None) => unreachable!(),
         }
     }
 
-    Ok(Value::Object(result))
-}
-
-fn merge_arrays(
-    first: &[Value],
-    second: &[Value],
-    resolution: ConflictResolution,
-) -> Result<Value, String> {
-    match resolution {
-        ConflictResolution::MergeArrays => {
-            let mut merged = Vec::with_capacity(first.len() + second.len());
-            merged.extend_from_slice(first);
-            merged.extend_from_slice(second);
-            Ok(Value::Array(merged))
-        }
-        _ => handle_primitive_conflict(
-            &Value::Array(first.to_vec()),
-            &Value::Array(second.to_vec()),
-            resolution,
-        ),
-    }
-}
-
-fn handle_primitive_conflict(
-    first: &Value,
-    second: &Value,
-    resolution: ConflictResolution,
-) -> Result<Value, String> {
-    if first == second {
-        return Ok(first.clone());
-    }
-
-    match resolution {
-        ConflictResolution::PreferFirst => Ok(first.clone()),
-        ConflictResolution::PreferSecond => Ok(second.clone()),
-        ConflictResolution::FailOnConflict => Err(format!(
-            "Conflict between values: {} and {}",
-            first, second
-        )),
-        ConflictResolution::MergeArrays => Err("Cannot merge non-array values".to_string()),
-    }
+    Ok(Value::Object(merged_map))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_merge_objects_prefer_first() {
-        let first = json!({"a": 1, "b": 2});
-        let second = json!({"b": 3, "c": 4});
-        let result = merge_json(&first, &second, ConflictResolution::PreferFirst).unwrap();
-        assert_eq!(result, json!({"a": 1, "b": 2, "c": 4}));
-    }
+    fn test_merge_json_files() {
+        let mut file1 = NamedTempFile::new().unwrap();
+        let mut file2 = NamedTempFile::new().unwrap();
 
-    #[test]
-    fn test_merge_arrays() {
-        let first = json!([1, 2]);
-        let second = json!([3, 4]);
-        let result = merge_json(&first, &second, ConflictResolution::MergeArrays).unwrap();
-        assert_eq!(result, json!([1, 2, 3, 4]));
+        writeln!(file1, r#"{"name": "Alice", "age": 30}"#).unwrap();
+        writeln!(file2, r#"{"city": "Berlin", "active": true}"#).unwrap();
+
+        let paths = [
+            file1.path().to_str().unwrap(),
+            file2.path().to_str().unwrap(),
+        ];
+
+        let result = merge_json_files(&paths).unwrap();
+        let obj = result.as_object().unwrap();
+
+        assert_eq!(obj.get("name").unwrap(), "Alice");
+        assert_eq!(obj.get("age").unwrap(), 30);
+        assert_eq!(obj.get("city").unwrap(), "Berlin");
+        assert_eq!(obj.get("active").unwrap(), true);
     }
 }
