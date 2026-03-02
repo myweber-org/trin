@@ -106,3 +106,73 @@ mod tests {
         assert!((stats.0 - 15.5).abs() < 0.1);
     }
 }
+use csv;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub fn process_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let mut reader = csv::Reader::from_reader(input_file);
+    
+    let mut valid_records = Vec::new();
+    let mut invalid_count = 0;
+    
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.is_valid() {
+            valid_records.push(record);
+        } else {
+            invalid_count += 1;
+        }
+    }
+    
+    if !valid_records.is_empty() {
+        let output_file = File::create(output_path)?;
+        let mut writer = csv::Writer::from_writer(output_file);
+        
+        for record in valid_records {
+            writer.serialize(record)?;
+        }
+        
+        writer.flush()?;
+    }
+    
+    println!("Processed {} records, filtered {} invalid entries", 
+             valid_records.len(), invalid_count);
+    
+    Ok(())
+}
+
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len() as f64;
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (mean, variance, std_dev)
+}
