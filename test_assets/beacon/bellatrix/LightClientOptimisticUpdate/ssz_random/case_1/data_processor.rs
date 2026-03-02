@@ -479,3 +479,166 @@ pub fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
     
     (sum, mean, std_dev)
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+    valid: bool,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Self {
+        let valid = value >= 0.0 && !category.is_empty();
+        DataRecord {
+            id,
+            value,
+            category,
+            valid,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn get_value(&self) -> f64 {
+        self.value
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+    total_value: f64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+            total_value: 0.0,
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut count = 0;
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if line_num == 0 {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+
+            let id = match parts[0].parse::<u32>() {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+
+            let value = match parts[1].parse::<f64>() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            let category = parts[2].to_string();
+            let record = DataRecord::new(id, value, category);
+            
+            if record.is_valid() {
+                self.total_value += record.get_value();
+                self.records.push(record);
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
+    pub fn get_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
+        } else {
+            Some(self.total_value / self.records.len() as f64)
+        }
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn count_valid(&self) -> usize {
+        self.records.iter().filter(|r| r.is_valid()).count()
+    }
+
+    pub fn get_records(&self) -> &[DataRecord] {
+        &self.records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 42.5, "test".to_string());
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 42.5);
+        assert_eq!(record.category, "test");
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(2, -10.0, "invalid".to_string());
+        assert!(!record.is_valid());
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let mut csv_data = NamedTempFile::new().unwrap();
+        writeln!(csv_data, "id,value,category").unwrap();
+        writeln!(csv_data, "1,100.0,alpha").unwrap();
+        writeln!(csv_data, "2,200.0,beta").unwrap();
+        writeln!(csv_data, "3,-50.0,gamma").unwrap();
+
+        let mut processor = DataProcessor::new();
+        let result = processor.load_from_csv(csv_data.path());
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+        assert_eq!(processor.count_valid(), 2);
+    }
+
+    #[test]
+    fn test_average_calculation() {
+        let mut processor = DataProcessor::new();
+        processor.records.push(DataRecord::new(1, 10.0, "a".to_string()));
+        processor.records.push(DataRecord::new(2, 20.0, "b".to_string()));
+        processor.total_value = 30.0;
+
+        assert_eq!(processor.get_average_value(), Some(15.0));
+    }
+
+    #[test]
+    fn test_empty_average() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.get_average_value(), None);
+    }
+}
