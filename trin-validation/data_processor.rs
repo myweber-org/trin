@@ -95,3 +95,106 @@ mod tests {
         assert!((std_dev - 1.41421356).abs() < 0.0001);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, PartialEq)]
+pub struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+impl Record {
+    pub fn new(id: u32, name: String, value: f64, active: bool) -> Self {
+        Record {
+            id,
+            name,
+            value,
+            active,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0
+    }
+}
+
+pub fn process_csv_file<P: AsRef<Path>>(path: P) -> Result<Vec<Record>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() != 4 {
+            return Err(format!("Invalid format at line {}", line_num + 1).into());
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let name = parts[1].to_string();
+        let value = parts[2].parse::<f64>()?;
+        let active = parts[3].parse::<bool>()?;
+
+        let record = Record::new(id, name, value, active);
+        if record.is_valid() {
+            records.push(record);
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_statistics(records: &[Record]) -> (f64, f64, usize) {
+    if records.is_empty() {
+        return (0.0, 0.0, 0);
+    }
+
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let count = records.len();
+    let mean = sum / count as f64;
+
+    let variance: f64 = records
+        .iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>()
+        / count as f64;
+
+    (mean, variance.sqrt(), count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record::new(1, "test".to_string(), 10.5, true);
+        assert!(valid_record.is_valid());
+
+        let invalid_record = Record::new(2, "".to_string(), -5.0, false);
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            Record::new(1, "a".to_string(), 10.0, true),
+            Record::new(2, "b".to_string(), 20.0, false),
+            Record::new(3, "c".to_string(), 30.0, true),
+        ];
+
+        let (mean, std_dev, count) = calculate_statistics(&records);
+        assert_eq!(mean, 20.0);
+        assert!(std_dev - 8.164965 < 0.0001);
+        assert_eq!(count, 3);
+    }
+}
