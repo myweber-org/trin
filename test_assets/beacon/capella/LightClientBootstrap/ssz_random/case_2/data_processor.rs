@@ -247,3 +247,123 @@ mod tests {
         assert_eq!(column, vec!["b".to_string(), "d".to_string()]);
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, String> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".to_string());
+        }
+        if category.is_empty() {
+            return Err("Category cannot be empty".to_string());
+        }
+        Ok(Self { id, value, category })
+    }
+
+    pub fn calculate_adjusted_value(&self, multiplier: f64) -> f64 {
+        self.value * multiplier
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { records: Vec::new() }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = csv::Reader::from_reader(file);
+
+        for result in rdr.deserialize() {
+            let record: DataRecord = result?;
+            self.records.push(record);
+        }
+
+        Ok(())
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.category == category)
+            .collect()
+    }
+
+    pub fn calculate_total_value(&self) -> f64 {
+        self.records.iter().map(|record| record.value).sum()
+    }
+
+    pub fn get_average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
+        } else {
+            Some(self.calculate_total_value() / self.records.len() as f64)
+        }
+    }
+
+    pub fn find_max_value_record(&self) -> Option<&DataRecord> {
+        self.records.iter().max_by(|a, b| {
+            a.value
+                .partial_cmp(&b.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_data_record_creation() {
+        let record = DataRecord::new(1, 42.5, "test".to_string());
+        assert!(record.is_ok());
+        
+        let invalid_record = DataRecord::new(2, -5.0, "test".to_string());
+        assert!(invalid_record.is_err());
+    }
+
+    #[test]
+    fn test_data_processor_operations() {
+        let mut processor = DataProcessor::new();
+        
+        let temp_file = NamedTempFile::new().unwrap();
+        writeln!(
+            temp_file.as_file(),
+            "id,value,category\n1,10.5,A\n2,20.3,B\n3,15.7,A"
+        ).unwrap();
+
+        let result = processor.load_from_csv(temp_file.path());
+        assert!(result.is_ok());
+        assert_eq!(processor.records.len(), 3);
+        
+        let category_a = processor.filter_by_category("A");
+        assert_eq!(category_a.len(), 2);
+        
+        let total = processor.calculate_total_value();
+        assert!((total - 46.5).abs() < 0.001);
+        
+        let avg = processor.get_average_value();
+        assert!(avg.is_some());
+        assert!((avg.unwrap() - 15.5).abs() < 0.001);
+        
+        let max_record = processor.find_max_value_record();
+        assert!(max_record.is_some());
+        assert_eq!(max_record.unwrap().id, 2);
+    }
+}
