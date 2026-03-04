@@ -129,4 +129,109 @@ mod tests {
         assert_eq!(summary.get("mean").unwrap(), &30.0);
         assert_eq!(summary.get("count").unwrap(), &5.0);
     }
+}use std::collections::HashSet;
+use std::hash::Hash;
+
+pub struct DataCleaner<T> {
+    seen: HashSet<T>,
+}
+
+impl<T> DataCleaner<T>
+where
+    T: Hash + Eq + Clone,
+{
+    pub fn new() -> Self {
+        DataCleaner {
+            seen: HashSet::new(),
+        }
+    }
+
+    pub fn deduplicate(&mut self, items: Vec<T>) -> Vec<T> {
+        let mut result = Vec::new();
+        
+        for item in items {
+            if !self.seen.contains(&item) {
+                self.seen.insert(item.clone());
+                result.push(item);
+            }
+        }
+        
+        result
+    }
+
+    pub fn normalize_strings(strings: Vec<String>) -> Vec<String> {
+        strings
+            .into_iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    pub fn reset(&mut self) {
+        self.seen.clear();
+    }
+}
+
+impl<T> Default for DataCleaner<T>
+where
+    T: Hash + Eq + Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate_integers() {
+        let mut cleaner = DataCleaner::new();
+        let input = vec![1, 2, 2, 3, 4, 4, 4, 5];
+        let result = cleaner.deduplicate(input);
+        
+        assert_eq!(result, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_deduplicate_strings() {
+        let mut cleaner = DataCleaner::new();
+        let input = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+            "cherry".to_string(),
+        ];
+        let result = cleaner.deduplicate(input);
+        
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn test_normalize_strings() {
+        let input = vec![
+            "  Hello  ".to_string(),
+            "WORLD".to_string(),
+            "".to_string(),
+            "  Rust  ".to_string(),
+        ];
+        let result = DataCleaner::normalize_strings(input);
+        
+        assert_eq!(result, vec!["hello", "world", "rust"]);
+    }
+
+    #[test]
+    fn test_reset() {
+        let mut cleaner = DataCleaner::new();
+        let input1 = vec![1, 2, 3];
+        cleaner.deduplicate(input1);
+        
+        cleaner.reset();
+        
+        let input2 = vec![1, 2, 3];
+        let result = cleaner.deduplicate(input2);
+        
+        assert_eq!(result, vec![1, 2, 3]);
+    }
 }
