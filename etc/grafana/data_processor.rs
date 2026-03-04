@@ -991,4 +991,172 @@ mod tests {
         let filtered = processor.filter_by_category("category_a");
         assert_eq!(filtered.len(), 2);
     }
+}use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    EmptyValues,
+    ValueOutOfRange(f64),
+    MissingMetadata(String),
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "Invalid record ID"),
+            DataError::EmptyValues => write!(f, "Record contains no values"),
+            DataError::ValueOutOfRange(val) => write!(f, "Value {} is out of valid range", val),
+            DataError::MissingMetadata(key) => write!(f, "Missing metadata key: {}", key),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, values: Vec<f64>) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if values.is_empty() {
+            return Err(DataError::EmptyValues);
+        }
+        
+        Ok(Self {
+            id,
+            values,
+            metadata: HashMap::new(),
+        })
+    }
+    
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+    
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+    
+    pub fn validate(&self) -> Result<(), DataError> {
+        for &value in &self.values {
+            if !value.is_finite() {
+                return Err(DataError::ValueOutOfRange(value));
+            }
+        }
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, factor: f64) {
+        for value in &mut self.values {
+            *value *= factor;
+        }
+    }
+    
+    pub fn calculate_mean(&self) -> f64 {
+        if self.values.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.values.iter().sum();
+        sum / self.values.len() as f64
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        record.validate()?;
+        self.records.push(record);
+        Ok(())
+    }
+    
+    pub fn process_all(&mut self, factor: f64) {
+        for record in &mut self.records {
+            record.transform(factor);
+        }
+    }
+    
+    pub fn get_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if self.records.is_empty() {
+            return stats;
+        }
+        
+        let total_records = self.records.len() as f64;
+        let mut total_mean = 0.0;
+        
+        for record in &self.records {
+            total_mean += record.calculate_mean();
+        }
+        
+        stats.insert("total_records".to_string(), total_records);
+        stats.insert("average_mean".to_string(), total_mean / total_records);
+        
+        stats
+    }
+    
+    pub fn filter_by_metadata(&self, key: &str, value: &str) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.get_metadata(key) == Some(&value.to_string()))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.values, vec![1.0, 2.0, 3.0]);
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let result = DataRecord::new(0, vec![1.0, 2.0]);
+        assert!(matches!(result, Err(DataError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_calculate_mean() {
+        let record = DataRecord::new(1, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        assert_eq!(record.calculate_mean(), 2.5);
+    }
+    
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        let record1 = DataRecord::new(1, vec![1.0, 2.0]).unwrap();
+        let record2 = DataRecord::new(2, vec![3.0, 4.0]).unwrap();
+        
+        processor.add_record(record1).unwrap();
+        processor.add_record(record2).unwrap();
+        
+        processor.process_all(2.0);
+        let stats = processor.get_statistics();
+        
+        assert_eq!(stats.get("total_records"), Some(&2.0));
+    }
 }
