@@ -5,124 +5,65 @@ use std::path::Path;
 
 const DEFAULT_KEY: u8 = 0x55;
 
-fn xor_crypt(data: &mut [u8], key: u8) {
-    for byte in data.iter_mut() {
-        *byte ^= key;
-    }
+pub fn xor_encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+    
+    let input_data = fs::read(input_path)?;
+    
+    let encrypted_data: Vec<u8> = input_data
+        .iter()
+        .map(|byte| byte ^ encryption_key)
+        .collect();
+    
+    fs::write(output_path, encrypted_data)?;
+    
+    Ok(())
 }
 
-pub fn encrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
-    let key = key.unwrap_or(DEFAULT_KEY);
-    let mut content = fs::read(input_path)?;
-    xor_crypt(&mut content, key);
-    fs::write(output_path, content)
+pub fn xor_decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
+    xor_encrypt_file(input_path, output_path, key)
 }
 
-pub fn decrypt_file(input_path: &Path, output_path: &Path, key: Option<u8>) -> io::Result<()> {
-    encrypt_file(input_path, output_path, key)
-}
-
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 4 {
-        eprintln!("Usage: {} <encrypt|decrypt> <input> <output>", args[0]);
-        std::process::exit(1);
-    }
-
-    let operation = &args[1];
-    let input_path = Path::new(&args[2]);
-    let output_path = Path::new(&args[3]);
-
+pub fn process_file_interactive() -> io::Result<()> {
+    println!("Enter input file path:");
+    let mut input_path = String::new();
+    io::stdin().read_line(&mut input_path)?;
+    let input_path = input_path.trim();
+    
+    println!("Enter output file path:");
+    let mut output_path = String::new();
+    io::stdin().read_line(&mut output_path)?;
+    let output_path = output_path.trim();
+    
+    println!("Enter operation (encrypt/decrypt):");
+    let mut operation = String::new();
+    io::stdin().read_line(&mut operation)?;
+    let operation = operation.trim().to_lowercase();
+    
+    println!("Enter encryption key (0-255, press Enter for default):");
+    let mut key_input = String::new();
+    io::stdin().read_line(&mut key_input)?;
+    let key_input = key_input.trim();
+    
+    let key = if key_input.is_empty() {
+        None
+    } else {
+        match key_input.parse::<u8>() {
+            Ok(k) => Some(k),
+            Err(_) => {
+                eprintln!("Invalid key, using default");
+                None
+            }
+        }
+    };
+    
     match operation.as_str() {
-        "encrypt" => encrypt_file(input_path, output_path, None),
-        "decrypt" => decrypt_file(input_path, output_path, None),
+        "encrypt" => xor_encrypt_file(input_path, output_path, key),
+        "decrypt" => xor_decrypt_file(input_path, output_path, key),
         _ => {
-            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'.");
-            std::process::exit(1);
+            eprintln!("Invalid operation. Use 'encrypt' or 'decrypt'");
+            Ok(())
         }
-    }
-}
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce
-};
-use pbkdf2::{
-    password_hash::{
-        rand_core::RngCore,
-        PasswordHasher, SaltString
-    },
-    Params, Pbkdf2
-};
-use std::fs;
-use std::io::{Read, Write};
-
-const SALT_LENGTH: usize = 16;
-const NONCE_LENGTH: usize = 12;
-
-pub struct FileEncryptor {
-    key: Key<Aes256Gcm>,
-}
-
-impl FileEncryptor {
-    pub fn from_password(password: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let salt = SaltString::generate(&mut OsRng);
-        let params = Params {
-            rounds: 100_000,
-            output_length: 32,
-        };
-        
-        let password_hash = Pbkdf2.hash_password_customized(
-            password.as_bytes(),
-            None,
-            None,
-            params,
-            &salt
-        )?;
-        
-        let key_bytes = password_hash.hash.ok_or("Failed to generate key")?;
-        let key = Key::<Aes256Gcm>::from_slice(key_bytes.as_bytes());
-        
-        Ok(Self { key: *key })
-    }
-    
-    pub fn encrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut file = fs::File::open(input_path)?;
-        let mut plaintext = Vec::new();
-        file.read_to_end(&mut plaintext)?;
-        
-        let cipher = Aes256Gcm::new(&self.key);
-        let mut nonce_bytes = [0u8; NONCE_LENGTH];
-        OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        
-        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
-            .map_err(|e| format!("Encryption failed: {}", e))?;
-        
-        let mut output = fs::File::create(output_path)?;
-        output.write_all(&nonce_bytes)?;
-        output.write_all(&ciphertext)?;
-        
-        Ok(())
-    }
-    
-    pub fn decrypt_file(&self, input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut file = fs::File::open(input_path)?;
-        let mut encrypted_data = Vec::new();
-        file.read_to_end(&mut encrypted_data)?;
-        
-        if encrypted_data.len() < NONCE_LENGTH {
-            return Err("Invalid encrypted file format".into());
-        }
-        
-        let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_LENGTH);
-        let nonce = Nonce::from_slice(nonce_bytes);
-        let cipher = Aes256Gcm::new(&self.key);
-        
-        let plaintext = cipher.decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Decryption failed: {}", e))?;
-        
-        fs::write(output_path, plaintext)?;
-        Ok(())
     }
 }
 
@@ -132,28 +73,52 @@ mod tests {
     use tempfile::NamedTempFile;
     
     #[test]
-    fn test_encryption_decryption() {
-        let password = "secure_password_123";
-        let encryptor = FileEncryptor::from_password(password).unwrap();
+    fn test_xor_encryption_decryption() {
+        let original_data = b"Hello, World! This is a test.";
         
-        let test_data = b"Hello, this is a secret message!";
         let input_file = NamedTempFile::new().unwrap();
         let encrypted_file = NamedTempFile::new().unwrap();
         let decrypted_file = NamedTempFile::new().unwrap();
         
-        fs::write(input_file.path(), test_data).unwrap();
+        fs::write(input_file.path(), original_data).unwrap();
         
-        encryptor.encrypt_file(
+        xor_encrypt_file(
             input_file.path().to_str().unwrap(),
-            encrypted_file.path().to_str().unwrap()
+            encrypted_file.path().to_str().unwrap(),
+            Some(0x42)
         ).unwrap();
         
-        encryptor.decrypt_file(
+        xor_decrypt_file(
             encrypted_file.path().to_str().unwrap(),
-            decrypted_file.path().to_str().unwrap()
+            decrypted_file.path().to_str().unwrap(),
+            Some(0x42)
         ).unwrap();
         
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
-        assert_eq!(test_data.to_vec(), decrypted_data);
+        assert_eq!(original_data.to_vec(), decrypted_data);
+    }
+    
+    #[test]
+    fn test_default_key() {
+        let test_data = b"Test data for default key";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let output_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), test_data).unwrap();
+        
+        xor_encrypt_file(
+            input_file.path().to_str().unwrap(),
+            output_file.path().to_str().unwrap(),
+            None
+        ).unwrap();
+        
+        let encrypted = fs::read(output_file.path()).unwrap();
+        let should_be_encrypted: Vec<u8> = test_data
+            .iter()
+            .map(|b| b ^ DEFAULT_KEY)
+            .collect();
+        
+        assert_eq!(encrypted, should_be_encrypted);
     }
 }
