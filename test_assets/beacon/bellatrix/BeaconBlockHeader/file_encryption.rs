@@ -256,3 +256,74 @@ mod tests {
         Ok(())
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use pbkdf2::{pbkdf2_hmac, Params};
+use sha2::Sha256;
+use std::fs;
+use std::path::Path;
+
+const SALT_LENGTH: usize = 16;
+const NONCE_LENGTH: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+
+pub struct FileEncryptor {
+    key: Key<Aes256Gcm>,
+}
+
+impl FileEncryptor {
+    pub fn from_password(password: &str, salt: &[u8]) -> Result<Self, String> {
+        let mut key = [0u8; 32];
+        let params = Params {
+            rounds: PBKDF2_ITERATIONS,
+            output_length: key.len(),
+        };
+        
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, params.rounds, &mut key)
+            .map_err(|e| format!("Key derivation failed: {}", e))?;
+        
+        Ok(Self {
+            key: Key::<Aes256Gcm>::from_slice(&key).into(),
+        })
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let data = fs::read(input_path)
+            .map_err(|e| format!("Failed to read input file: {}", e))?;
+        
+        let cipher = Aes256Gcm::new(&self.key);
+        let nonce = Nonce::from_slice(&[0u8; NONCE_LENGTH]);
+        
+        let encrypted_data = cipher.encrypt(nonce, data.as_ref())
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        fs::write(output_path, encrypted_data)
+            .map_err(|e| format!("Failed to write output file: {}", e))?;
+        
+        Ok(())
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        let encrypted_data = fs::read(input_path)
+            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+        
+        let cipher = Aes256Gcm::new(&self.key);
+        let nonce = Nonce::from_slice(&[0u8; NONCE_LENGTH]);
+        
+        let decrypted_data = cipher.decrypt(nonce, encrypted_data.as_ref())
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        fs::write(output_path, decrypted_data)
+            .map_err(|e| format!("Failed to write decrypted file: {}", e))?;
+        
+        Ok(())
+    }
+}
+
+pub fn generate_salt() -> [u8; SALT_LENGTH] {
+    let mut salt = [0u8; SALT_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    salt
+}
