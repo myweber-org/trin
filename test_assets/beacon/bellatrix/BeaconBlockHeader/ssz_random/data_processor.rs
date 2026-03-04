@@ -434,4 +434,79 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert!(filtered.iter().all(|r| r.category == "A"));
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process_csv(&self, filter_column: usize, filter_value: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let mut filtered_data = Vec::new();
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                filtered_data.push(line.split(',').map(|s| s.to_string()).collect());
+                continue;
+            }
+            
+            let columns: Vec<&str> = line.split(',').collect();
+            
+            if columns.get(filter_column).map_or(false, |&val| val == filter_value) {
+                filtered_data.push(columns.iter().map(|&s| s.to_string()).collect());
+            }
+        }
+        
+        Ok(filtered_data)
+    }
+    
+    pub fn count_records(&self) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        
+        let count = reader.lines().count();
+        Ok(count.saturating_sub(1))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_data_processor() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,status").unwrap();
+        writeln!(temp_file, "1,Alice,active").unwrap();
+        writeln!(temp_file, "2,Bob,inactive").unwrap();
+        writeln!(temp_file, "3,Charlie,active").unwrap();
+        
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        
+        let result = processor.process_csv(2, "active").unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[1][0], "1");
+        assert_eq!(result[2][0], "3");
+        
+        let count = processor.count_records().unwrap();
+        assert_eq!(count, 3);
+    }
 }
