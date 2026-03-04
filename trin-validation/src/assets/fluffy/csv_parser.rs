@@ -3,16 +3,17 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct CsvParser {
     delimiter: char,
-    has_headers: bool,
+    has_header: bool,
 }
 
 impl CsvParser {
     pub fn new() -> Self {
         CsvParser {
             delimiter: ',',
-            has_headers: true,
+            has_header: true,
         }
     }
 
@@ -21,8 +22,8 @@ impl CsvParser {
         self
     }
 
-    pub fn without_headers(mut self) -> Self {
-        self.has_headers = false;
+    pub fn with_header(mut self, has_header: bool) -> Self {
+        self.has_header = has_header;
         self
     }
 
@@ -34,239 +35,7 @@ impl CsvParser {
         for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
             
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let record: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if self.has_headers && line_num == 0 {
-                continue;
-            }
-
-            records.push(record);
-        }
-
-        Ok(records)
-    }
-
-    pub fn parse_string(&self, data: &str) -> Vec<Vec<String>> {
-        let mut records = Vec::new();
-        
-        for (line_num, line) in data.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let record: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if self.has_headers && line_num == 0 {
-                continue;
-            }
-
-            records.push(record);
-        }
-
-        records
-    }
-}
-
-impl Default for CsvParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_parsing() {
-        let parser = CsvParser::new();
-        let data = "name,age,city\nJohn,30,New York\nJane,25,London";
-        let result = parser.parse_string(data);
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
-        assert_eq!(result[1], vec!["Jane", "25", "London"]);
-    }
-
-    #[test]
-    fn test_custom_delimiter() {
-        let parser = CsvParser::new().with_delimiter(';');
-        let data = "name;age;city\nJohn;30;New York";
-        let result = parser.parse_string(data);
-        
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
-    }
-
-    #[test]
-    fn test_without_headers() {
-        let parser = CsvParser::new().without_headers();
-        let data = "John,30,New York\nJane,25,London";
-        let result = parser.parse_string(data);
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
-    }
-
-    #[test]
-    fn test_empty_lines_skipped() {
-        let parser = CsvParser::new();
-        let data = "name,age\n\nJohn,30\n\nJane,25\n";
-        let result = parser.parse_string(data);
-        
-        assert_eq!(result.len(), 2);
-    }
-}use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug)]
-pub struct CsvParser {
-    delimiter: char,
-    has_header: bool,
-}
-
-impl CsvParser {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
-        CsvParser {
-            delimiter,
-            has_header,
-        }
-    }
-
-    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-
-        for (line_num, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let record: Vec<String> = line
-                .split(self.delimiter)
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            if self.has_header && line_num == 0 {
-                continue;
-            }
-
-            records.push(record);
-        }
-
-        Ok(records)
-    }
-
-    pub fn parse_string(&self, content: &str) -> Vec<Vec<String>> {
-        content
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| !line.trim().is_empty())
-            .filter(|(i, _)| !(self.has_header && *i == 0))
-            .map(|(_, line)| {
-                line.split(self.delimiter)
-                    .map(|s| s.trim().to_string())
-                    .collect()
-            })
-            .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_parse_with_header() {
-        let parser = CsvParser::new(',', true);
-        let csv_data = "name,age,city\nJohn,30,New York\nJane,25,London";
-        let result = parser.parse_string(csv_data);
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
-        assert_eq!(result[1], vec!["Jane", "25", "London"]);
-    }
-
-    #[test]
-    fn test_parse_without_header() {
-        let parser = CsvParser::new(';', false);
-        let csv_data = "John;30;New York\nJane;25;London";
-        let result = parser.parse_string(csv_data);
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["John", "30", "New York"]);
-    }
-
-    #[test]
-    fn test_parse_file() -> Result<(), Box<dyn Error>> {
-        let mut temp_file = NamedTempFile::new()?;
-        writeln!(temp_file, "id,value,status")?;
-        writeln!(temp_file, "1,100,active")?;
-        writeln!(temp_file, "2,200,inactive")?;
-        
-        let parser = CsvParser::new(',', true);
-        let result = parser.parse_file(temp_file.path())?;
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["1", "100", "active"]);
-        
-        Ok(())
-    }
-
-    #[test]
-    fn test_empty_lines_skipped() {
-        let parser = CsvParser::new(',', false);
-        let csv_data = "a,b,c\n\n\nd,e,f\n\n";
-        let result = parser.parse_string(csv_data);
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["a", "b", "c"]);
-        assert_eq!(result[1], vec!["d", "e", "f"]);
-    }
-}use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-
-#[derive(Debug)]
-pub struct CsvParser {
-    delimiter: char,
-    has_header: bool,
-}
-
-impl CsvParser {
-    pub fn new(delimiter: char, has_header: bool) -> Self {
-        CsvParser {
-            delimiter,
-            has_header,
-        }
-    }
-
-    pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut records = Vec::new();
-
-        for (line_number, line) in reader.lines().enumerate() {
-            let line = line?;
-            
-            if line_number == 0 && self.has_header {
+            if line_num == 0 && self.has_header {
                 continue;
             }
 
@@ -304,41 +73,34 @@ impl CsvParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_parse_string() {
-        let parser = CsvParser::new(',', false);
-        let data = "name,age,city\nJohn,30,New York\nJane,25,London";
-        let result = parser.parse_string(data);
+    fn test_basic_parsing() {
+        let parser = CsvParser::new();
+        let content = "name,age,city\nJohn,30,New York\nJane,25,London";
+        let records = parser.parse_string(content);
         
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["name", "age", "city"]);
-        assert_eq!(result[1], vec!["John", "30", "New York"]);
-    }
-
-    #[test]
-    fn test_parse_file() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "id;value;category").unwrap();
-        writeln!(temp_file, "1;100;A").unwrap();
-        writeln!(temp_file, "2;200;B").unwrap();
-
-        let parser = CsvParser::new(';', true);
-        let result = parser.parse_file(temp_file.path()).unwrap();
-        
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], vec!["1", "100", "A"]);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["John", "30", "New York"]);
+        assert_eq!(records[1], vec!["Jane", "25", "London"]);
     }
 
     #[test]
     fn test_custom_delimiter() {
-        let parser = CsvParser::new('|', false);
-        let data = "field1|field2|field3\nvalue1|value2|value3";
-        let result = parser.parse_string(data);
+        let parser = CsvParser::new().with_delimiter(';');
+        let content = "name;age;city\nJohn;30;New York";
+        let records = parser.parse_string(content);
         
-        assert_eq!(result[0], vec!["field1", "field2", "field3"]);
-        assert_eq!(result[1], vec!["value1", "value2", "value3"]);
+        assert_eq!(records[0], vec!["John", "30", "New York"]);
+    }
+
+    #[test]
+    fn test_no_header() {
+        let parser = CsvParser::new().with_header(false);
+        let content = "John,30,New York\nJane,25,London";
+        let records = parser.parse_string(content);
+        
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], vec!["John", "30", "New York"]);
     }
 }
