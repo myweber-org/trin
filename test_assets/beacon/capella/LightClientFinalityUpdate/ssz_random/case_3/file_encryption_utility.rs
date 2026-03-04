@@ -466,3 +466,123 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+const DEFAULT_KEY: u8 = 0xAA;
+
+pub struct FileEncryptor {
+    key: u8,
+}
+
+impl FileEncryptor {
+    pub fn new(key: Option<u8>) -> Self {
+        FileEncryptor {
+            key: key.unwrap_or(DEFAULT_KEY),
+        }
+    }
+
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        self.process_file(input_path, output_path, true)
+    }
+
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), String> {
+        self.process_file(input_path, output_path, false)
+    }
+
+    fn process_file(&self, input_path: &Path, output_path: &Path, is_encrypt: bool) -> Result<(), String> {
+        if !input_path.exists() {
+            return Err(format!("Input file does not exist: {:?}", input_path));
+        }
+
+        let mut input_file = fs::File::open(input_path)
+            .map_err(|e| format!("Failed to open input file: {}", e))?;
+
+        let mut buffer = Vec::new();
+        input_file.read_to_end(&mut buffer)
+            .map_err(|e| format!("Failed to read input file: {}", e))?;
+
+        let processed_data: Vec<u8> = buffer.iter()
+            .map(|&byte| {
+                if is_encrypt {
+                    byte ^ self.key
+                } else {
+                    byte ^ self.key
+                }
+            })
+            .collect();
+
+        let mut output_file = fs::File::create(output_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+        output_file.write_all(&processed_data)
+            .map_err(|e| format!("Failed to write output file: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn encrypt_string(&self, text: &str) -> Vec<u8> {
+        text.bytes()
+            .map(|byte| byte ^ self.key)
+            .collect()
+    }
+
+    pub fn decrypt_string(&self, data: &[u8]) -> String {
+        data.iter()
+            .map(|&byte| (byte ^ self.key) as char)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_string_encryption_decryption() {
+        let encryptor = FileEncryptor::new(Some(0x55));
+        let original = "Hello, World!";
+        
+        let encrypted = encryptor.encrypt_string(original);
+        let decrypted = encryptor.decrypt_string(&encrypted);
+        
+        assert_eq!(original, decrypted);
+        assert_ne!(original.as_bytes(), encrypted);
+    }
+
+    #[test]
+    fn test_file_encryption_decryption() {
+        let encryptor = FileEncryptor::new(None);
+        let test_content = b"Test file content for encryption";
+        
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        fs::write(input_file.path(), test_content).unwrap();
+        
+        encryptor.encrypt_file(input_file.path(), encrypted_file.path())
+            .expect("Encryption failed");
+        
+        let encrypted_content = fs::read(encrypted_file.path()).unwrap();
+        assert_ne!(test_content, encrypted_content.as_slice());
+        
+        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path())
+            .expect("Decryption failed");
+        
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(test_content, decrypted_content.as_slice());
+    }
+
+    #[test]
+    fn test_nonexistent_file() {
+        let encryptor = FileEncryptor::new(None);
+        let result = encryptor.encrypt_file(Path::new("nonexistent.txt"), Path::new("output.txt"));
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+}
