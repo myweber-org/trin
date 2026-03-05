@@ -142,4 +142,38 @@ mod tests {
         assert_eq!(parsed["c"], 3);
         assert_eq!(parsed["d"], 4);
     }
+}use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+type JsonValue = serde_json::Value;
+
+pub fn merge_json_files(file_paths: &[&str]) -> Result<JsonValue, Box<dyn std::error::Error>> {
+    let mut merged_map = HashMap::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let file_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let content = fs::read_to_string(path)?;
+        let json_data: JsonValue = serde_json::from_str(&content)?;
+
+        merged_map.insert(file_name, json_data);
+    }
+
+    let merged_value = serde_json::to_value(merged_map)?;
+    Ok(merged_value)
+}
+
+pub fn write_merged_json(
+    output_path: &str,
+    merged_data: &JsonValue,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pretty_json = serde_json::to_string_pretty(merged_data)?;
+    fs::write(output_path, pretty_json)?;
+    Ok(())
 }
