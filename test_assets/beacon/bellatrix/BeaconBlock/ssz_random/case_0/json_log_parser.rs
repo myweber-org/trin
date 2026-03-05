@@ -121,4 +121,57 @@ pub fn count_logs_by_level(entries: &[LogEntry]) -> std::collections::HashMap<Lo
     }
     
     counts
+}use std::fs::File;
+use std::io::{BufRead, BufReader};
+use serde_json::Value;
+
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+}
+
+pub fn parse_json_log_file(file_path: &str) -> Result<Vec<LogEntry>, Box<dyn std::error::Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let json_value: Value = serde_json::from_str(&line)?;
+        
+        let timestamp = json_value["timestamp"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+            
+        let level = json_value["level"]
+            .as_str()
+            .unwrap_or("INFO")
+            .to_string();
+            
+        let message = json_value["message"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        entries.push(LogEntry {
+            timestamp,
+            level,
+            message,
+        });
+    }
+
+    Ok(entries)
+}
+
+pub fn filter_errors(entries: &[LogEntry]) -> Vec<&LogEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.level == "ERROR")
+        .collect()
 }
