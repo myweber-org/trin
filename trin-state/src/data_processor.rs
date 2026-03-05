@@ -569,3 +569,85 @@ pub fn generate_sample_data() -> Result<(), Box<dyn Error>> {
     
     Ok(())
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    cache: HashMap<String, Vec<f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn process_numeric_data(&mut self, key: &str, data: Vec<f64>) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty data provided".to_string());
+        }
+
+        if data.iter().any(|&x| !x.is_finite()) {
+            return Err("Invalid numeric values detected".to_string());
+        }
+
+        let processed: Vec<f64> = data
+            .iter()
+            .map(|&x| x * 2.0)
+            .filter(|&x| x > 0.0)
+            .collect();
+
+        if processed.len() < data.len() / 2 {
+            return Err("Too many values filtered out".to_string());
+        }
+
+        self.cache.insert(key.to_string(), processed.clone());
+        Ok(processed)
+    }
+
+    pub fn get_cached_data(&self, key: &str) -> Option<&Vec<f64>> {
+        self.cache.get(key)
+    }
+
+    pub fn calculate_statistics(data: &[f64]) -> (f64, f64, f64) {
+        let sum: f64 = data.iter().sum();
+        let mean = sum / data.len() as f64;
+        
+        let variance: f64 = data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / data.len() as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        (mean, variance, std_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processing() {
+        let mut processor = DataProcessor::new();
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        
+        let result = processor.process_numeric_data("test", data.clone());
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), 5);
+        
+        let stats = DataProcessor::calculate_statistics(&processed);
+        assert!(stats.0 > 0.0);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let data = vec![f64::NAN, 2.0, 3.0];
+        
+        let result = processor.process_numeric_data("invalid", data);
+        assert!(result.is_err());
+    }
+}
