@@ -261,4 +261,90 @@ mod tests {
         let valid = processor.validate_records();
         assert_eq!(valid.len(), 3);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+        }
+    }
+
+    pub fn process_csv(&self, filter_column: usize, filter_value: &str) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut results = Vec::new();
+        let mut line_count = 0;
+
+        for line in reader.lines() {
+            let line = line?;
+            line_count += 1;
+
+            if line_count == 1 {
+                continue;
+            }
+
+            let columns: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+
+            if columns.len() > filter_column {
+                if columns[filter_column] == filter_value {
+                    results.push(columns);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn calculate_average(&self, column_index: usize) -> Result<f64, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut sum = 0.0;
+        let mut count = 0;
+        let mut line_count = 0;
+
+        for line in reader.lines() {
+            let line = line?;
+            line_count += 1;
+
+            if line_count == 1 {
+                continue;
+            }
+
+            let columns: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+
+            if columns.len() > column_index {
+                if let Ok(value) = columns[column_index].parse::<f64>() {
+                    sum += value;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            Ok(sum / count as f64)
+        } else {
+            Ok(0.0)
+        }
+    }
+}
+
+pub fn validate_data_format(data: &[Vec<String>]) -> bool {
+    if data.is_empty() {
+        return true;
+    }
+
+    let expected_len = data[0].len();
+    data.iter().all(|row| row.len() == expected_len)
 }
