@@ -297,4 +297,147 @@ mod tests {
         let decrypted_content = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(original_text.to_vec(), decrypted_content);
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce as ChaChaNonce};
+use rand::RngCore;
+use std::error::Error;
+
+const AES_NONCE_SIZE: usize = 12;
+const CHACHA_NONCE_SIZE: usize = 12;
+
+pub enum CipherType {
+    Aes256Gcm,
+    ChaCha20Poly1305,
+}
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub nonce: Vec<u8>,
+}
+
+pub fn encrypt_data(
+    plaintext: &[u8],
+    key: &[u8],
+    cipher_type: CipherType,
+) -> Result<EncryptionResult, Box<dyn Error>> {
+    match cipher_type {
+        CipherType::Aes256Gcm => {
+            if key.len() != 32 {
+                return Err("AES-256-GCM requires 32-byte key".into());
+            }
+            
+            let cipher = Aes256Gcm::new_from_slice(key)?;
+            let mut nonce_bytes = [0u8; AES_NONCE_SIZE];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            
+            let ciphertext = cipher.encrypt(nonce, plaintext)?;
+            
+            Ok(EncryptionResult {
+                ciphertext,
+                nonce: nonce_bytes.to_vec(),
+            })
+        }
+        
+        CipherType::ChaCha20Poly1305 => {
+            if key.len() != 32 {
+                return Err("ChaCha20Poly1305 requires 32-byte key".into());
+            }
+            
+            let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+            let mut nonce_bytes = [0u8; CHACHA_NONCE_SIZE];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            let nonce = ChaChaNonce::from_slice(&nonce_bytes);
+            
+            let ciphertext = cipher.encrypt(nonce, plaintext)?;
+            
+            Ok(EncryptionResult {
+                ciphertext,
+                nonce: nonce_bytes.to_vec(),
+            })
+        }
+    }
+}
+
+pub fn decrypt_data(
+    ciphertext: &[u8],
+    key: &[u8],
+    nonce: &[u8],
+    cipher_type: CipherType,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    match cipher_type {
+        CipherType::Aes256Gcm => {
+            if key.len() != 32 {
+                return Err("AES-256-GCM requires 32-byte key".into());
+            }
+            if nonce.len() != AES_NONCE_SIZE {
+                return Err(format!("AES-256-GCM requires {}-byte nonce", AES_NONCE_SIZE).into());
+            }
+            
+            let cipher = Aes256Gcm::new_from_slice(key)?;
+            let nonce = Nonce::from_slice(nonce);
+            cipher.decrypt(nonce, ciphertext).map_err(|e| e.into())
+        }
+        
+        CipherType::ChaCha20Poly1305 => {
+            if key.len() != 32 {
+                return Err("ChaCha20Poly1305 requires 32-byte key".into());
+            }
+            if nonce.len() != CHACHA_NONCE_SIZE {
+                return Err(format!("ChaCha20Poly1305 requires {}-byte nonce", CHACHA_NONCE_SIZE).into());
+            }
+            
+            let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+            let nonce = ChaChaNonce::from_slice(nonce);
+            cipher.decrypt(nonce, ciphertext).map_err(|e| e.into())
+        }
+    }
+}
+
+pub fn generate_random_key() -> Vec<u8> {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key.to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_aes_encryption_decryption() {
+        let key = generate_random_key();
+        let plaintext = b"Test secret message";
+        
+        let encrypted = encrypt_data(plaintext, &key, CipherType::Aes256Gcm).unwrap();
+        let decrypted = decrypt_data(&encrypted.ciphertext, &key, &encrypted.nonce, CipherType::Aes256Gcm).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+    
+    #[test]
+    fn test_chacha_encryption_decryption() {
+        let key = generate_random_key();
+        let plaintext = b"Another secret message";
+        
+        let encrypted = encrypt_data(plaintext, &key, CipherType::ChaCha20Poly1305).unwrap();
+        let decrypted = decrypt_data(&encrypted.ciphertext, &key, &encrypted.nonce, CipherType::ChaCha20Poly1305).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+    
+    #[test]
+    fn test_wrong_key_fails() {
+        let key = generate_random_key();
+        let wrong_key = generate_random_key();
+        let plaintext = b"Secret data";
+        
+        let encrypted = encrypt_data(plaintext, &key, CipherType::Aes256Gcm).unwrap();
+        let result = decrypt_data(&encrypted.ciphertext, &wrong_key, &encrypted.nonce, CipherType::Aes256Gcm);
+        
+        assert!(result.is_err());
+    }
 }
