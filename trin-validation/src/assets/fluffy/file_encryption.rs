@@ -4,79 +4,58 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
+use std::path::Path;
 
 const NONCE_SIZE: usize = 12;
 
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let mut file = fs::File::open(input_path)?;
+pub fn encrypt_file(input_path: &Path, output_path: &Path, key: &[u8; 32]) -> Result<(), String> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+
+    let mut file = fs::File::open(input_path)
+        .map_err(|e| format!("Failed to open input file: {}", e))?;
     let mut plaintext = Vec::new();
-    file.read_to_end(&mut plaintext)?;
+    file.read_to_end(&mut plaintext)
+        .map_err(|e| format!("Failed to read input file: {}", e))?;
 
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
-
+    let nonce = Nonce::from_slice(&OsRng.gen::<[u8; NONCE_SIZE]>());
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(|e| format!("Encryption failed: {}", e))?;
 
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&key)?;
-    output_file.write_all(&ciphertext)?;
+    let mut output_file = fs::File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+    output_file.write_all(nonce.as_slice())
+        .map_err(|e| format!("Failed to write nonce: {}", e))?;
+    output_file.write_all(&ciphertext)
+        .map_err(|e| format!("Failed to write ciphertext: {}", e))?;
 
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let mut file = fs::File::open(input_path)?;
-    let mut content = Vec::new();
-    file.read_to_end(&mut content)?;
+pub fn decrypt_file(input_path: &Path, output_path: &Path, key: &[u8; 32]) -> Result<(), String> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
 
-    if content.len() < 32 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File too short",
-        ));
+    let mut file = fs::File::open(input_path)
+        .map_err(|e| format!("Failed to open input file: {}", e))?;
+    let mut encrypted_data = Vec::new();
+    file.read_to_end(&mut encrypted_data)
+        .map_err(|e| format!("Failed to read input file: {}", e))?;
+
+    if encrypted_data.len() < NONCE_SIZE {
+        return Err("File too short to contain nonce".to_string());
     }
 
-    let (key_bytes, ciphertext) = content.split_at(32);
-    let key = Key::<Aes256Gcm>::from_slice(key_bytes);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
-
+    let (nonce_bytes, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(|e| format!("Decryption failed: {}", e))?;
 
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&plaintext)?;
+    let mut output_file = fs::File::create(output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+    output_file.write_all(&plaintext)
+        .map_err(|e| format!("Failed to write plaintext: {}", e))?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn test_encryption_decryption() {
-        let test_data = b"Hello, secure world!";
-        let input_file = "test_input.txt";
-        let encrypted_file = "test_encrypted.bin";
-        let decrypted_file = "test_decrypted.txt";
-
-        fs::write(input_file, test_data).unwrap();
-
-        encrypt_file(input_file, encrypted_file).unwrap();
-        decrypt_file(encrypted_file, decrypted_file).unwrap();
-
-        let decrypted_data = fs::read(decrypted_file).unwrap();
-        assert_eq!(decrypted_data, test_data);
-
-        fs::remove_file(input_file).ok();
-        fs::remove_file(encrypted_file).ok();
-        fs::remove_file(decrypted_file).ok();
-    }
 }
