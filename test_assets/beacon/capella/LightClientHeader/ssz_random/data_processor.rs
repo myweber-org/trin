@@ -434,3 +434,118 @@ mod tests {
         assert_eq!(frequencies.get("B"), Some(&1));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            if index == 0 {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                if let Ok(value) = parts[1].parse::<f64>() {
+                    self.data.push(value);
+                }
+            }
+        }
+        
+        self.metadata.insert("source".to_string(), file_path.to_string());
+        self.metadata.insert("loaded_at".to_string(), chrono::Local::now().to_rfc3339());
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> Statistics {
+        if self.data.is_empty() {
+            return Statistics::default();
+        }
+
+        let sum: f64 = self.data.iter().sum();
+        let count = self.data.len() as f64;
+        let mean = sum / count;
+
+        let variance: f64 = self.data.iter()
+            .map(|value| {
+                let diff = mean - value;
+                diff * diff
+            })
+            .sum::<f64>() / count;
+
+        let sorted_data = {
+            let mut sorted = self.data.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted
+        };
+
+        let median = if count as usize % 2 == 0 {
+            let mid = count as usize / 2;
+            (sorted_data[mid - 1] + sorted_data[mid]) / 2.0
+        } else {
+            sorted_data[count as usize / 2]
+        };
+
+        Statistics {
+            count: self.data.len(),
+            mean,
+            median,
+            variance,
+            std_dev: variance.sqrt(),
+            min: *self.data.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+            max: *self.data.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(),
+        }
+    }
+
+    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<f64> {
+        self.data.iter()
+            .filter(|&&value| value >= threshold)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
+    }
+
+    pub fn data_count(&self) -> usize {
+        self.data.len()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub median: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Statistics:\n  Count: {}\n  Mean: {:.4}\n  Median: {:.4}\n  Variance: {:.4}\n  Std Dev: {:.4}\n  Min: {:.4}\n  Max: {:.4}",
+               self.count, self.mean, self.median, self.variance, self.std_dev, self.min, self.max)
+    }
+}
