@@ -198,3 +198,180 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: ValidationRules,
+}
+
+pub struct ValidationRules {
+    min_value: f64,
+    max_value: f64,
+    required_keys: Vec<String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: ValidationRules {
+                min_value: 0.0,
+                max_value: 100.0,
+                required_keys: vec![
+                    "temperature".to_string(),
+                    "pressure".to_string(),
+                    "humidity".to_string(),
+                ],
+            },
+        }
+    }
+
+    pub fn add_dataset(&mut self, key: String, values: Vec<f64>) -> Result<(), String> {
+        if !self.validation_rules.required_keys.contains(&key) {
+            return Err(format!("Invalid dataset key: {}", key));
+        }
+
+        for &value in &values {
+            if value < self.validation_rules.min_value || value > self.validation_rules.max_value {
+                return Err(format!("Value {} out of range [{}, {}]", 
+                    value, self.validation_rules.min_value, self.validation_rules.max_value));
+            }
+        }
+
+        self.data.insert(key, values);
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> HashMap<String, Stats> {
+        let mut stats_map = HashMap::new();
+
+        for (key, values) in &self.data {
+            if values.is_empty() {
+                continue;
+            }
+
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+
+            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+            stats_map.insert(key.clone(), Stats {
+                mean,
+                variance,
+                min,
+                max,
+                count: values.len(),
+            });
+        }
+
+        stats_map
+    }
+
+    pub fn normalize_data(&mut self) {
+        for values in self.data.values_mut() {
+            if values.is_empty() {
+                continue;
+            }
+
+            let min = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            let range = max - min;
+
+            if range > 0.0 {
+                for value in values.iter_mut() {
+                    *value = (*value - min) / range;
+                }
+            }
+        }
+    }
+
+    pub fn get_data_keys(&self) -> Vec<String> {
+        self.data.keys().cloned().collect()
+    }
+
+    pub fn clear_data(&mut self) {
+        self.data.clear();
+    }
+}
+
+pub struct Stats {
+    pub mean: f64,
+    pub variance: f64,
+    pub min: f64,
+    pub max: f64,
+    pub count: usize,
+}
+
+impl Stats {
+    pub fn standard_deviation(&self) -> f64 {
+        self.variance.sqrt()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor_creation() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.get_data_keys().len(), 0);
+    }
+
+    #[test]
+    fn test_add_valid_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset(
+            "temperature".to_string(),
+            vec![20.0, 25.0, 30.0]
+        );
+        assert!(result.is_ok());
+        assert_eq!(processor.get_data_keys(), vec!["temperature"]);
+    }
+
+    #[test]
+    fn test_add_invalid_dataset() {
+        let mut processor = DataProcessor::new();
+        let result = processor.add_dataset(
+            "invalid_key".to_string(),
+            vec![10.0, 20.0]
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("temperature".to_string(), vec![10.0, 20.0, 30.0]).unwrap();
+        
+        let stats = processor.calculate_statistics();
+        assert!(stats.contains_key("temperature"));
+        
+        let temp_stats = stats.get("temperature").unwrap();
+        assert_eq!(temp_stats.mean, 20.0);
+        assert_eq!(temp_stats.min, 10.0);
+        assert_eq!(temp_stats.max, 30.0);
+        assert_eq!(temp_stats.count, 3);
+    }
+
+    #[test]
+    fn test_normalize_data() {
+        let mut processor = DataProcessor::new();
+        processor.add_dataset("pressure".to_string(), vec![50.0, 75.0, 100.0]).unwrap();
+        
+        processor.normalize_data();
+        
+        let stats = processor.calculate_statistics();
+        let pressure_stats = stats.get("pressure").unwrap();
+        
+        assert_eq!(pressure_stats.min, 0.0);
+        assert_eq!(pressure_stats.max, 1.0);
+    }
+}
