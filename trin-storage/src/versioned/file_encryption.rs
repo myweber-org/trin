@@ -1,212 +1,37 @@
 
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
 
-pub struct XorCipher {
-    key: Vec<u8>,
-    key_index: usize,
-}
-
-impl XorCipher {
-    pub fn new(key: &str) -> Self {
-        XorCipher {
-            key: key.as_bytes().to_vec(),
-            key_index: 0,
-        }
-    }
-
-    pub fn encrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path)
-    }
-
-    pub fn decrypt_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        self.process_file(source_path, dest_path)
-    }
-
-    fn process_file(&mut self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
-        let mut source_file = fs::File::open(source_path)?;
-        let mut dest_file = fs::File::create(dest_path)?;
-
-        let mut buffer = [0u8; 4096];
-        self.key_index = 0;
-
-        loop {
-            let bytes_read = source_file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-
-            for i in 0..bytes_read {
-                buffer[i] ^= self.key[self.key_index];
-                self.key_index = (self.key_index + 1) % self.key.len();
-            }
-
-            dest_file.write_all(&buffer[..bytes_read])?;
-        }
-
-        dest_file.flush()?;
-        Ok(())
-    }
-}
-
-pub fn validate_key(key: &str) -> Result<(), &'static str> {
-    if key.is_empty() {
-        return Err("Encryption key cannot be empty");
-    }
-    if key.len() < 8 {
-        return Err("Encryption key must be at least 8 characters long");
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_xor_cipher_symmetry() {
-        let key = "strong_secret_key_123!";
-        let original_data = b"Hello, this is a secret message!";
-        
-        let mut cipher = XorCipher::new(key);
-        let mut encrypted = original_data.to_vec();
-        
-        for i in 0..encrypted.len() {
-            encrypted[i] ^= cipher.key[i % cipher.key.len()];
-        }
-        
-        let mut decrypted = encrypted.clone();
-        cipher.key_index = 0;
-        for i in 0..decrypted.len() {
-            decrypted[i] ^= cipher.key[i % cipher.key.len()];
-        }
-        
-        assert_eq!(original_data, decrypted.as_slice());
-    }
-
-    #[test]
-    fn test_file_encryption() {
-        let key = "test_encryption_key";
-        let mut cipher = XorCipher::new(key);
-        
-        let original_content = "Sensitive data that needs protection";
-        let source_file = NamedTempFile::new().unwrap();
-        let dest_file = NamedTempFile::new().unwrap();
-        
-        fs::write(source_file.path(), original_content).unwrap();
-        
-        cipher.encrypt_file(source_file.path(), dest_file.path()).unwrap();
-        
-        let encrypted_content = fs::read(dest_file.path()).unwrap();
-        assert_ne!(original_content.as_bytes(), encrypted_content.as_slice());
-        
-        let mut cipher2 = XorCipher::new(key);
-        let decrypted_file = NamedTempFile::new().unwrap();
-        cipher2.decrypt_file(dest_file.path(), decrypted_file.path()).unwrap();
-        
-        let decrypted_content = fs::read_to_string(decrypted_file.path()).unwrap();
-        assert_eq!(original_content, decrypted_content);
-    }
-
-    #[test]
-    fn test_key_validation() {
-        assert!(validate_key("valid_long_key").is_ok());
-        assert!(validate_key("short").is_err());
-        assert!(validate_key("").is_err());
-    }
-}
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::Path;
-
-const DEFAULT_KEY: u8 = 0x55;
-
-pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    let encryption_key = key.unwrap_or(DEFAULT_KEY);
+pub fn encrypt_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input_path)?;
     
-    let encrypted_data: Vec<u8> = data.iter()
-        .map(|byte| byte ^ encryption_key)
-        .collect();
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
+    
+    let encrypted_data = cipher.encrypt(nonce, data.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
     
     fs::write(output_path, encrypted_data)?;
+    fs::write(format!("{}.key", output_path), key.as_slice())?;
+    
     Ok(())
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<u8>) -> io::Result<()> {
-    encrypt_file(input_path, output_path, key)
-}
-
-pub fn process_file_interactive() -> io::Result<()> {
-    println!("Enter input file path:");
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input_path = input.trim();
+pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let encrypted_data = fs::read(input_path)?;
+    let key_bytes = fs::read(key_path)?;
     
-    println!("Enter output file path:");
-    let mut output = String::new();
-    io::stdin().read_line(&mut output)?;
-    let output_path = output.trim();
+    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(b"unique_nonce_");
     
-    println!("Enter encryption key (0-255, press Enter for default):");
-    let mut key_input = String::new();
-    io::stdin().read_line(&mut key_input)?;
+    let decrypted_data = cipher.decrypt(nonce, encrypted_data.as_ref())
+        .map_err(|e| format!("Decryption failed: {}", e))?;
     
-    let key = if key_input.trim().is_empty() {
-        None
-    } else {
-        match key_input.trim().parse::<u8>() {
-            Ok(k) => Some(k),
-            Err(_) => {
-                eprintln!("Invalid key, using default");
-                None
-            }
-        }
-    };
-    
-    println!("Encrypt (e) or Decrypt (d)?");
-    let mut mode = String::new();
-    io::stdin().read_line(&mut mode)?;
-    
-    match mode.trim() {
-        "e" => encrypt_file(input_path, output_path, key),
-        "d" => decrypt_file(input_path, output_path, key),
-        _ => {
-            eprintln!("Invalid mode selected");
-            Ok(())
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    
-    #[test]
-    fn test_encryption_decryption() {
-        let original_data = b"Hello, World!";
-        let temp_input = NamedTempFile::new().unwrap();
-        let temp_encrypted = NamedTempFile::new().unwrap();
-        let temp_decrypted = NamedTempFile::new().unwrap();
-        
-        fs::write(temp_input.path(), original_data).unwrap();
-        
-        encrypt_file(
-            temp_input.path().to_str().unwrap(),
-            temp_encrypted.path().to_str().unwrap(),
-            Some(0x42)
-        ).unwrap();
-        
-        decrypt_file(
-            temp_encrypted.path().to_str().unwrap(),
-            temp_decrypted.path().to_str().unwrap(),
-            Some(0x42)
-        ).unwrap();
-        
-        let decrypted_data = fs::read(temp_decrypted.path()).unwrap();
-        assert_eq!(original_data.to_vec(), decrypted_data);
-    }
+    fs::write(output_path, decrypted_data)?;
+    Ok(())
 }
