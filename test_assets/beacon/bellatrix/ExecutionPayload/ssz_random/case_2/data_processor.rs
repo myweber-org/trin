@@ -111,3 +111,115 @@ mod tests {
         assert_eq!(freq.get("B"), Some(&1));
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, timestamp: i64, values: Vec<f64>) -> Self {
+        DataRecord {
+            id,
+            timestamp,
+            values,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.id == 0 {
+            return Err("Invalid record ID".into());
+        }
+        
+        if self.timestamp < 0 {
+            return Err("Timestamp cannot be negative".into());
+        }
+        
+        if self.values.is_empty() {
+            return Err("Values array cannot be empty".into());
+        }
+        
+        for value in &self.values {
+            if !value.is_finite() {
+                return Err("Values must be finite numbers".into());
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+pub fn transform_values(record: &mut DataRecord, multiplier: f64) {
+    for value in &mut record.values {
+        *value *= multiplier;
+    }
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+    
+    let total_records = records.len() as f64;
+    let mut value_sum = 0.0;
+    let mut value_count = 0;
+    
+    for record in records {
+        for value in &record.values {
+            value_sum += value;
+            value_count += 1;
+        }
+    }
+    
+    stats.insert("total_records".to_string(), total_records);
+    stats.insert("average_value".to_string(), value_sum / value_count as f64);
+    stats.insert("total_values".to_string(), value_count as f64);
+    
+    stats
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        assert!(valid_record.validate().is_ok());
+        
+        let invalid_record = DataRecord::new(0, 1234567890, vec![1.0, 2.0]);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut record = DataRecord::new(1, 1234567890, vec![1.0, 2.0, 3.0]);
+        transform_values(&mut record, 2.0);
+        assert_eq!(record.values, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            DataRecord::new(1, 1234567890, vec![1.0, 2.0]),
+            DataRecord::new(2, 1234567891, vec![3.0, 4.0]),
+        ];
+        
+        let stats = calculate_statistics(&records);
+        assert_eq!(stats["total_records"], 2.0);
+        assert_eq!(stats["average_value"], 2.5);
+        assert_eq!(stats["total_values"], 4.0);
+    }
+}
