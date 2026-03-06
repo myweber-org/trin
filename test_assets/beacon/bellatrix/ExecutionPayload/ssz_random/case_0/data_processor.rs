@@ -362,3 +362,111 @@ mod tests {
         assert_eq!(std_dev, 8.16496580927726);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum ValidationError {
+    EmptyField,
+    InvalidFormat,
+    OutOfRange,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::EmptyField => write!(f, "Field cannot be empty"),
+            ValidationError::InvalidFormat => write!(f, "Invalid data format"),
+            ValidationError::OutOfRange => write!(f, "Value out of acceptable range"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+pub struct UserData {
+    pub username: String,
+    pub age: u8,
+    pub email: String,
+}
+
+pub fn validate_username(username: &str) -> Result<(), ValidationError> {
+    if username.trim().is_empty() {
+        return Err(ValidationError::EmptyField);
+    }
+    if username.len() < 3 || username.len() > 20 {
+        return Err(ValidationError::OutOfRange);
+    }
+    if !username.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err(ValidationError::InvalidFormat);
+    }
+    Ok(())
+}
+
+pub fn validate_age(age: u8) -> Result<(), ValidationError> {
+    if age < 13 || age > 120 {
+        return Err(ValidationError::OutOfRange);
+    }
+    Ok(())
+}
+
+pub fn validate_email(email: &str) -> Result<(), ValidationError> {
+    if email.trim().is_empty() {
+        return Err(ValidationError::EmptyField);
+    }
+    if !email.contains('@') || !email.contains('.') {
+        return Err(ValidationError::InvalidFormat);
+    }
+    Ok(())
+}
+
+pub fn process_user_data(username: &str, age: u8, email: &str) -> Result<UserData, ValidationError> {
+    validate_username(username)?;
+    validate_age(age)?;
+    validate_email(email)?;
+
+    Ok(UserData {
+        username: username.to_string(),
+        age,
+        email: email.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_username() {
+        assert!(validate_username("john_doe123").is_ok());
+    }
+
+    #[test]
+    fn test_invalid_username_empty() {
+        assert!(matches!(
+            validate_username(""),
+            Err(ValidationError::EmptyField)
+        ));
+    }
+
+    #[test]
+    fn test_valid_age() {
+        assert!(validate_age(25).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_age() {
+        assert!(matches!(validate_age(5), Err(ValidationError::OutOfRange)));
+    }
+
+    #[test]
+    fn test_valid_email() {
+        assert!(validate_email("user@example.com").is_ok());
+    }
+
+    #[test]
+    fn test_process_valid_data() {
+        let result = process_user_data("alice", 30, "alice@example.com");
+        assert!(result.is_ok());
+    }
+}
