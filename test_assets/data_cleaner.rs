@@ -1,66 +1,79 @@
-use csv::{ReaderBuilder, WriterBuilder};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::collections::HashMap;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Record {
-    id: u32,
-    name: String,
-    email: String,
-    age: u8,
+pub struct DataCleaner {
+    data: Vec<f64>,
+    thresholds: HashMap<String, f64>,
 }
 
-fn normalize_email(email: &str) -> String {
-    email.trim().to_lowercase()
-}
-
-fn validate_age(age: u8) -> Option<u8> {
-    if age > 0 && age < 120 {
-        Some(age)
-    } else {
-        None
-    }
-}
-
-fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let input_file = File::open(input_path)?;
-    let reader = BufReader::new(input_file);
-    let mut csv_reader = ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(reader);
-
-    let output_file = File::create(output_path)?;
-    let writer = BufWriter::new(output_file);
-    let mut csv_writer = WriterBuilder::new()
-        .has_headers(true)
-        .from_writer(writer);
-
-    for result in csv_reader.deserialize() {
-        let mut record: Record = result?;
-        
-        record.email = normalize_email(&record.email);
-        record.name = record.name.trim().to_string();
-        
-        if let Some(valid_age) = validate_age(record.age) {
-            record.age = valid_age;
-            csv_writer.serialize(&record)?;
+impl DataCleaner {
+    pub fn new(data: Vec<f64>) -> Self {
+        DataCleaner {
+            data,
+            thresholds: HashMap::new(),
         }
     }
 
-    csv_writer.flush()?;
-    Ok(())
+    pub fn calculate_iqr_thresholds(&mut self) {
+        let mut sorted_data = self.data.clone();
+        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let q1_index = (sorted_data.len() as f64 * 0.25).floor() as usize;
+        let q3_index = (sorted_data.len() as f64 * 0.75).floor() as usize;
+
+        let q1 = sorted_data[q1_index];
+        let q3 = sorted_data[q3_index];
+        let iqr = q3 - q1;
+
+        self.thresholds.insert("lower".to_string(), q1 - 1.5 * iqr);
+        self.thresholds.insert("upper".to_string(), q3 + 1.5 * iqr);
+    }
+
+    pub fn remove_outliers(&self) -> Vec<f64> {
+        let lower = *self.thresholds.get("lower").unwrap_or(&f64::MIN);
+        let upper = *self.thresholds.get("upper").unwrap_or(&f64::MAX);
+
+        self.data
+            .iter()
+            .filter(|&&value| value >= lower && value <= upper)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if !self.data.is_empty() {
+            let sum: f64 = self.data.iter().sum();
+            let mean = sum / self.data.len() as f64;
+            
+            let variance: f64 = self.data
+                .iter()
+                .map(|value| (value - mean).powi(2))
+                .sum::<f64>() / self.data.len() as f64;
+            
+            let std_dev = variance.sqrt();
+            
+            stats.insert("mean".to_string(), mean);
+            stats.insert("std_dev".to_string(), std_dev);
+            stats.insert("count".to_string(), self.data.len() as f64);
+        }
+        
+        stats
+    }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let input_file = "raw_data.csv";
-    let output_file = "cleaned_data.csv";
-    
-    match clean_csv(input_file, output_file) {
-        Ok(_) => println!("Data cleaning completed successfully."),
-        Err(e) => eprintln!("Error during data cleaning: {}", e),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_outlier_removal() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
+        let mut cleaner = DataCleaner::new(data);
+        cleaner.calculate_iqr_thresholds();
+        let cleaned = cleaner.remove_outliers();
+        
+        assert_eq!(cleaned.len(), 5);
+        assert!(!cleaned.contains(&100.0));
     }
-    
-    Ok(())
 }
