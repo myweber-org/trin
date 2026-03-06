@@ -208,4 +208,87 @@ mod tests {
         assert_eq!(parsed["age"], 31);
         assert_eq!(parsed["city"], "Berlin");
     }
+}use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
+
+pub fn merge_json_files<P: AsRef<Path>>(paths: &[P], deduplicate: bool) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut merged_array = Vec::new();
+    let mut seen_objects = HashSet::new();
+
+    for path in paths {
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        let json_value: Value = serde_json::from_str(&contents)?;
+
+        match json_value {
+            Value::Array(arr) => {
+                for item in arr {
+                    if deduplicate {
+                        let serialized = serde_json::to_string(&item)?;
+                        if seen_objects.insert(serialized) {
+                            merged_array.push(item);
+                        }
+                    } else {
+                        merged_array.push(item);
+                    }
+                }
+            }
+            Value::Object(_) => {
+                if deduplicate {
+                    let serialized = serde_json::to_string(&json_value)?;
+                    if seen_objects.insert(serialized) {
+                        merged_array.push(json_value);
+                    }
+                } else {
+                    merged_array.push(json_value);
+                }
+            }
+            _ => return Err("Input JSON must be an array or object".into()),
+        }
+    }
+
+    Ok(Value::Array(merged_array))
+}
+
+pub fn write_merged_json<P: AsRef<Path>>(output_path: P, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
+    let file = File::create(output_path)?;
+    serde_json::to_writer_pretty(file, value)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_merge_arrays() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        writeln!(file1.as_file(), r#"[{"id": 1}, {"id": 2}]"#).unwrap();
+        writeln!(file2.as_file(), r#"[{"id": 3}, {"id": 4}]"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()], false).unwrap();
+        assert_eq!(result.as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_deduplicate() {
+        let file1 = NamedTempFile::new().unwrap();
+        let file2 = NamedTempFile::new().unwrap();
+
+        writeln!(file1.as_file(), r#"[{"id": 1}, {"id": 2}]"#).unwrap();
+        writeln!(file2.as_file(), r#"[{"id": 2}, {"id": 3}]"#).unwrap();
+
+        let result = merge_json_files(&[file1.path(), file2.path()], true).unwrap();
+        assert_eq!(result.as_array().unwrap().len(), 3);
+    }
 }
