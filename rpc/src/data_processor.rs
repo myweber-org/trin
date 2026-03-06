@@ -1063,4 +1063,106 @@ mod tests {
         assert_eq!(ds.max(), Some(5.0));
         assert_eq!(ds.count(), 5);
     }
+}use csv::{Reader, Writer};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    category: String,
+}
+
+#[derive(Debug)]
+struct ProcessedData {
+    total_records: usize,
+    average_value: f64,
+    categories: Vec<String>,
+}
+
+impl Record {
+    fn is_valid(&self) -> bool {
+        !self.name.trim().is_empty() 
+            && self.value >= 0.0 
+            && !self.category.trim().is_empty()
+    }
+}
+
+pub fn process_csv_file(input_path: &str, output_path: &str) -> Result<ProcessedData, Box<dyn Error>> {
+    let path = Path::new(input_path);
+    if !path.exists() {
+        return Err("Input file does not exist".into());
+    }
+
+    let mut reader = Reader::from_path(input_path)?;
+    let mut writer = Writer::from_path(output_path)?;
+    
+    let mut total_value = 0.0;
+    let mut valid_count = 0;
+    let mut categories = Vec::new();
+    let mut processed_records = Vec::new();
+
+    for result in reader.deserialize() {
+        let record: Record = result?;
+        
+        if record.is_valid() {
+            total_value += record.value;
+            valid_count += 1;
+            
+            if !categories.contains(&record.category) {
+                categories.push(record.category.clone());
+            }
+            
+            processed_records.push(record);
+        }
+    }
+
+    for record in &processed_records {
+        writer.serialize(record)?;
+    }
+
+    writer.flush()?;
+
+    let average_value = if valid_count > 0 {
+        total_value / valid_count as f64
+    } else {
+        0.0
+    };
+
+    Ok(ProcessedData {
+        total_records: valid_count,
+        average_value,
+        categories,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_valid_record() {
+        let record = Record {
+            id: 1,
+            name: "Test".to_string(),
+            value: 10.5,
+            category: "A".to_string(),
+        };
+        assert!(record.is_valid());
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        let record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -5.0,
+            category: "".to_string(),
+        };
+        assert!(!record.is_valid());
+    }
 }
