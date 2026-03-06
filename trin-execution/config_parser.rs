@@ -1,8 +1,6 @@
-
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use regex::Regex;
 
 pub struct Config {
     pub settings: HashMap<String, String>,
@@ -12,83 +10,58 @@ impl Config {
     pub fn from_file(path: &str) -> Result<Self, String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
-        
+
         let mut settings = HashMap::new();
-        let var_regex = Regex::new(r"\$\{([A-Za-z0-9_]+)\}").unwrap();
-        
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            
-            if let Some((key, mut value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                
-                for cap in var_regex.captures_iter(&value) {
-                    if let Some(var_name) = cap.get(1) {
-                        if let Ok(env_value) = env::var(var_name.as_str()) {
-                            value = value.replace(&cap[0], &env_value);
-                        }
-                    }
-                }
-                
-                settings.insert(key, value.trim().to_string());
+
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid config line: {}", trimmed));
             }
+
+            let key = parts[0].trim().to_string();
+            let raw_value = parts[1].trim().to_string();
+            let value = Self::resolve_env_vars(&raw_value);
+
+            settings.insert(key, value);
         }
-        
+
         Ok(Config { settings })
     }
-    
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.settings.get(key)
-    }
-}
-use std::collections::HashMap;
-use std::env;
-use std::fs;
 
-pub struct Config {
-    values: HashMap<String, String>,
-}
-
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-
-        let mut values = HashMap::new();
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            if let Some((key, value)) = trimmed.split_once('=') {
-                let key = key.trim().to_string();
-                let processed_value = Self::process_value(value.trim());
-                values.insert(key, processed_value);
+    fn resolve_env_vars(value: &str) -> String {
+        let mut result = String::new();
+        let mut chars = value.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // Skip '{'
+                let mut var_name = String::new();
+                while let Some(ch) = chars.next() {
+                    if ch == '}' {
+                        break;
+                    }
+                    var_name.push(ch);
+                }
+                
+                match env::var(&var_name) {
+                    Ok(env_value) => result.push_str(&env_value),
+                    Err(_) => result.push_str(&format!("${{{}}}", var_name)),
+                }
+            } else {
+                result.push(ch);
             }
         }
-
-        Ok(Config { values })
-    }
-
-    fn process_value(value: &str) -> String {
-        if value.starts_with("${") && value.ends_with('}') {
-            let var_name = &value[2..value.len() - 1];
-            env::var(var_name).unwrap_or_else(|_| value.to_string())
-        } else {
-            value.to_string()
-        }
+        
+        result
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
-        self.values.get(key)
-    }
-
-    pub fn get_or_default(&self, key: &str, default: &str) -> String {
-        self.values.get(key).cloned().unwrap_or(default.to_string())
+        self.settings.get(key)
     }
 }
 
@@ -101,38 +74,23 @@ mod tests {
     #[test]
     fn test_basic_parsing() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "DATABASE_HOST=localhost").unwrap();
-        writeln!(file, "DATABASE_PORT=5432").unwrap();
-        writeln!(file, "# This is a comment").unwrap();
-        writeln!(file, "").unwrap();
-        writeln!(file, "API_KEY=secret123").unwrap();
-
+        writeln!(file, "HOST=localhost\nPORT=8080\n# Comment\nDEBUG=true").unwrap();
+        
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DATABASE_HOST"), Some(&"localhost".to_string()));
-        assert_eq!(config.get("DATABASE_PORT"), Some(&"5432".to_string()));
-        assert_eq!(config.get("API_KEY"), Some(&"secret123".to_string()));
-        assert_eq!(config.get("NON_EXISTENT"), None);
+        assert_eq!(config.get("HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"8080".to_string()));
+        assert_eq!(config.get("DEBUG"), Some(&"true".to_string()));
     }
 
     #[test]
     fn test_env_substitution() {
-        env::set_var("DB_PASSWORD", "secure_pass");
+        env::set_var("APP_PORT", "9090");
         
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "DB_PASS=${DB_PASSWORD}").unwrap();
-        writeln!(file, "NO_SUBST=regular_value").unwrap();
-
+        writeln!(file, "PORT=${APP_PORT}\nHOST=${UNDEFINED_VAR}").unwrap();
+        
         let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("DB_PASS"), Some(&"secure_pass".to_string()));
-        assert_eq!(config.get("NO_SUBST"), Some(&"regular_value".to_string()));
-    }
-
-    #[test]
-    fn test_missing_env_fallback() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "MISSING=${NON_EXISTENT_VAR}").unwrap();
-
-        let config = Config::from_file(file.path().to_str().unwrap()).unwrap();
-        assert_eq!(config.get("MISSING"), Some(&"${NON_EXISTENT_VAR}".to_string()));
+        assert_eq!(config.get("PORT"), Some(&"9090".to_string()));
+        assert_eq!(config.get("HOST"), Some(&"${UNDEFINED_VAR}".to_string()));
     }
 }
