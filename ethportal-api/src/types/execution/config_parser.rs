@@ -48,4 +48,57 @@ impl Config {
     pub fn get_threshold(&self, key: &str) -> Option<f64> {
         self.thresholds.get(key).copied()
     }
+}use std::fs;
+use std::collections::HashMap;
+use std::error::Error;
+
+pub type ConfigMap = HashMap<String, String>;
+
+#[derive(Debug)]
+pub enum ConfigError {
+    IoError(std::io::Error),
+    ParseError(String),
+}
+
+impl From<std::io::Error> for ConfigError {
+    fn from(err: std::io::Error) -> Self {
+        ConfigError::IoError(err)
+    }
+}
+
+pub fn parse_config_file(path: &str) -> Result<ConfigMap, ConfigError> {
+    let content = fs::read_to_string(path)?;
+    let mut config = HashMap::new();
+
+    for (line_num, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            return Err(ConfigError::ParseError(
+                format!("Invalid format at line {}", line_num + 1)
+            ));
+        }
+
+        let key = parts[0].trim().to_string();
+        let value = parts[1].trim().to_string();
+        
+        if key.is_empty() {
+            return Err(ConfigError::ParseError(
+                format!("Empty key at line {}", line_num + 1)
+            ));
+        }
+
+        config.insert(key, value);
+    }
+
+    Ok(config)
+}
+
+pub fn get_config_value(config: &ConfigMap, key: &str) -> Option<&String> {
+    config.get(key)
 }
