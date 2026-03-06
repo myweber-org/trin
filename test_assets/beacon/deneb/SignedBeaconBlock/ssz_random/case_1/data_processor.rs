@@ -201,3 +201,138 @@ mod tests {
         assert_eq!(filtered.len(), 5);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    tags: Vec<String>,
+    metadata: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    MissingRequiredTag,
+    DuplicateMetadataKey,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than zero"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value cannot be negative"),
+            ValidationError::MissingRequiredTag => write!(f, "Record must have at least one tag"),
+            ValidationError::DuplicateMetadataKey => write!(f, "Metadata keys must be unique"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Self {
+        DataRecord {
+            id,
+            name,
+            value,
+            tags: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        
+        if self.tags.is_empty() {
+            return Err(ValidationError::MissingRequiredTag);
+        }
+        
+        Ok(())
+    }
+
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+
+    pub fn add_metadata(&mut self, key: String, value: String) -> Result<(), ValidationError> {
+        if self.metadata.contains_key(&key) {
+            return Err(ValidationError::DuplicateMetadataKey);
+        }
+        self.metadata.insert(key, value);
+        Ok(())
+    }
+
+    pub fn transform_value(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+    }
+
+    pub fn get_normalized_value(&self, base: f64) -> f64 {
+        if base == 0.0 {
+            return 0.0;
+        }
+        self.value / base
+    }
+
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
+    }
+
+    pub fn merge_metadata(&mut self, other: HashMap<String, String>) {
+        for (key, value) in other {
+            let _ = self.add_metadata(key, value);
+        }
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Vec<Result<(), ValidationError>> {
+    let mut results = Vec::new();
+    
+    for record in records {
+        match record.validate() {
+            Ok(()) => {
+                record.transform_value(multiplier);
+                results.push(Ok(()));
+            }
+            Err(e) => {
+                results.push(Err(e));
+            }
+        }
+    }
+    
+    results
+}
+
+pub fn filter_records_by_tag(records: &[DataRecord], tag: &str) -> Vec<&DataRecord> {
+    records.iter()
+        .filter(|record| record.has_tag(tag))
+        .collect()
+}
+
+pub fn calculate_average_value(records: &[DataRecord]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    Some(sum / records.len() as f64)
+}
