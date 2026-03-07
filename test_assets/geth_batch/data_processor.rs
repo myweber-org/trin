@@ -658,3 +658,116 @@ mod tests {
         assert_eq!(processor.calculate_average(), Some(20.0));
     }
 }
+use csv::{ReaderBuilder, WriterBuilder};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Record {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+impl Record {
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.value >= 0.0 && !self.category.is_empty()
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+        
+        let mut count = 0;
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            if record.is_valid() {
+                self.records.push(record);
+                count += 1;
+            }
+        }
+        
+        Ok(count)
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .cloned()
+            .collect()
+    }
+
+    pub fn calculate_average(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = self.records.iter().map(|r| r.value).sum();
+        Some(sum / self.records.len() as f64)
+    }
+
+    pub fn save_to_csv<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut wtr = WriterBuilder::new().has_headers(true).from_writer(file);
+        
+        for record in &self.records {
+            wtr.serialize(record)?;
+        }
+        
+        wtr.flush()?;
+        Ok(())
+    }
+
+    pub fn get_statistics(&self) -> Statistics {
+        let count = self.records.len();
+        let avg = self.calculate_average().unwrap_or(0.0);
+        let max = self.records.iter().map(|r| r.value).fold(0.0, f64::max);
+        let min = self.records.iter().map(|r| r.value).fold(f64::INFINITY, f64::min);
+        
+        Statistics {
+            total_records: count,
+            average_value: avg,
+            max_value: max,
+            min_value: min,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Statistics {
+    pub total_records: usize,
+    pub average_value: f64,
+    pub max_value: f64,
+    pub min_value: f64,
+}
+
+pub fn process_data_file(input_path: &str, output_path: &str) -> Result<Statistics, Box<dyn Error>> {
+    let mut processor = DataProcessor::new();
+    let loaded = processor.load_from_csv(input_path)?;
+    
+    println!("Loaded {} valid records", loaded);
+    
+    let stats = processor.get_statistics();
+    println!("Statistics: {:?}", stats);
+    
+    processor.save_to_csv(output_path)?;
+    println!("Processed data saved to {}", output_path);
+    
+    Ok(stats)
+}
