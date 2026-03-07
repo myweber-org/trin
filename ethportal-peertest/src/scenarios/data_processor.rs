@@ -476,3 +476,147 @@ mod tests {
         assert_eq!(result, Ok("HELLO".to_string()));
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    records: Vec<HashMap<String, f64>>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        if let Some(header_result) = lines.next() {
+            let header_line = header_result?;
+            let headers: Vec<String> = header_line.split(',').map(|s| s.trim().to_string()).collect();
+            
+            for line_result in lines {
+                let line = line_result?;
+                let values: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+                
+                if values.len() == headers.len() {
+                    let mut record = HashMap::new();
+                    for (i, header) in headers.iter().enumerate() {
+                        if let Ok(num) = values[i].parse::<f64>() {
+                            record.insert(header.clone(), num);
+                        }
+                    }
+                    self.records.push(record);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_mean(&self, column_name: &str) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut count = 0;
+        
+        for record in &self.records {
+            if let Some(&value) = record.get(column_name) {
+                sum += value;
+                count += 1;
+            }
+        }
+        
+        if count > 0 {
+            Some(sum / count as f64)
+        } else {
+            None
+        }
+    }
+
+    pub fn calculate_standard_deviation(&self, column_name: &str) -> Option<f64> {
+        let mean = self.calculate_mean(column_name)?;
+        let mut sum_squared_diff = 0.0;
+        let mut count = 0;
+        
+        for record in &self.records {
+            if let Some(&value) = record.get(column_name) {
+                let diff = value - mean;
+                sum_squared_diff += diff * diff;
+                count += 1;
+            }
+        }
+        
+        if count > 1 {
+            Some((sum_squared_diff / (count - 1) as f64).sqrt())
+        } else {
+            None
+        }
+    }
+
+    pub fn filter_records(&self, column_name: &str, threshold: f64) -> Vec<HashMap<String, f64>> {
+        self.records
+            .iter()
+            .filter(|record| {
+                record.get(column_name)
+                    .map(|&value| value >= threshold)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn column_names(&self) -> Vec<String> {
+        if let Some(first_record) = self.records.first() {
+            first_record.keys().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "temperature,humidity,pressure").unwrap();
+        writeln!(temp_file, "25.5,60.2,1013.2").unwrap();
+        writeln!(temp_file, "22.8,65.1,1012.8").unwrap();
+        writeln!(temp_file, "28.3,55.7,1014.5").unwrap();
+        
+        let file_path = temp_file.path().to_str().unwrap();
+        
+        let mut processor = DataProcessor::new();
+        let result = processor.load_csv(file_path);
+        assert!(result.is_ok());
+        assert_eq!(processor.record_count(), 3);
+        
+        let mean_temp = processor.calculate_mean("temperature");
+        assert!(mean_temp.is_some());
+        assert!((mean_temp.unwrap() - 25.53333333333333).abs() < 0.0001);
+        
+        let std_temp = processor.calculate_standard_deviation("temperature");
+        assert!(std_temp.is_some());
+        assert!((std_temp.unwrap() - 2.751351724350416).abs() < 0.0001);
+        
+        let filtered = processor.filter_records("temperature", 26.0);
+        assert_eq!(filtered.len(), 1);
+        
+        let column_names = processor.column_names();
+        assert_eq!(column_names.len(), 3);
+        assert!(column_names.contains(&"temperature".to_string()));
+    }
+}
