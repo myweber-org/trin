@@ -737,3 +737,149 @@ mod tests {
         assert_eq!(transformed[0].timestamp, record.timestamp + 3600);
     }
 }
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    timestamp: i64,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidId,
+    InvalidValue,
+    TimestampOutOfRange,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataError::InvalidId => write!(f, "ID must be greater than 0"),
+            DataError::InvalidValue => write!(f, "Value must be between 0.0 and 1000.0"),
+            DataError::TimestampOutOfRange => write!(f, "Timestamp must be non-negative"),
+        }
+    }
+}
+
+impl Error for DataError {}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, timestamp: i64) -> Result<Self, DataError> {
+        if id == 0 {
+            return Err(DataError::InvalidId);
+        }
+        if value < 0.0 || value > 1000.0 {
+            return Err(DataError::InvalidValue);
+        }
+        if timestamp < 0 {
+            return Err(DataError::TimestampOutOfRange);
+        }
+
+        Ok(Self {
+            id,
+            value,
+            timestamp,
+        })
+    }
+
+    pub fn transform_value(&mut self, multiplier: f64) -> Result<(), DataError> {
+        let new_value = self.value * multiplier;
+        if new_value < 0.0 || new_value > 1000.0 {
+            return Err(DataError::InvalidValue);
+        }
+        self.value = new_value;
+        Ok(())
+    }
+
+    pub fn normalize(&self) -> f64 {
+        self.value / 1000.0
+    }
+
+    pub fn is_anomaly(&self, threshold: f64) -> bool {
+        self.normalize() > threshold
+    }
+}
+
+pub struct DataProcessor {
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) {
+        self.records.push(record);
+    }
+
+    pub fn process_all(&mut self, multiplier: f64) -> Result<(), Vec<DataError>> {
+        let mut errors = Vec::new();
+
+        for record in &mut self.records {
+            if let Err(e) = record.transform_value(multiplier) {
+                errors.push(e);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn find_anomalies(&self, threshold: f64) -> Vec<&DataRecord> {
+        self.records
+            .iter()
+            .filter(|record| record.is_anomaly(threshold))
+            .collect()
+    }
+
+    pub fn average_value(&self) -> Option<f64> {
+        if self.records.is_empty() {
+            None
+        } else {
+            let sum: f64 = self.records.iter().map(|r| r.value).sum();
+            Some(sum / self.records.len() as f64)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_record_creation() {
+        let record = DataRecord::new(1, 500.0, 1234567890).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 500.0);
+        assert_eq!(record.timestamp, 1234567890);
+    }
+
+    #[test]
+    fn test_invalid_id() {
+        let result = DataRecord::new(0, 500.0, 1234567890);
+        assert!(matches!(result, Err(DataError::InvalidId)));
+    }
+
+    #[test]
+    fn test_value_transformation() {
+        let mut record = DataRecord::new(1, 100.0, 1234567890).unwrap();
+        record.transform_value(2.0).unwrap();
+        assert_eq!(record.value, 200.0);
+    }
+
+    #[test]
+    fn test_anomaly_detection() {
+        let record = DataRecord::new(1, 800.0, 1234567890).unwrap();
+        assert!(record.is_anomaly(0.7));
+        assert!(!record.is_anomaly(0.9));
+    }
+}
