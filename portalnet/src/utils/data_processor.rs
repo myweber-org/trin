@@ -696,3 +696,121 @@ mod tests {
         assert_eq!(found.unwrap().id, 1);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    InvalidId,
+    EmptyName,
+    NegativeValue,
+    DuplicateTag,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidId => write!(f, "ID must be greater than 0"),
+            ValidationError::EmptyName => write!(f, "Name cannot be empty"),
+            ValidationError::NegativeValue => write!(f, "Value must be non-negative"),
+            ValidationError::DuplicateTag => write!(f, "Tags contain duplicates"),
+        }
+    }
+}
+
+impl Error for ValidationError {}
+
+impl DataRecord {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.id == 0 {
+            return Err(ValidationError::InvalidId);
+        }
+        
+        if self.name.trim().is_empty() {
+            return Err(ValidationError::EmptyName);
+        }
+        
+        if self.value < 0.0 {
+            return Err(ValidationError::NegativeValue);
+        }
+        
+        let mut seen_tags = HashMap::new();
+        for tag in &self.tags {
+            if seen_tags.contains_key(tag) {
+                return Err(ValidationError::DuplicateTag);
+            }
+            seen_tags.insert(tag.clone(), true);
+        }
+        
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) {
+        self.value *= multiplier;
+        self.name = self.name.to_uppercase();
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord], multiplier: f64) -> Result<(), Box<dyn Error>> {
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.transform(multiplier);
+    }
+    
+    let total_value: f64 = records.iter().map(|r| r.value).sum();
+    println!("Total value after processing: {:.2}", total_value);
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_valid_record() {
+        let record = DataRecord {
+            id: 1,
+            name: "Test".to_string(),
+            value: 100.0,
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        };
+        
+        assert!(record.validate().is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_id() {
+        let record = DataRecord {
+            id: 0,
+            name: "Test".to_string(),
+            value: 100.0,
+            tags: vec![],
+        };
+        
+        assert!(matches!(record.validate(), Err(ValidationError::InvalidId)));
+    }
+    
+    #[test]
+    fn test_transform() {
+        let mut record = DataRecord {
+            id: 1,
+            name: "test".to_string(),
+            value: 100.0,
+            tags: vec![],
+        };
+        
+        record.transform(2.0);
+        assert_eq!(record.value, 200.0);
+        assert_eq!(record.name, "TEST");
+    }
+}
