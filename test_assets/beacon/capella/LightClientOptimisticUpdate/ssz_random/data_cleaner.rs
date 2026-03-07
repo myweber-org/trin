@@ -54,3 +54,77 @@ mod tests {
         assert_eq!(cleaned, vec![1.0, 2.0, 3.0]);
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    records: Vec<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: &str) {
+        self.records.push(record.trim().to_string());
+    }
+
+    pub fn deduplicate(&mut self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut unique_records = Vec::new();
+
+        for record in self.records.drain(..) {
+            if seen.insert(record.clone()) {
+                unique_records.push(record);
+            }
+        }
+
+        self.records = unique_records.clone();
+        unique_records
+    }
+
+    pub fn normalize_case(&mut self) {
+        for record in self.records.iter_mut() {
+            *record = record.to_lowercase();
+        }
+    }
+
+    pub fn get_records(&self) -> &Vec<String> {
+        &self.records
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("Apple");
+        cleaner.add_record("apple");
+        cleaner.add_record("Banana");
+        cleaner.add_record("Apple");
+
+        cleaner.normalize_case();
+        let unique = cleaner.deduplicate();
+
+        assert_eq!(unique.len(), 2);
+        assert!(unique.contains(&"apple".to_string()));
+        assert!(unique.contains(&"banana".to_string()));
+    }
+
+    #[test]
+    fn test_empty_cleaner() {
+        let mut cleaner = DataCleaner::new();
+        let unique = cleaner.deduplicate();
+        assert_eq!(unique.len(), 0);
+        assert_eq!(cleaner.get_records().len(), 0);
+    }
+}
