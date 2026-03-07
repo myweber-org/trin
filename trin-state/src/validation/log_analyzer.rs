@@ -125,4 +125,142 @@ mod tests {
         assert_eq!(summary.error_lines.len(), 2);
         assert_eq!(summary.warning_lines.len(), 1);
     }
+}use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use chrono::{DateTime, FixedOffset};
+
+#[derive(Debug)]
+pub struct LogEntry {
+    pub timestamp: DateTime<FixedOffset>,
+    pub level: String,
+    pub component: String,
+    pub message: String,
+    pub metadata: HashMap<String, String>,
+}
+
+pub struct LogAnalyzer {
+    pub entries: Vec<LogEntry>,
+}
+
+impl LogAnalyzer {
+    pub fn new() -> Self {
+        LogAnalyzer {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn load_from_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            if let Some(entry) = self.parse_log_line(&line) {
+                self.entries.push(entry);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn parse_log_line(&self, line: &str) -> Option<LogEntry> {
+        let parts: Vec<&str> = line.splitn(5, '|').collect();
+        if parts.len() < 5 {
+            return None;
+        }
+
+        let timestamp_str = parts[0].trim();
+        let level = parts[1].trim().to_string();
+        let component = parts[2].trim().to_string();
+        let message = parts[3].trim().to_string();
+        let metadata_str = parts[4].trim();
+
+        let timestamp = DateTime::parse_from_rfc3339(timestamp_str).ok()?;
+        
+        let mut metadata = HashMap::new();
+        for pair in metadata_str.split(',') {
+            let kv: Vec<&str> = pair.split('=').collect();
+            if kv.len() == 2 {
+                metadata.insert(kv[0].to_string(), kv[1].to_string());
+            }
+        }
+
+        Some(LogEntry {
+            timestamp,
+            level,
+            component,
+            message,
+            metadata,
+        })
+    }
+
+    pub fn filter_by_level(&self, level: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.level.to_lowercase() == level.to_lowercase())
+            .collect()
+    }
+
+    pub fn filter_by_component(&self, component: &str) -> Vec<&LogEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.component.contains(component))
+            .collect()
+    }
+
+    pub fn count_by_level(&self) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for entry in &self.entries {
+            *counts.entry(entry.level.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    pub fn get_time_range(&self) -> Option<(DateTime<FixedOffset>, DateTime<FixedOffset>)> {
+        if self.entries.is_empty() {
+            return None;
+        }
+
+        let mut min_time = &self.entries[0].timestamp;
+        let mut max_time = &self.entries[0].timestamp;
+
+        for entry in &self.entries[1..] {
+            if entry.timestamp < *min_time {
+                min_time = &entry.timestamp;
+            }
+            if entry.timestamp > *max_time {
+                max_time = &entry.timestamp;
+            }
+        }
+
+        Some((*min_time, *max_time))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_parsing() {
+        let analyzer = LogAnalyzer::new();
+        let line = "2023-10-15T14:30:00+00:00 | INFO | network | Connection established | ip=192.168.1.1,port=8080";
+        
+        let entry = analyzer.parse_log_line(line).unwrap();
+        
+        assert_eq!(entry.level, "INFO");
+        assert_eq!(entry.component, "network");
+        assert_eq!(entry.message, "Connection established");
+        assert_eq!(entry.metadata.get("ip"), Some(&"192.168.1.1".to_string()));
+        assert_eq!(entry.metadata.get("port"), Some(&"8080".to_string()));
+    }
+
+    #[test]
+    fn test_invalid_log_line() {
+        let analyzer = LogAnalyzer::new();
+        let line = "Invalid log format";
+        
+        assert!(analyzer.parse_log_line(line).is_none());
+    }
 }
