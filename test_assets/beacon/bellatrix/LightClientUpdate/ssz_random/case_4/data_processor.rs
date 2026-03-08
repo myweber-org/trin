@@ -486,3 +486,172 @@ mod tests {
         assert!(processor.validate_records(&records).is_ok());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: Vec<f64>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, filepath: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(filepath)?;
+        let reader = BufReader::new(file);
+        
+        self.data.clear();
+        
+        for (index, line) in reader.lines().enumerate() {
+            let line = line?;
+            
+            if index == 0 {
+                self.parse_header(&line);
+                continue;
+            }
+            
+            if let Some(value) = self.extract_numeric_value(&line) {
+                self.data.push(value);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn parse_header(&mut self, header_line: &str) {
+        let parts: Vec<&str> = header_line.split(',').collect();
+        if parts.len() >= 2 {
+            self.metadata.insert("source".to_string(), parts[0].to_string());
+            self.metadata.insert("unit".to_string(), parts[1].to_string());
+        }
+    }
+    
+    fn extract_numeric_value(&self, line: &str) -> Option<f64> {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.is_empty() {
+            return None;
+        }
+        
+        parts[0].trim().parse::<f64>().ok()
+    }
+    
+    pub fn calculate_statistics(&self) -> Statistics {
+        if self.data.is_empty() {
+            return Statistics::default();
+        }
+        
+        let sum: f64 = self.data.iter().sum();
+        let count = self.data.len();
+        let mean = sum / count as f64;
+        
+        let variance: f64 = self.data.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        let min = self.data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = self.data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        
+        Statistics {
+            count,
+            mean,
+            std_dev,
+            min,
+            max,
+            sum,
+        }
+    }
+    
+    pub fn filter_data(&self, threshold: f64) -> Vec<f64> {
+        self.data.iter()
+            .filter(|&&x| x >= threshold)
+            .cloned()
+            .collect()
+    }
+    
+    pub fn get_metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
+    }
+    
+    pub fn data_count(&self) -> usize {
+        self.data.len()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub sum: f64,
+}
+
+impl Default for Statistics {
+    fn default() -> Self {
+        Statistics {
+            count: 0,
+            mean: 0.0,
+            std_dev: 0.0,
+            min: 0.0,
+            max: 0.0,
+            sum: 0.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_empty_processor() {
+        let processor = DataProcessor::new();
+        assert_eq!(processor.data_count(), 0);
+        
+        let stats = processor.calculate_statistics();
+        assert_eq!(stats.count, 0);
+        assert_eq!(stats.mean, 0.0);
+    }
+    
+    #[test]
+    fn test_csv_processing() -> Result<(), Box<dyn Error>> {
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "sensor_data,volts")?;
+        writeln!(temp_file, "3.14")?;
+        writeln!(temp_file, "2.71")?;
+        writeln!(temp_file, "1.618")?;
+        
+        let filepath = temp_file.path().to_str().unwrap();
+        
+        let mut processor = DataProcessor::new();
+        processor.load_from_csv(filepath)?;
+        
+        assert_eq!(processor.data_count(), 3);
+        
+        let stats = processor.calculate_statistics();
+        assert_eq!(stats.count, 3);
+        assert!((stats.mean - 2.482666).abs() < 0.0001);
+        
+        let filtered = processor.filter_data(2.0);
+        assert_eq!(filtered.len(), 2);
+        
+        let metadata = processor.get_metadata();
+        assert_eq!(metadata.get("source"), Some(&"sensor_data".to_string()));
+        assert_eq!(metadata.get("unit"), Some(&"volts".to_string()));
+        
+        Ok(())
+    }
+}
