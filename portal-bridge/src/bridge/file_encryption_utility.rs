@@ -220,3 +220,150 @@ mod tests {
         assert_eq!(test_data.to_vec(), decrypted_data);
     }
 }
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
+use argon2::{
+    password_hash::{
+        rand_core::OsRng,
+        PasswordHash, PasswordHasher, PasswordVerifier, SaltString
+    },
+    Argon2
+};
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+#[derive(Debug)]
+pub enum CryptoError {
+    IoError(std::io::Error),
+    EncryptionError(aes_gcm::Error),
+    HashError(argon2::password_hash::Error),
+    InvalidData,
+}
+
+impl From<std::io::Error> for CryptoError {
+    fn from(err: std::io::Error) -> Self {
+        CryptoError::IoError(err)
+    }
+}
+
+impl From<aes_gcm::Error> for CryptoError {
+    fn from(err: aes_gcm::Error) -> Self {
+        CryptoError::EncryptionError(err)
+    }
+}
+
+impl From<argon2::password_hash::Error> for CryptoError {
+    fn from(err: argon2::password_hash::Error) -> Self {
+        CryptoError::HashError(err)
+    }
+}
+
+pub struct FileEncryptor {
+    cipher: Aes256Gcm,
+}
+
+impl FileEncryptor {
+    pub fn new(password: &str) -> Result<Self, CryptoError> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        let hash_bytes = password_hash.hash.ok_or(CryptoError::InvalidData)?;
+        
+        let key = Key::<Aes256Gcm>::from_slice(&hash_bytes.as_bytes()[..32]);
+        let cipher = Aes256Gcm::new(key);
+        
+        Ok(FileEncryptor { cipher })
+    }
+    
+    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), CryptoError> {
+        let mut file = fs::File::open(input_path)?;
+        let mut plaintext = Vec::new();
+        file.read_to_end(&mut plaintext)?;
+        
+        let nonce = Nonce::generate(&mut OsRng);
+        let ciphertext = self.cipher.encrypt(&nonce, plaintext.as_ref())?;
+        
+        let mut output = fs::File::create(output_path)?;
+        output.write_all(&nonce)?;
+        output.write_all(&ciphertext)?;
+        
+        Ok(())
+    }
+    
+    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> Result<(), CryptoError> {
+        let mut file = fs::File::open(input_path)?;
+        let mut encrypted_data = Vec::new();
+        file.read_to_end(&mut encrypted_data)?;
+        
+        if encrypted_data.len() < 12 {
+            return Err(CryptoError::InvalidData);
+        }
+        
+        let nonce = Nonce::from_slice(&encrypted_data[..12]);
+        let ciphertext = &encrypted_data[12..];
+        
+        let plaintext = self.cipher.decrypt(nonce, ciphertext)?;
+        
+        let mut output = fs::File::create(output_path)?;
+        output.write_all(&plaintext)?;
+        
+        Ok(())
+    }
+}
+
+pub fn verify_password(password: &str, stored_hash: &str) -> Result<bool, CryptoError> {
+    let parsed_hash = PasswordHash::new(stored_hash)?;
+    let argon2 = Argon2::default();
+    
+    match argon2.verify_password(password.as_bytes(), &parsed_hash) {
+        Ok(_) => Ok(true),
+        Err(argon2::password_hash::Error::Password) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_encryption_decryption() {
+        let password = "secure_password_123";
+        let encryptor = FileEncryptor::new(password).unwrap();
+        
+        let original_content = b"Test data for encryption and decryption";
+        let mut input_file = NamedTempFile::new().unwrap();
+        input_file.write_all(original_content).unwrap();
+        
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+        
+        encryptor.encrypt_file(input_file.path(), encrypted_file.path()).unwrap();
+        encryptor.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+        
+        let mut decrypted_content = Vec::new();
+        let mut decrypted = fs::File::open(decrypted_file.path()).unwrap();
+        decrypted.read_to_end(&mut decrypted_content).unwrap();
+        
+        assert_eq!(original_content.to_vec(), decrypted_content);
+    }
+    
+    #[test]
+    fn test_password_verification() {
+        let password = "test_password";
+        let wrong_password = "wrong_password";
+        
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2.hash_password(password.as_bytes(), &salt).unwrap();
+        let hash_string = password_hash.to_string();
+        
+        assert!(verify_password(password, &hash_string).unwrap());
+        assert!(!verify_password(wrong_password, &hash_string).unwrap());
+    }
+}
