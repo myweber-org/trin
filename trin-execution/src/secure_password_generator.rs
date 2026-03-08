@@ -1,5 +1,6 @@
 
 use rand::Rng;
+use std::collections::HashSet;
 
 pub struct PasswordGenerator {
     length: usize,
@@ -11,7 +12,7 @@ pub struct PasswordGenerator {
 
 impl PasswordGenerator {
     pub fn new(length: usize) -> Self {
-        Self {
+        PasswordGenerator {
             length,
             use_uppercase: true,
             use_lowercase: true,
@@ -71,15 +72,26 @@ impl PasswordGenerator {
         }
 
         let mut rng = rand::thread_rng();
-        let password: String = (0..self.length)
-            .map(|_| {
-                let idx = rng.gen_range(0..character_pool.len());
-                character_pool[idx] as char
-            })
-            .collect();
+        let mut password = String::with_capacity(self.length);
+        let mut used_chars = HashSet::new();
+
+        for _ in 0..self.length {
+            let idx = rng.gen_range(0..character_pool.len());
+            let ch = character_pool[idx] as char;
+            password.push(ch);
+            used_chars.insert(ch);
+        }
+
+        if used_chars.len() < (self.length / 2).max(1) {
+            return Err("Generated password lacks sufficient character diversity");
+        }
 
         Ok(password)
     }
+}
+
+pub fn generate_secure_password(length: usize) -> Result<String, &'static str> {
+    PasswordGenerator::new(length).generate()
 }
 
 #[cfg(test)]
@@ -87,44 +99,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_generator() {
-        let generator = PasswordGenerator::new(12);
-        let password = generator.generate().unwrap();
+    fn test_password_length() {
+        let password = generate_secure_password(12).unwrap();
         assert_eq!(password.len(), 12);
     }
 
     #[test]
-    fn test_custom_length() {
-        let generator = PasswordGenerator::new(16);
-        let password = generator.generate().unwrap();
-        assert_eq!(password.len(), 16);
-    }
-
-    #[test]
-    fn test_only_digits() {
-        let generator = PasswordGenerator::new(8)
-            .uppercase(false)
+    fn test_custom_character_sets() {
+        let generator = PasswordGenerator::new(10)
+            .uppercase(true)
             .lowercase(false)
+            .digits(false)
             .special(false);
+
         let password = generator.generate().unwrap();
-        assert!(password.chars().all(|c| c.is_ascii_digit()));
+        assert!(password.chars().all(|c| c.is_ascii_uppercase()));
     }
 
     #[test]
-    fn test_no_character_sets() {
-        let generator = PasswordGenerator::new(8)
+    fn test_invalid_configuration() {
+        let generator = PasswordGenerator::new(10)
             .uppercase(false)
             .lowercase(false)
             .digits(false)
             .special(false);
-        let result = generator.generate();
-        assert!(result.is_err());
+
+        assert!(generator.generate().is_err());
     }
 
     #[test]
     fn test_zero_length() {
-        let generator = PasswordGenerator::new(0);
-        let result = generator.generate();
-        assert!(result.is_err());
+        assert!(generate_secure_password(0).is_err());
     }
 }
