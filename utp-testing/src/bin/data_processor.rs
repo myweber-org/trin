@@ -135,3 +135,128 @@ mod tests {
         assert_eq!(stats[1], (60, 2));
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    tags: Vec<String>,
+    metadata: HashMap<String, String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64) -> Self {
+        Self {
+            id,
+            name,
+            value,
+            tags: Vec::new(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+
+    pub fn set_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("Name cannot be empty".to_string());
+        }
+        if self.value < 0.0 {
+            return Err("Value must be non-negative".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Vec<DataRecord> {
+    records
+        .iter_mut()
+        .filter(|record| record.validate().is_ok())
+        .map(|record| {
+            let mut processed = DataRecord::new(record.id, record.name.clone(), record.value);
+            processed.tags = record.tags.clone();
+            processed.metadata = record.metadata.clone();
+            processed.value = (record.value * 100.0).round() / 100.0;
+            processed
+        })
+        .collect()
+}
+
+pub fn calculate_statistics(records: &[DataRecord]) -> HashMap<String, f64> {
+    let mut stats = HashMap::new();
+    
+    if records.is_empty() {
+        return stats;
+    }
+
+    let count = records.len() as f64;
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let avg = sum / count;
+    let max = records.iter().map(|r| r.value).fold(f64::NEG_INFINITY, f64::max);
+    let min = records.iter().map(|r| r.value).fold(f64::INFINITY, f64::min);
+
+    stats.insert("count".to_string(), count);
+    stats.insert("sum".to_string(), sum);
+    stats.insert("average".to_string(), avg);
+    stats.insert("maximum".to_string(), max);
+    stats.insert("minimum".to_string(), min);
+
+    stats
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_validation() {
+        let valid_record = DataRecord::new(1, "Test".to_string(), 42.5);
+        assert!(valid_record.validate().is_ok());
+
+        let invalid_name = DataRecord::new(2, "".to_string(), 42.5);
+        assert!(invalid_name.validate().is_err());
+
+        let invalid_value = DataRecord::new(3, "Test".to_string(), -5.0);
+        assert!(invalid_value.validate().is_err());
+    }
+
+    #[test]
+    fn test_process_records() {
+        let mut records = vec![
+            DataRecord::new(1, "Record1".to_string(), 123.456),
+            DataRecord::new(2, "".to_string(), 78.9),
+            DataRecord::new(3, "Record3".to_string(), -10.0),
+        ];
+
+        let processed = process_records(&mut records);
+        assert_eq!(processed.len(), 1);
+        assert_eq!(processed[0].value, 123.46);
+    }
+
+    #[test]
+    fn test_calculate_statistics() {
+        let records = vec![
+            DataRecord::new(1, "A".to_string(), 10.0),
+            DataRecord::new(2, "B".to_string(), 20.0),
+            DataRecord::new(3, "C".to_string(), 30.0),
+        ];
+
+        let stats = calculate_statistics(&records);
+        assert_eq!(stats["count"], 3.0);
+        assert_eq!(stats["sum"], 60.0);
+        assert_eq!(stats["average"], 20.0);
+        assert_eq!(stats["maximum"], 30.0);
+        assert_eq!(stats["minimum"], 10.0);
+    }
+}
