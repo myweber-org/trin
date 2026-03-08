@@ -118,4 +118,103 @@ mod tests {
         let result = processor.export_active_records(path);
         assert!(result.is_ok());
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let headers_line = lines.next()
+            .ok_or("Empty CSV file")??;
+        let headers: Vec<String> = headers_line
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        let mut records = Vec::new();
+        for line_result in lines {
+            let line = line_result?;
+            let fields: Vec<String> = line
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            
+            if fields.len() == headers.len() {
+                records.push(fields);
+            }
+        }
+
+        Ok(CsvProcessor { headers, records })
+    }
+
+    pub fn filter_by_column(&self, column_name: &str, predicate: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = self.headers.iter()
+            .position(|h| h == column_name);
+        
+        match column_index {
+            Some(idx) => self.records.iter()
+                .filter(|record| predicate(&record[idx]))
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    pub fn aggregate_numeric_column(&self, group_column: &str, value_column: &str) -> HashMap<String, f64> {
+        let group_idx = self.headers.iter()
+            .position(|h| h == group_column);
+        let value_idx = self.headers.iter()
+            .position(|h| h == value_column);
+
+        match (group_idx, value_idx) {
+            (Some(g_idx), Some(v_idx)) => {
+                let mut aggregates = HashMap::new();
+                for record in &self.records {
+                    if let (Some(group_val), Some(value_str)) = (record.get(g_idx), record.get(v_idx)) {
+                        if let Ok(value) = value_str.parse::<f64>() {
+                            *aggregates.entry(group_val.clone()).or_insert(0.0) += value;
+                        }
+                    }
+                }
+                aggregates
+            }
+            _ => HashMap::new(),
+        }
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn get_headers(&self) -> &[String] {
+        &self.headers
+    }
+}
+
+pub fn process_csv_data(path: &str) -> Result<(), Box<dyn Error>> {
+    let processor = CsvProcessor::from_file(path)?;
+    
+    println!("Loaded {} records with columns: {:?}", 
+             processor.get_record_count(), 
+             processor.get_headers());
+    
+    let filtered = processor.filter_by_column("status", |val| val == "active");
+    println!("Active records: {}", filtered.len());
+    
+    let aggregates = processor.aggregate_numeric_column("category", "amount");
+    for (category, total) in aggregates {
+        println!("Category {}: total amount {}", category, total);
+    }
+    
+    Ok(())
 }
