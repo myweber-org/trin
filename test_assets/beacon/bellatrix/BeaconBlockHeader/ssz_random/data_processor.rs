@@ -604,3 +604,189 @@ mod tests {
         assert!((std_dev - 1.4142135623730951).abs() < 1e-10);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data: {0}")]
+    InvalidInput(String),
+    #[error("Processing timeout")]
+    Timeout,
+    #[error("Serialization error")]
+    SerializationFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub tags: Vec<String>,
+}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    pub fn add_value(&mut self, key: &str, value: f64) -> Result<(), DataError> {
+        if !value.is_finite() {
+            return Err(DataError::InvalidInput(
+                "Value must be finite number".to_string(),
+            ));
+        }
+        self.values.insert(key.to_string(), value);
+        Ok(())
+    }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        if !self.tags.contains(&tag.to_string()) {
+            self.tags.push(tag.to_string());
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), DataError> {
+        if self.values.is_empty() {
+            return Err(DataError::InvalidInput(
+                "Record must contain at least one value".to_string(),
+            ));
+        }
+        if self.timestamp < 0 {
+            return Err(DataError::InvalidInput(
+                "Timestamp cannot be negative".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub struct DataProcessor {
+    max_records: usize,
+    records: Vec<DataRecord>,
+}
+
+impl DataProcessor {
+    pub fn new(max_records: usize) -> Self {
+        Self {
+            max_records,
+            records: Vec::with_capacity(max_records),
+        }
+    }
+
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), DataError> {
+        record.validate()?;
+
+        if self.records.len() >= self.max_records {
+            return Err(DataError::InvalidInput(
+                "Maximum record limit reached".to_string(),
+            ));
+        }
+
+        self.records.push(record);
+        Ok(())
+    }
+
+    pub fn process_records(&mut self) -> Result<Vec<ProcessedData>, DataError> {
+        let mut results = Vec::new();
+
+        for record in &self.records {
+            let processed = self.process_single_record(record)?;
+            results.push(processed);
+        }
+
+        Ok(results)
+    }
+
+    fn process_single_record(&self, record: &DataRecord) -> Result<ProcessedData, DataError> {
+        let total: f64 = record.values.values().sum();
+        let count = record.values.len();
+        let average = if count > 0 { total / count as f64 } else { 0.0 };
+
+        let max_value = record
+            .values
+            .values()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .copied()
+            .unwrap_or(0.0);
+
+        let min_value = record
+            .values
+            .values()
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .copied()
+            .unwrap_or(0.0);
+
+        Ok(ProcessedData {
+            record_id: record.id,
+            timestamp: record.timestamp,
+            value_count: count,
+            average_value: average,
+            max_value,
+            min_value,
+            has_tags: !record.tags.is_empty(),
+        })
+    }
+
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessedData {
+    pub record_id: u64,
+    pub timestamp: i64,
+    pub value_count: usize,
+    pub average_value: f64,
+    pub max_value: f64,
+    pub min_value: f64,
+    pub has_tags: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        assert_eq!(record.id, 1);
+        assert_eq!(record.timestamp, 1234567890);
+        assert!(record.values.is_empty());
+        assert!(record.tags.is_empty());
+
+        record.add_tag("test");
+        assert_eq!(record.tags.len(), 1);
+        assert!(record.tags.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_value_validation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        assert!(record.add_value("temp", 25.5).is_ok());
+        assert!(record.add_value("invalid", f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_processor_limits() {
+        let mut processor = DataProcessor::new(2);
+        let record1 = DataRecord::new(1, 1234567890);
+        let record2 = DataRecord::new(2, 1234567891);
+        let record3 = DataRecord::new(3, 1234567892);
+
+        assert!(processor.add_record(record1).is_ok());
+        assert!(processor.add_record(record2).is_ok());
+        assert!(processor.add_record(record3).is_err());
+    }
+}
