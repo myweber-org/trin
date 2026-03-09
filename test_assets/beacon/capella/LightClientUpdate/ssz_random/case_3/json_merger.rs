@@ -192,4 +192,57 @@ fn main() {
         Ok(()) => println!("Successfully merged JSON files into {}", output_file),
         Err(e) => eprintln!("Error merging JSON files: {}", e),
     }
+}use serde_json::{Value, from_reader, to_writer_pretty};
+use std::env;
+use std::fs::File;
+use std::io::{self, BufReader, Error, ErrorKind};
+use std::path::Path;
+
+fn merge_json_files(file_paths: &[String]) -> Result<Value, io::Error> {
+    let mut merged_array = Vec::new();
+
+    for path_str in file_paths {
+        let path = Path::new(path_str);
+        let file = File::open(path).map_err(|e| {
+            Error::new(
+                ErrorKind::NotFound,
+                format!("Failed to open file {}: {}", path_str, e),
+            )
+        })?;
+
+        let reader = BufReader::new(file);
+        let json_value: Value = from_reader(reader).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to parse JSON from {}: {}", path_str, e),
+            )
+        })?;
+
+        if let Value::Array(arr) = json_value {
+            merged_array.extend(arr);
+        } else {
+            merged_array.push(json_value);
+        }
+    }
+
+    Ok(Value::Array(merged_array))
+}
+
+fn main() -> Result<(), io::Error> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file> <input_file1> [input_file2 ...]", args[0]);
+        std::process::exit(1);
+    }
+
+    let output_path = &args[1];
+    let input_files = &args[2..];
+
+    let merged_value = merge_json_files(input_files)?;
+
+    let output_file = File::create(output_path)?;
+    to_writer_pretty(output_file, &merged_value)?;
+
+    println!("Successfully merged {} JSON files into {}", input_files.len(), output_path);
+    Ok(())
 }
