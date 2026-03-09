@@ -582,3 +582,158 @@ mod tests {
         assert_eq!(result.statistics.validation_errors, 1);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: HashMap<String, ValidationRule>,
+}
+
+pub struct ValidationRule {
+    min_value: Option<f64>,
+    max_value: Option<f64>,
+    required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: HashMap::new(),
+        }
+    }
+
+    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) -> Result<(), String> {
+        if self.data.contains_key(&name) {
+            return Err(format!("Dataset '{}' already exists", name));
+        }
+        
+        if let Some(rule) = self.validation_rules.get(&name) {
+            self.validate_dataset(&values, rule)?;
+        }
+        
+        self.data.insert(name, values);
+        Ok(())
+    }
+
+    pub fn set_validation_rule(&mut self, dataset_name: String, rule: ValidationRule) {
+        self.validation_rules.insert(dataset_name, rule);
+    }
+
+    pub fn calculate_statistics(&self, dataset_name: &str) -> Option<Statistics> {
+        self.data.get(dataset_name).map(|values| {
+            let sum: f64 = values.iter().sum();
+            let count = values.len() as f64;
+            let mean = sum / count;
+            
+            let variance: f64 = values.iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / count;
+            
+            Statistics {
+                mean,
+                variance,
+                count: values.len(),
+                min: values.iter().fold(f64::INFINITY, |a, &b| a.min(b)),
+                max: values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
+            }
+        })
+    }
+
+    pub fn transform_data<F>(&mut self, dataset_name: &str, transform_fn: F) -> Result<(), String>
+    where
+        F: Fn(f64) -> f64,
+    {
+        if let Some(values) = self.data.get_mut(dataset_name) {
+            for value in values.iter_mut() {
+                *value = transform_fn(*value);
+            }
+            Ok(())
+        } else {
+            Err(format!("Dataset '{}' not found", dataset_name))
+        }
+    }
+
+    fn validate_dataset(&self, values: &[f64], rule: &ValidationRule) -> Result<(), String> {
+        if rule.required && values.is_empty() {
+            return Err("Dataset cannot be empty".to_string());
+        }
+
+        for &value in values {
+            if let Some(min) = rule.min_value {
+                if value < min {
+                    return Err(format!("Value {} is below minimum {}", value, min));
+                }
+            }
+            
+            if let Some(max) = rule.max_value {
+                if value > max {
+                    return Err(format!("Value {} exceeds maximum {}", value, max));
+                }
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+pub struct Statistics {
+    pub mean: f64,
+    pub variance: f64,
+    pub count: usize,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl ValidationRule {
+    pub fn new() -> Self {
+        ValidationRule {
+            min_value: None,
+            max_value: None,
+            required: false,
+        }
+    }
+
+    pub fn with_min(mut self, min: f64) -> Self {
+        self.min_value = Some(min);
+        self
+    }
+
+    pub fn with_max(mut self, max: f64) -> Self {
+        self.max_value = Some(max);
+        self
+    }
+
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_processor() {
+        let mut processor = DataProcessor::new();
+        
+        let rule = ValidationRule::new()
+            .with_min(0.0)
+            .with_max(100.0)
+            .required();
+        
+        processor.set_validation_rule("temperatures".to_string(), rule);
+        
+        let result = processor.add_dataset(
+            "temperatures".to_string(),
+            vec![20.5, 25.0, 30.2, 18.7]
+        );
+        
+        assert!(result.is_ok());
+        
+        let stats = processor.calculate_statistics("temperatures").unwrap();
+        assert_eq!(stats.count, 4);
+        assert!(stats.mean > 20.0 && stats.mean < 30.0);
+    }
+}
