@@ -1,122 +1,95 @@
 
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-pub struct FileEncryptor {
-    cipher: Aes256Gcm,
+pub struct XorCipher {
+    key: Vec<u8>,
 }
 
-impl FileEncryptor {
-    pub fn new() -> Self {
-        let key = Key::<Aes256Gcm>::generate(&mut OsRng);
-        Self {
-            cipher: Aes256Gcm::new(&key),
+impl XorCipher {
+    pub fn new(key: &str) -> Self {
+        XorCipher {
+            key: key.as_bytes().to_vec(),
         }
     }
 
-    pub fn encrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
-        let mut file = fs::File::open(input_path)?;
-        let mut plaintext = Vec::new();
-        file.read_to_end(&mut plaintext)?;
-
-        let nonce = Nonce::generate(&mut OsRng);
-        let ciphertext = self
-            .cipher
-            .encrypt(&nonce, plaintext.as_ref())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-        let mut output_file = fs::File::create(output_path)?;
-        output_file.write_all(&nonce)?;
-        output_file.write_all(&ciphertext)?;
-
-        Ok(())
+    pub fn encrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
     }
 
-    pub fn decrypt_file(&self, input_path: &Path, output_path: &Path) -> io::Result<()> {
-        let mut file = fs::File::open(input_path)?;
-        let mut data = Vec::new();
-        file.read_to_end(&mut data)?;
+    pub fn decrypt_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        self.process_file(source_path, dest_path)
+    }
 
-        if data.len() < 12 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "File too short to contain nonce",
-            ));
+    fn process_file(&self, source_path: &Path, dest_path: &Path) -> io::Result<()> {
+        let mut source_file = fs::File::open(source_path)?;
+        let mut dest_file = fs::File::create(dest_path)?;
+
+        let mut buffer = [0; 4096];
+        let key_len = self.key.len();
+        let mut key_index = 0;
+
+        loop {
+            let bytes_read = source_file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            for i in 0..bytes_read {
+                buffer[i] ^= self.key[key_index];
+                key_index = (key_index + 1) % key_len;
+            }
+
+            dest_file.write_all(&buffer[..bytes_read])?;
         }
 
-        let (nonce_bytes, ciphertext) = data.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = self
-            .cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-        fs::write(output_path, plaintext)?;
         Ok(())
     }
 }
 
-pub fn generate_key() -> Vec<u8> {
-    let key = Key::<Aes256Gcm>::generate(&mut OsRng);
-    key.to_vec()
-}
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
-use std::fs;
-use std::io::{self, Read, Write};
-
-const NONCE_SIZE: usize = 12;
-
-pub fn encrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let key = Key::<Aes256Gcm>::generate(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
-
-    let mut file = fs::File::open(input_path)?;
-    let mut plaintext = Vec::new();
-    file.read_to_end(&mut plaintext)?;
-
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&ciphertext)?;
-    output_file.write_all(&key)?;
-
-    Ok(())
+pub fn generate_random_key(length: usize) -> Vec<u8> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..length).map(|_| rng.gen()).collect()
 }
 
-pub fn decrypt_file(input_path: &str, output_path: &str) -> io::Result<()> {
-    let mut file = fs::File::open(input_path)?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data)?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
 
-    if data.len() < 32 + NONCE_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "File too short to contain encrypted data",
-        ));
+    #[test]
+    fn test_xor_cipher() {
+        let key = "secret_key";
+        let cipher = XorCipher::new(key);
+
+        let original_content = b"Hello, this is a test message for XOR encryption!";
+        
+        let source_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(source_file.path(), original_content).unwrap();
+
+        cipher.encrypt_file(source_file.path(), encrypted_file.path()).unwrap();
+        cipher.decrypt_file(encrypted_file.path(), decrypted_file.path()).unwrap();
+
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(original_content.to_vec(), decrypted_content);
     }
 
-    let (ciphertext, key_slice) = data.split_at(data.len() - 32);
-    let key = Key::<Aes256Gcm>::from_slice(key_slice);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&[0u8; NONCE_SIZE]);
+    #[test]
+    fn test_empty_file() {
+        let cipher = XorCipher::new("key");
+        
+        let source_file = NamedTempFile::new().unwrap();
+        let dest_file = NamedTempFile::new().unwrap();
 
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        cipher.encrypt_file(source_file.path(), dest_file.path()).unwrap();
 
-    let mut output_file = fs::File::create(output_path)?;
-    output_file.write_all(&plaintext)?;
-
-    Ok(())
+        let dest_content = fs::read(dest_file.path()).unwrap();
+        assert!(dest_content.is_empty());
+    }
 }
