@@ -595,3 +595,145 @@ mod tests {
         assert_eq!(stats.1, 20.3);
     }
 }
+use std::collections::HashMap;
+
+pub struct DataProcessor {
+    data: HashMap<String, Vec<f64>>,
+    validation_rules: Vec<ValidationRule>,
+}
+
+pub struct ValidationRule {
+    field_name: String,
+    min_value: f64,
+    max_value: f64,
+    required: bool,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            validation_rules: Vec::new(),
+        }
+    }
+
+    pub fn add_dataset(&mut self, name: String, values: Vec<f64>) {
+        self.data.insert(name, values);
+    }
+
+    pub fn add_validation_rule(&mut self, rule: ValidationRule) {
+        self.validation_rules.push(rule);
+    }
+
+    pub fn validate_all(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        for rule in &self.validation_rules {
+            if let Some(data) = self.data.get(&rule.field_name) {
+                if rule.required && data.is_empty() {
+                    errors.push(format!("Field '{}' is required but empty", rule.field_name));
+                    continue;
+                }
+
+                for &value in data {
+                    if value < rule.min_value || value > rule.max_value {
+                        errors.push(format!(
+                            "Value {} in field '{}' is outside valid range [{}, {}]",
+                            value, rule.field_name, rule.min_value, rule.max_value
+                        ));
+                    }
+                }
+            } else if rule.required {
+                errors.push(format!("Required field '{}' not found", rule.field_name));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn normalize_data(&mut self, field_name: &str) -> Option<Vec<f64>> {
+        if let Some(data) = self.data.get_mut(field_name) {
+            if data.is_empty() {
+                return None;
+            }
+
+            let min = data.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            
+            if (max - min).abs() < f64::EPSILON {
+                return Some(vec![0.0; data.len()]);
+            }
+
+            let normalized: Vec<f64> = data
+                .iter()
+                .map(|&x| (x - min) / (max - min))
+                .collect();
+
+            self.data.insert(field_name.to_string(), normalized.clone());
+            Some(normalized)
+        } else {
+            None
+        }
+    }
+
+    pub fn calculate_statistics(&self, field_name: &str) -> Option<Statistics> {
+        self.data.get(field_name).map(|data| {
+            if data.is_empty() {
+                return Statistics::empty();
+            }
+
+            let sum: f64 = data.iter().sum();
+            let mean = sum / data.len() as f64;
+            
+            let variance: f64 = data
+                .iter()
+                .map(|&x| (x - mean).powi(2))
+                .sum::<f64>() / data.len() as f64;
+            
+            let std_dev = variance.sqrt();
+
+            Statistics {
+                count: data.len(),
+                mean,
+                std_dev,
+                min: data.iter().fold(f64::INFINITY, |a, &b| a.min(b)),
+                max: data.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
+            }
+        })
+    }
+}
+
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Statistics {
+    fn empty() -> Self {
+        Statistics {
+            count: 0,
+            mean: 0.0,
+            std_dev: 0.0,
+            min: 0.0,
+            max: 0.0,
+        }
+    }
+}
+
+impl ValidationRule {
+    pub fn new(field_name: String, min_value: f64, max_value: f64, required: bool) -> Self {
+        ValidationRule {
+            field_name,
+            min_value,
+            max_value,
+            required,
+        }
+    }
+}
