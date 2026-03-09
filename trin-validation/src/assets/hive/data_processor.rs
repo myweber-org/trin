@@ -648,3 +648,92 @@ mod tests {
         assert!(summary.contains("Mean value: 20.36"));
     }
 }
+use csv::Reader;
+use serde::Deserialize;
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+pub struct DataProcessor {
+    records: Vec<Record>,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = Reader::from_reader(file);
+        
+        for result in rdr.deserialize() {
+            let record: Record = result?;
+            self.records.push(record);
+        }
+        
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> Statistics {
+        let values: Vec<f64> = self.records.iter().map(|r| r.value).collect();
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len() as f64;
+        let mean = if count > 0.0 { sum / count } else { 0.0 };
+        
+        let variance: f64 = if count > 0.0 {
+            values.iter()
+                .map(|v| (v - mean).powi(2))
+                .sum::<f64>() / count
+        } else {
+            0.0
+        };
+        
+        Statistics {
+            count: values.len(),
+            mean,
+            variance,
+            std_dev: variance.sqrt(),
+        }
+    }
+
+    pub fn filter_by_category(&self, category: &str) -> Vec<&Record> {
+        self.records
+            .iter()
+            .filter(|r| r.category == category)
+            .collect()
+    }
+
+    pub fn get_max_value(&self) -> Option<&Record> {
+        self.records.iter().max_by(|a, b| {
+            a.value.partial_cmp(&b.value).unwrap()
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct Statistics {
+    pub count: usize,
+    pub mean: f64,
+    pub variance: f64,
+    pub std_dev: f64,
+}
+
+impl std::fmt::Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Count: {}, Mean: {:.2}, Variance: {:.2}, Std Dev: {:.2}",
+            self.count, self.mean, self.variance, self.std_dev
+        )
+    }
+}
