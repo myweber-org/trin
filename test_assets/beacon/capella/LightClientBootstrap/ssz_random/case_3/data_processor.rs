@@ -1,129 +1,99 @@
-use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 
 pub struct DataProcessor {
-    data: Vec<f64>,
-    frequency_map: HashMap<String, u32>,
+    cache: HashMap<String, Vec<f64>>,
 }
 
 impl DataProcessor {
     pub fn new() -> Self {
         DataProcessor {
-            data: Vec::new(),
-            frequency_map: HashMap::new(),
+            cache: HashMap::new(),
         }
     }
 
-    pub fn load_from_csv(&mut self, file_path: &str) -> Result<(), Box<dyn Error>> {
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        
-        for line in reader.lines().skip(1) {
-            let line = line?;
-            let parts: Vec<&str> = line.split(',').collect();
-            
-            if parts.len() >= 2 {
-                if let Ok(value) = parts[1].parse::<f64>() {
-                    self.data.push(value);
-                }
-                
-                let category = parts[0].to_string();
-                *self.frequency_map.entry(category).or_insert(0) += 1;
+    pub fn process_dataset(&mut self, key: &str, data: &[f64]) -> Result<Vec<f64>, String> {
+        if data.is_empty() {
+            return Err("Empty dataset provided".to_string());
+        }
+
+        if let Some(cached) = self.cache.get(key) {
+            return Ok(cached.clone());
+        }
+
+        let validated = self.validate_data(data)?;
+        let normalized = self.normalize_data(&validated);
+        let transformed = self.apply_transformations(&normalized);
+
+        self.cache.insert(key.to_string(), transformed.clone());
+        Ok(transformed)
+    }
+
+    fn validate_data(&self, data: &[f64]) -> Result<Vec<f64>, String> {
+        for &value in data {
+            if !value.is_finite() {
+                return Err("Invalid numeric value detected".to_string());
             }
         }
-        
-        Ok(())
+        Ok(data.to_vec())
     }
 
-    pub fn calculate_mean(&self) -> Option<f64> {
-        if self.data.is_empty() {
-            return None;
-        }
-        
-        let sum: f64 = self.data.iter().sum();
-        Some(sum / self.data.len() as f64)
-    }
-
-    pub fn calculate_standard_deviation(&self) -> Option<f64> {
-        if self.data.len() < 2 {
-            return None;
-        }
-        
-        let mean = self.calculate_mean()?;
-        let variance: f64 = self.data.iter()
+    fn normalize_data(&self, data: &[f64]) -> Vec<f64> {
+        let mean = data.iter().sum::<f64>() / data.len() as f64;
+        let variance = data.iter()
             .map(|&x| (x - mean).powi(2))
-            .sum::<f64>() / (self.data.len() - 1) as f64;
-        
-        Some(variance.sqrt())
-    }
+            .sum::<f64>() / data.len() as f64;
+        let std_dev = variance.sqrt();
 
-    pub fn get_top_categories(&self, limit: usize) -> Vec<(String, u32)> {
-        let mut categories: Vec<_> = self.frequency_map.iter().collect();
-        categories.sort_by(|a, b| b.1.cmp(a.1));
-        
-        categories.iter()
-            .take(limit)
-            .map(|(&ref k, &v)| (k.clone(), v))
+        if std_dev.abs() < 1e-10 {
+            return vec![0.0; data.len()];
+        }
+
+        data.iter()
+            .map(|&x| (x - mean) / std_dev)
             .collect()
     }
 
-    pub fn filter_by_threshold(&self, threshold: f64) -> Vec<f64> {
-        self.data.iter()
-            .filter(|&&x| x >= threshold)
-            .cloned()
+    fn apply_transformations(&self, data: &[f64]) -> Vec<f64> {
+        data.iter()
+            .map(|&x| x.powi(2).ln_1p())
             .collect()
     }
 
-    pub fn data_summary(&self) -> String {
-        let mean_str = match self.calculate_mean() {
-            Some(mean) => format!("{:.2}", mean),
-            None => "N/A".to_string(),
-        };
-        
-        let std_str = match self.calculate_standard_deviation() {
-            Some(std) => format!("{:.2}", std),
-            None => "N/A".to_string(),
-        };
-        
-        format!(
-            "Data Summary:\nTotal entries: {}\nMean: {}\nStandard Deviation: {}\nUnique categories: {}",
-            self.data.len(),
-            mean_str,
-            std_str,
-            self.frequency_map.len()
-        )
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
+    pub fn cache_stats(&self) -> (usize, usize) {
+        let total_items: usize = self.cache.values().map(|v| v.len()).sum();
+        (self.cache.len(), total_items)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_data_processing() {
         let mut processor = DataProcessor::new();
+        let test_data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "category,value").unwrap();
-        writeln!(temp_file, "A,10.5").unwrap();
-        writeln!(temp_file, "B,20.3").unwrap();
-        writeln!(temp_file, "A,15.7").unwrap();
-        writeln!(temp_file, "C,8.9").unwrap();
+        let result = processor.process_dataset("test", &test_data);
+        assert!(result.is_ok());
         
-        processor.load_from_csv(temp_file.path().to_str().unwrap()).unwrap();
+        let processed = result.unwrap();
+        assert_eq!(processed.len(), test_data.len());
         
-        assert_eq!(processor.data.len(), 4);
-        assert_eq!(processor.frequency_map.len(), 3);
+        let stats = processor.cache_stats();
+        assert_eq!(stats.0, 1);
+    }
+
+    #[test]
+    fn test_invalid_data() {
+        let mut processor = DataProcessor::new();
+        let invalid_data = vec![1.0, f64::NAN, 3.0];
         
-        let mean = processor.calculate_mean().unwrap();
-        assert!((mean - 13.85).abs() < 0.01);
-        
-        let top_categories = processor.get_top_categories(2);
-        assert_eq!(top_categories[0].0, "A");
-        assert_eq!(top_categories[0].1, 2);
+        let result = processor.process_dataset("invalid", &invalid_data);
+        assert!(result.is_err());
     }
 }
