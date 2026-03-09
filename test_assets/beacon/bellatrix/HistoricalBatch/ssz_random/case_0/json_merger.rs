@@ -1,97 +1,46 @@
-use std::collections::HashMap;
+
+use serde_json::{Value, Map};
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Write};
 use std::path::Path;
+use std::env;
 
-type JsonValue = serde_json::Value;
-type JsonResult = Result<JsonValue, Box<dyn std::error::Error>>;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <output_file.json> <input1.json> [input2.json ...]", args[0]);
+        std::process::exit(1);
+    }
 
-pub struct JsonMerger {
-    data: HashMap<String, JsonValue>,
-}
+    let output_path = &args[1];
+    let input_paths = &args[2..];
 
-impl JsonMerger {
-    pub fn new() -> Self {
-        JsonMerger {
-            data: HashMap::new(),
+    let mut merged_map = Map::new();
+
+    for (index, input_path) in input_paths.iter().enumerate() {
+        let path = Path::new(input_path);
+        if !path.exists() {
+            eprintln!("Warning: File '{}' not found, skipping.", input_path);
+            continue;
         }
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let json_value: Value = serde_json::from_reader(reader)?;
+
+        let key_name = match path.file_stem() {
+            Some(stem) => stem.to_string_lossy().to_string(),
+            None => format!("file_{}", index + 1),
+        };
+
+        merged_map.insert(key_name, json_value);
     }
 
-    pub fn load_file<P: AsRef<Path>>(&mut self, path: P) -> JsonResult {
-        let file = File::open(&path)?;
-        let mut reader = BufReader::new(file);
-        let mut contents = String::new();
-        reader.read_to_string(&mut contents)?;
+    let output_value = Value::Object(merged_map);
+    let mut output_file = File::create(output_path)?;
+    let json_string = serde_json::to_string_pretty(&output_value)?;
+    output_file.write_all(json_string.as_bytes())?;
 
-        let json_value: JsonValue = serde_json::from_str(&contents)?;
-        let filename = path
-            .as_ref()
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        self.data.insert(filename, json_value);
-        Ok(())
-    }
-
-    pub fn load_directory<P: AsRef<Path>>(&mut self, dir_path: P) -> JsonResult {
-        let entries = std::fs::read_dir(dir_path)?;
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "json" {
-                        self.load_file(&path)?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn merge(&self) -> JsonValue {
-        let mut merged = JsonValue::Object(serde_json::Map::new());
-        for (key, value) in &self.data {
-            merged[key] = value.clone();
-        }
-        merged
-    }
-
-    pub fn save_to_file<P: AsRef<Path>>(&self, output_path: P) -> JsonResult {
-        let merged = self.merge();
-        let json_string = serde_json::to_string_pretty(&merged)?;
-        std::fs::write(output_path, json_string)?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_json_merger() {
-        let temp_dir = TempDir::new().unwrap();
-        let file1_path = temp_dir.path().join("config.json");
-        let file2_path = temp_dir.path().join("data.json");
-        let output_path = temp_dir.path().join("merged.json");
-
-        std::fs::write(&file1_path, r#"{"version": "1.0.0"}"#).unwrap();
-        std::fs::write(&file2_path, r#"{"items": [1, 2, 3]}"#).unwrap();
-
-        let mut merger = JsonMerger::new();
-        merger.load_file(&file1_path).unwrap();
-        merger.load_file(&file2_path).unwrap();
-
-        merger.save_to_file(&output_path).unwrap();
-
-        let merged_content = std::fs::read_to_string(&output_path).unwrap();
-        let parsed: JsonValue = serde_json::from_str(&merged_content).unwrap();
-
-        assert!(parsed.get("config").is_some());
-        assert!(parsed.get("data").is_some());
-    }
+    println!("Successfully merged {} files into '{}'", input_paths.len(), output_path);
+    Ok(())
 }
