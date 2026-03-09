@@ -284,3 +284,160 @@ pub fn filter_by_category(records: Vec<Record>, category: &str) -> Vec<Record> {
         .filter(|r| r.category == category)
         .collect()
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    id: u32,
+    name: String,
+    value: f64,
+    tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u32, name: String, value: f64, tags: Vec<String>) -> Result<Self, ProcessingError> {
+        if name.is_empty() {
+            return Err(ProcessingError::InvalidData("Name cannot be empty".to_string()));
+        }
+        if value < 0.0 {
+            return Err(ProcessingError::InvalidData("Value must be non-negative".to_string()));
+        }
+        
+        Ok(Self { id, name, value, tags })
+    }
+    
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.name.len() > 100 {
+            return Err(ProcessingError::ValidationError("Name too long".to_string()));
+        }
+        if self.value > 1000000.0 {
+            return Err(ProcessingError::ValidationError("Value exceeds maximum".to_string()));
+        }
+        Ok(())
+    }
+    
+    pub fn transform(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        if multiplier <= 0.0 {
+            return Err(ProcessingError::TransformationFailed("Multiplier must be positive".to_string()));
+        }
+        
+        self.value *= multiplier;
+        self.tags.push(format!("transformed_{}", multiplier));
+        Ok(())
+    }
+    
+    pub fn calculate_score(&self) -> f64 {
+        let base_score = self.value * 0.8;
+        let tag_bonus = self.tags.len() as f64 * 0.2;
+        base_score + tag_bonus
+    }
+}
+
+pub struct DataProcessor {
+    records: HashMap<u32, DataRecord>,
+    transformations_applied: u32,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self {
+            records: HashMap::new(),
+            transformations_applied: 0,
+        }
+    }
+    
+    pub fn add_record(&mut self, record: DataRecord) -> Result<(), ProcessingError> {
+        record.validate()?;
+        
+        if self.records.contains_key(&record.id) {
+            return Err(ProcessingError::InvalidData(format!("Duplicate ID: {}", record.id)));
+        }
+        
+        self.records.insert(record.id, record);
+        Ok(())
+    }
+    
+    pub fn process_all(&mut self, multiplier: f64) -> Result<(), ProcessingError> {
+        for (_, record) in self.records.iter_mut() {
+            record.transform(multiplier)?;
+            self.transformations_applied += 1;
+        }
+        Ok(())
+    }
+    
+    pub fn get_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        let count = self.records.len() as f64;
+        let total_value: f64 = self.records.values().map(|r| r.value).sum();
+        let avg_score: f64 = self.records.values().map(|r| r.calculate_score()).sum::<f64>() / count;
+        
+        stats.insert("record_count".to_string(), count);
+        stats.insert("total_value".to_string(), total_value);
+        stats.insert("average_score".to_string(), avg_score);
+        stats.insert("transformations_applied".to_string(), self.transformations_applied as f64);
+        
+        stats
+    }
+    
+    pub fn find_by_tag(&self, tag: &str) -> Vec<&DataRecord> {
+        self.records
+            .values()
+            .filter(|record| record.tags.iter().any(|t| t == tag))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, "Test".to_string(), 42.5, vec!["tag1".to_string()]);
+        assert!(record.is_ok());
+    }
+    
+    #[test]
+    fn test_invalid_record() {
+        let record = DataRecord::new(2, "".to_string(), 10.0, vec![]);
+        assert!(record.is_err());
+    }
+    
+    #[test]
+    fn test_transformation() {
+        let mut record = DataRecord::new(3, "Sample".to_string(), 10.0, vec![]).unwrap();
+        assert!(record.transform(2.0).is_ok());
+        assert_eq!(record.value, 20.0);
+    }
+    
+    #[test]
+    fn test_processor_operations() {
+        let mut processor = DataProcessor::new();
+        let record = DataRecord::new(1, "Data1".to_string(), 100.0, vec!["test".to_string()]).unwrap();
+        
+        assert!(processor.add_record(record).is_ok());
+        assert_eq!(processor.records.len(), 1);
+    }
+}
