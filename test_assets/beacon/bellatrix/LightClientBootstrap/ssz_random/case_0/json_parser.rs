@@ -366,4 +366,45 @@ mod tests {
         expected.insert("num".to_string(), JsonValue::Number(42.0));
         assert_eq!(parser.parse(), Ok(JsonValue::Object(expected)));
     }
+}use serde::{Deserialize, Serialize};
+use std::fs;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct User {
+    id: u64,
+    username: String,
+    email: String,
+    active: bool,
+}
+
+fn parse_user_from_file(file_path: &str) -> Result<User, Box<dyn std::error::Error>> {
+    let content = fs::read_to_string(file_path)?;
+    let user: User = serde_json::from_str(&content)?;
+    Ok(user)
+}
+
+fn create_user_json(user: &User) -> Result<String, Box<dyn std::error::Error>> {
+    let json = serde_json::to_string_pretty(user)?;
+    Ok(json)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let user = User {
+        id: 42,
+        username: "alice".to_string(),
+        email: "alice@example.com".to_string(),
+        active: true,
+    };
+
+    let json_output = create_user_json(&user)?;
+    println!("Serialized user:\n{}", json_output);
+
+    let temp_file = "temp_user.json";
+    fs::write(temp_file, json_output)?;
+
+    let parsed_user = parse_user_from_file(temp_file)?;
+    println!("Deserialized user: {:?}", parsed_user);
+
+    fs::remove_file(temp_file)?;
+    Ok(())
 }
