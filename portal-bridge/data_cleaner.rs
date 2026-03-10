@@ -1,28 +1,36 @@
-use csv::{Reader, Writer};
+use csv::{ReaderBuilder, WriterBuilder};
 use std::error::Error;
 use std::fs::File;
+use std::io::{BufReader, BufWriter};
 
-pub fn clean_csv_data(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    let mut reader = Reader::from_path(input_path)?;
-    let mut writer = Writer::from_path(output_path)?;
+pub fn clean_csv(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let input_file = File::open(input_path)?;
+    let reader = BufReader::new(input_file);
+    let mut csv_reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(reader);
 
-    let headers = reader.headers()?.clone();
-    writer.write_record(&headers)?;
+    let output_file = File::create(output_path)?;
+    let writer = BufWriter::new(output_file);
+    let mut csv_writer = WriterBuilder::new()
+        .has_headers(true)
+        .from_writer(writer);
 
-    for result in reader.records() {
+    let headers = csv_reader.headers()?.clone();
+    csv_writer.write_record(&headers)?;
+
+    for result in csv_reader.records() {
         let record = result?;
-        let cleaned_record: Vec<String> = record
+        let filtered_record: Vec<&str> = record
             .iter()
-            .map(|field| {
-                field
-                    .trim()
-                    .to_lowercase()
-                    .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
-            })
+            .filter(|field| !field.trim().is_empty())
             .collect();
-        writer.write_record(&cleaned_record)?;
+
+        if filtered_record.len() == headers.len() {
+            csv_writer.write_record(&filtered_record)?;
+        }
     }
 
-    writer.flush()?;
+    csv_writer.flush()?;
     Ok(())
 }
