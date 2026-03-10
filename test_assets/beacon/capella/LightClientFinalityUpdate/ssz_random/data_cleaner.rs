@@ -1,45 +1,60 @@
-
 use std::collections::HashSet;
-use std::io::{self, BufRead, Write};
 
-pub fn clean_data(input: &str) -> String {
-    let lines: Vec<&str> = input.lines().collect();
-    let unique_lines: HashSet<&str> = lines.iter().cloned().collect();
-    
-    let mut sorted_lines: Vec<&str> = unique_lines.into_iter().collect();
-    sorted_lines.sort();
-    
-    sorted_lines.join("\n")
+pub struct DataCleaner {
+    pub remove_duplicates: bool,
+    pub normalize_case: bool,
 }
 
-pub fn process_stdin() -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut buffer = String::new();
-    
-    for line in stdin.lock().lines() {
-        buffer.push_str(&line?);
-        buffer.push('\n');
+impl DataCleaner {
+    pub fn new(remove_duplicates: bool, normalize_case: bool) -> Self {
+        DataCleaner {
+            remove_duplicates,
+            normalize_case,
+        }
     }
-    
-    let cleaned = clean_data(&buffer);
-    io::stdout().write_all(cleaned.as_bytes())?;
-    
-    Ok(())
+
+    pub fn clean(&self, data: Vec<String>) -> Vec<String> {
+        let mut processed_data = data;
+
+        if self.normalize_case {
+            processed_data = processed_data
+                .into_iter()
+                .map(|s| s.to_lowercase())
+                .collect();
+        }
+
+        if self.remove_duplicates {
+            let unique_set: HashSet<String> = processed_data.into_iter().collect();
+            processed_data = unique_set.into_iter().collect();
+        }
+
+        processed_data.sort();
+        processed_data
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn test_clean_data() {
-        let input = "banana\napple\ncherry\nbanana\napple";
-        let expected = "apple\nbanana\ncherry";
-        assert_eq!(clean_data(input), expected);
+    fn test_cleaner_with_duplicates() {
+        let cleaner = DataCleaner::new(true, false);
+        let input = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "apple".to_string(),
+            "cherry".to_string(),
+        ];
+        let result = cleaner.clean(input);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
     }
-    
+
     #[test]
-    fn test_empty_input() {
-        assert_eq!(clean_data(""), "");
+    fn test_cleaner_with_case_normalization() {
+        let cleaner = DataCleaner::new(false, true);
+        let input = vec!["Apple".to_string(), "BANANA".to_string(), "cherry".to_string()];
+        let result = cleaner.clean(input);
+        assert_eq!(result, vec!["apple", "banana", "cherry"]);
     }
 }
