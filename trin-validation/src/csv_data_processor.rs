@@ -146,4 +146,170 @@ mod tests {
         assert_eq!(record.value, 99.99);
         assert_eq!(record.active, true);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let headers = if let Some(first_line) = lines.next() {
+            first_line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
+        } else {
+            return Err("Empty CSV file".into());
+        };
+
+        let mut records = Vec::new();
+        for line in lines {
+            let record: Vec<String> = line?
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            if record.len() == headers.len() {
+                records.push(record);
+            }
+        }
+
+        Ok(CsvProcessor { headers, records })
+    }
+
+    pub fn filter_by_column(&self, column_name: &str, predicate: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = self.headers.iter().position(|h| h == column_name);
+        
+        column_index.map_or_else(Vec::new, |idx| {
+            self.records
+                .iter()
+                .filter(|record| predicate(&record[idx]))
+                .cloned()
+                .collect()
+        })
+    }
+
+    pub fn aggregate_numeric_column(&self, column_name: &str) -> Option<f64> {
+        let column_index = self.headers.iter().position(|h| h == column_name)?;
+        
+        let sum: f64 = self.records
+            .iter()
+            .filter_map(|record| record[column_index].parse::<f64>().ok())
+            .sum();
+        
+        Some(sum)
+    }
+
+    pub fn get_column_stats(&self, column_name: &str) -> Option<(f64, f64, usize)> {
+        let column_index = self.headers.iter().position(|h| h == column_name)?;
+        
+        let values: Vec<f64> = self.records
+            .iter()
+            .filter_map(|record| record[column_index].parse::<f64>().ok())
+            .collect();
+        
+        if values.is_empty() {
+            return None;
+        }
+        
+        let sum: f64 = values.iter().sum();
+        let count = values.len();
+        let average = sum / count as f64;
+        
+        Some((sum, average, count))
+    }
+
+    pub fn get_unique_values(&self, column_name: &str) -> Option<Vec<String>> {
+        let column_index = self.headers.iter().position(|h| h == column_name)?;
+        
+        let mut unique_values = std::collections::HashSet::new();
+        for record in &self.records {
+            if let Some(value) = record.get(column_index) {
+                unique_values.insert(value.clone());
+            }
+        }
+        
+        Some(unique_values.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "name,age,salary,department").unwrap();
+        writeln!(file, "Alice,30,50000.0,Engineering").unwrap();
+        writeln!(file, "Bob,25,45000.0,Marketing").unwrap();
+        writeln!(file, "Charlie,35,60000.0,Engineering").unwrap();
+        writeln!(file, "Diana,28,48000.0,Sales").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(processor.headers, vec!["name", "age", "salary", "department"]);
+        assert_eq!(processor.records.len(), 4);
+    }
+
+    #[test]
+    fn test_filter_by_column() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        let engineering_records = processor.filter_by_column("department", |dept| dept == "Engineering");
+        assert_eq!(engineering_records.len(), 2);
+        
+        let filtered_names: Vec<String> = engineering_records
+            .iter()
+            .map(|record| record[0].clone())
+            .collect();
+        assert!(filtered_names.contains(&"Alice".to_string()));
+        assert!(filtered_names.contains(&"Charlie".to_string()));
+    }
+
+    #[test]
+    fn test_aggregate_numeric() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        let total_salary = processor.aggregate_numeric_column("salary").unwrap();
+        assert!((total_salary - 203000.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_column_stats() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        let stats = processor.get_column_stats("salary").unwrap();
+        assert!((stats.0 - 203000.0).abs() < 0.001);
+        assert!((stats.1 - 50750.0).abs() < 0.001);
+        assert_eq!(stats.2, 4);
+    }
+
+    #[test]
+    fn test_unique_values() {
+        let test_file = create_test_csv();
+        let processor = CsvProcessor::from_file(test_file.path().to_str().unwrap()).unwrap();
+        
+        let departments = processor.get_unique_values("department").unwrap();
+        assert_eq!(departments.len(), 3);
+        assert!(departments.contains(&"Engineering".to_string()));
+        assert!(departments.contains(&"Marketing".to_string()));
+        assert!(departments.contains(&"Sales".to_string()));
+    }
 }
