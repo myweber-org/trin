@@ -205,3 +205,162 @@ pub fn decrypt_file(input_path: &str, key_path: &str, output_path: &str) -> Resu
     fs::write(output_path, decrypted_data)?;
     Ok(())
 }
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use pbkdf2::pbkdf2_hmac;
+use rand::RngCore;
+use sha2::Sha256;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::Path;
+
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+const SALT_LEN: usize = 16;
+const IV_LEN: usize = 16;
+const KEY_ITERATIONS: u32 = 100_000;
+const KEY_LEN: usize = 32;
+
+pub struct CryptoConfig {
+    pub salt: [u8; SALT_LEN],
+    pub iv: [u8; IV_LEN],
+}
+
+impl CryptoConfig {
+    pub fn new() -> Self {
+        let mut salt = [0u8; SALT_LEN];
+        let mut iv = [0u8; IV_LEN];
+        rand::thread_rng().fill_bytes(&mut salt);
+        rand::thread_rng().fill_bytes(&mut iv);
+        Self { salt, iv }
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() != SALT_LEN + IV_LEN {
+            return None;
+        }
+        let mut salt = [0u8; SALT_LEN];
+        let mut iv = [0u8; IV_LEN];
+        salt.copy_from_slice(&data[..SALT_LEN]);
+        iv.copy_from_slice(&data[SALT_LEN..]);
+        Some(Self { salt, iv })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(SALT_LEN + IV_LEN);
+        result.extend_from_slice(&self.salt);
+        result.extend_from_slice(&self.iv);
+        result
+    }
+}
+
+fn derive_key(password: &str, salt: &[u8]) -> [u8; KEY_LEN] {
+    let mut key = [0u8; KEY_LEN];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, KEY_ITERATIONS, &mut key);
+    key
+}
+
+pub fn encrypt_file(
+    source_path: &Path,
+    dest_path: &Path,
+    password: &str,
+) -> Result<CryptoConfig, String> {
+    let config = CryptoConfig::new();
+    let key = derive_key(password, &config.salt);
+
+    let mut input_file = fs::File::open(source_path)
+        .map_err(|e| format!("Failed to open source file: {}", e))?;
+    let mut plaintext = Vec::new();
+    input_file
+        .read_to_end(&mut plaintext)
+        .map_err(|e| format!("Failed to read source file: {}", e))?;
+
+    let ciphertext = Aes256CbcEnc::new(&key.into(), &config.iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut output_file = fs::File::create(dest_path)
+        .map_err(|e| format!("Failed to create destination file: {}", e))?;
+    output_file
+        .write_all(&ciphertext)
+        .map_err(|e| format!("Failed to write encrypted data: {}", e))?;
+
+    Ok(config)
+}
+
+pub fn decrypt_file(
+    source_path: &Path,
+    dest_path: &Path,
+    password: &str,
+    config: &CryptoConfig,
+) -> Result<(), String> {
+    let key = derive_key(password, &config.salt);
+
+    let mut input_file = fs::File::open(source_path)
+        .map_err(|e| format!("Failed to open encrypted file: {}", e))?;
+    let mut ciphertext = Vec::new();
+    input_file
+        .read_to_end(&mut ciphertext)
+        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+
+    let decrypted = Aes256CbcDec::new(&key.into(), &config.iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    let mut output_file = fs::File::create(dest_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+    output_file
+        .write_all(&decrypted)
+        .map_err(|e| format!("Failed to write decrypted data: {}", e))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_decryption() {
+        let plaintext = b"Secret data that needs protection";
+        let password = "strong_password_123";
+
+        let mut source_file = NamedTempFile::new().unwrap();
+        source_file.write_all(plaintext).unwrap();
+
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        let config = encrypt_file(
+            source_file.path(),
+            encrypted_file.path(),
+            password,
+        )
+        .unwrap();
+
+        decrypt_file(
+            encrypted_file.path(),
+            decrypted_file.path(),
+            password,
+            &config,
+        )
+        .unwrap();
+
+        let mut decrypted_data = Vec::new();
+        fs::File::open(decrypted_file.path())
+            .unwrap()
+            .read_to_end(&mut decrypted_data)
+            .unwrap();
+
+        assert_eq!(decrypted_data, plaintext);
+    }
+
+    #[test]
+    fn test_config_serialization() {
+        let config = CryptoConfig::new();
+        let bytes = config.to_bytes();
+        let restored = CryptoConfig::from_bytes(&bytes).unwrap();
+        assert_eq!(config.salt, restored.salt);
+        assert_eq!(config.iv, restored.iv);
+    }
+}
