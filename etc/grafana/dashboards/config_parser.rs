@@ -1,112 +1,130 @@
-
-use std::collections::HashMap;
-use std::env;
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub database_url: String,
-    pub port: u16,
-    pub debug_mode: bool,
-    pub api_keys: Vec<String>,
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logging: LoggingConfig,
 }
 
-impl Config {
-    pub fn from_file(path: &str) -> Result<Self, String> {
-        let contents = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: u64,
+}
 
-        let mut config_map = HashMap::new();
-        for line in contents.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DatabaseConfig {
+    pub url: String,
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub connect_timeout: u64,
+}
 
-            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
-            if parts.len() == 2 {
-                config_map.insert(parts[0].trim().to_string(), parts[1].trim().to_string());
-            }
-        }
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub file_path: Option<String>,
+    pub rotation: String,
+}
 
-        Self::from_map(&config_map)
-    }
-
-    pub fn from_env() -> Result<Self, String> {
-        let mut config_map = HashMap::new();
-        for (key, value) in env::vars() {
-            if key.starts_with("APP_") {
-                config_map.insert(key.trim_start_matches("APP_").to_string(), value);
-            }
-        }
-
-        Self::from_map(&config_map)
-    }
-
-    fn from_map(map: &HashMap<String, String>) -> Result<Self, String> {
-        let database_url = map
-            .get("DATABASE_URL")
-            .map(|s| s.to_string())
-            .or_else(|| env::var("DATABASE_URL").ok())
-            .unwrap_or_else(|| "postgres://localhost:5432/app".to_string());
-
-        let port = map
-            .get("PORT")
-            .and_then(|s| s.parse().ok())
-            .or_else(|| env::var("PORT").ok().and_then(|s| s.parse().ok()))
-            .unwrap_or(8080);
-
-        let debug_mode = map
-            .get("DEBUG")
-            .map(|s| s.to_lowercase() == "true")
-            .or_else(|| env::var("DEBUG").ok().map(|s| s.to_lowercase() == "true"))
-            .unwrap_or(false);
-
-        let api_keys = map
-            .get("API_KEYS")
-            .map(|s| s.split(',').map(|key| key.trim().to_string()).collect())
-            .or_else(|| {
-                env::var("API_KEYS")
-                    .ok()
-                    .map(|s| s.split(',').map(|key| key.trim().to_string()).collect())
-            })
-            .unwrap_or_else(Vec::new);
-
-        Ok(Config {
-            database_url,
-            port,
-            debug_mode,
-            api_keys,
-        })
-    }
-
-    pub fn merge(self, other: Self) -> Self {
-        Self {
-            database_url: other.database_url,
-            port: other.port,
-            debug_mode: other.debug_mode,
-            api_keys: if other.api_keys.is_empty() {
-                self.api_keys
-            } else {
-                other.api_keys
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+            },
+            database: DatabaseConfig {
+                url: "postgresql://localhost:5432/mydb".to_string(),
+                max_connections: 10,
+                min_connections: 2,
+                connect_timeout: 10,
+            },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                file_path: None,
+                rotation: "daily".to_string(),
             },
         }
     }
 }
 
-pub fn load_config() -> Result<Config, String> {
-    let file_config = Config::from_file("config/app.conf").unwrap_or_default();
-    let env_config = Config::from_env()?;
-    Ok(file_config.merge(env_config))
+impl AppConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| ConfigError::IoError(e.to_string()))?;
+        
+        let config: AppConfig = toml::from_str(&content)
+            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn from_file_or_default<P: AsRef<Path>>(path: P) -> Self {
+        match Self::from_file(path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Failed to load config: {}, using defaults", e);
+                Self::default()
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.server.port == 0 {
+            return Err(ConfigError::ValidationError("Port cannot be 0".to_string()));
+        }
+        
+        if self.database.max_connections < self.database.min_connections {
+            return Err(ConfigError::ValidationError(
+                "Max connections must be >= min connections".to_string()
+            ));
+        }
+
+        let valid_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_levels.contains(&self.logging.level.as_str()) {
+            return Err(ConfigError::ValidationError(
+                format!("Invalid log level: {}", self.logging.level)
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
+        let toml_string = toml::to_string_pretty(self)
+            .map_err(|e| ConfigError::SerializeError(e.to_string()))?;
+        
+        fs::write(path, toml_string)
+            .map_err(|e| ConfigError::IoError(e.to_string()))?;
+        
+        Ok(())
+    }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            database_url: "postgres://localhost:5432/app".to_string(),
-            port: 8080,
-            debug_mode: false,
-            api_keys: Vec::new(),
+#[derive(Debug)]
+pub enum ConfigError {
+    IoError(String),
+    ParseError(String),
+    ValidationError(String),
+    SerializeError(String),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::IoError(msg) => write!(f, "IO error: {}", msg),
+            ConfigError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+            ConfigError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+            ConfigError::SerializeError(msg) => write!(f, "Serialize error: {}", msg),
         }
     }
 }
+
+impl std::error::Error for ConfigError {}
