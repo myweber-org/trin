@@ -85,3 +85,94 @@ mod tests {
         assert!(result.is_err());
     }
 }
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+pub struct DataProcessor {
+    file_path: String,
+    delimiter: char,
+}
+
+impl DataProcessor {
+    pub fn new(file_path: &str) -> Self {
+        DataProcessor {
+            file_path: file_path.to_string(),
+            delimiter: ',',
+        }
+    }
+
+    pub fn set_delimiter(&mut self, delimiter: char) -> &mut Self {
+        self.delimiter = delimiter;
+        self
+    }
+
+    pub fn process_file<F>(&self, filter_fn: F) -> Result<Vec<Vec<String>>, Box<dyn Error>>
+    where
+        F: Fn(&[String]) -> bool,
+    {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut results = Vec::new();
+
+        for line in reader.lines() {
+            let line_content = line?;
+            let fields: Vec<String> = line_content
+                .split(self.delimiter)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            if filter_fn(&fields) {
+                results.push(fields);
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn count_records(&self) -> Result<usize, Box<dyn Error>> {
+        let path = Path::new(&self.file_path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        Ok(reader.lines().count())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_data_processing() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "id,name,value").unwrap();
+        writeln!(temp_file, "1,item_a,100").unwrap();
+        writeln!(temp_file, "2,item_b,200").unwrap();
+        writeln!(temp_file, "3,item_c,300").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let result = processor
+            .process_file(|fields| fields[2].parse::<i32>().unwrap_or(0) > 150)
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0][1], "item_b");
+        assert_eq!(result[1][1], "item_c");
+    }
+
+    #[test]
+    fn test_record_count() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "header1,header2").unwrap();
+        writeln!(temp_file, "data1,data2").unwrap();
+        writeln!(temp_file, "data3,data4").unwrap();
+
+        let processor = DataProcessor::new(temp_file.path().to_str().unwrap());
+        let count = processor.count_records().unwrap();
+        assert_eq!(count, 3);
+    }
+}
