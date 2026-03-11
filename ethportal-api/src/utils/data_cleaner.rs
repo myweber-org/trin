@@ -126,3 +126,70 @@ mod tests {
         assert_eq!(records[0][2], "NEW YORK");
     }
 }
+use std::collections::HashSet;
+
+pub struct DataCleaner {
+    records: Vec<String>,
+}
+
+impl DataCleaner {
+    pub fn new() -> Self {
+        DataCleaner {
+            records: Vec::new(),
+        }
+    }
+
+    pub fn add_record(&mut self, record: String) {
+        self.records.push(record);
+    }
+
+    pub fn deduplicate(&mut self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.records.retain(|record| seen.insert(record.clone()));
+        self.records.clone()
+    }
+
+    pub fn validate_records(&self) -> Vec<bool> {
+        self.records
+            .iter()
+            .map(|record| !record.trim().is_empty())
+            .collect()
+    }
+
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn clear_all(&mut self) {
+        self.records.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplication() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("test".to_string());
+        cleaner.add_record("test".to_string());
+        cleaner.add_record("unique".to_string());
+        
+        let deduped = cleaner.deduplicate();
+        assert_eq!(deduped.len(), 2);
+        assert!(deduped.contains(&"test".to_string()));
+        assert!(deduped.contains(&"unique".to_string()));
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut cleaner = DataCleaner::new();
+        cleaner.add_record("valid".to_string());
+        cleaner.add_record("   ".to_string());
+        cleaner.add_record("".to_string());
+        
+        let validation_results = cleaner.validate_records();
+        assert_eq!(validation_results, vec![true, false, false]);
+    }
+}
