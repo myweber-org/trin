@@ -738,3 +738,229 @@ mod tests {
         assert_eq!(processor.get_category_total("Test"), 200.0);
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: HashMap<String, f64>,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationFailed(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationFailed(msg) => write!(f, "Transformation failed: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl DataRecord {
+    pub fn new(id: u64, timestamp: i64) -> Self {
+        Self {
+            id,
+            timestamp,
+            values: HashMap::new(),
+            metadata: None,
+        }
+    }
+
+    pub fn add_value(&mut self, key: &str, value: f64) {
+        self.values.insert(key.to_string(), value);
+    }
+
+    pub fn add_metadata(&mut self, key: &str, value: &str) {
+        if self.metadata.is_none() {
+            self.metadata = Some(HashMap::new());
+        }
+        if let Some(metadata) = &mut self.metadata {
+            metadata.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProcessingError> {
+        if self.id == 0 {
+            return Err(ProcessingError::ValidationError("ID cannot be zero".to_string()));
+        }
+
+        if self.timestamp < 0 {
+            return Err(ProcessingError::ValidationError("Timestamp cannot be negative".to_string()));
+        }
+
+        if self.values.is_empty() {
+            return Err(ProcessingError::ValidationError("Record must contain at least one value".to_string()));
+        }
+
+        for (key, value) in &self.values {
+            if key.trim().is_empty() {
+                return Err(ProcessingError::ValidationError("Value key cannot be empty".to_string()));
+            }
+            if !value.is_finite() {
+                return Err(ProcessingError::ValidationError(format!("Value for key '{}' is not finite", key)));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn normalize_values(&mut self) -> Result<(), ProcessingError> {
+        if self.values.is_empty() {
+            return Err(ProcessingError::TransformationFailed("No values to normalize".to_string()));
+        }
+
+        let values: Vec<f64> = self.values.values().copied().collect();
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let variance = values.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / values.len() as f64;
+        let std_dev = variance.sqrt();
+
+        if std_dev.abs() < f64::EPSILON {
+            return Err(ProcessingError::TransformationFailed("Cannot normalize: standard deviation is zero".to_string()));
+        }
+
+        for value in self.values.values_mut() {
+            *value = (*value - mean) / std_dev;
+        }
+
+        Ok(())
+    }
+
+    pub fn calculate_statistics(&self) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if self.values.is_empty() {
+            return stats;
+        }
+
+        let values: Vec<f64> = self.values.values().copied().collect();
+        let count = values.len() as f64;
+        let sum: f64 = values.iter().sum();
+        let mean = sum / count;
+
+        let variance = values.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / count;
+
+        let sorted_values = {
+            let mut sorted = values.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted
+        };
+
+        let median = if count as usize % 2 == 0 {
+            let mid = count as usize / 2;
+            (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
+        } else {
+            sorted_values[count as usize / 2]
+        };
+
+        stats.insert("count".to_string(), count);
+        stats.insert("sum".to_string(), sum);
+        stats.insert("mean".to_string(), mean);
+        stats.insert("variance".to_string(), variance);
+        stats.insert("std_dev".to_string(), variance.sqrt());
+        stats.insert("median".to_string(), median);
+        stats.insert("min".to_string(), *sorted_values.first().unwrap());
+        stats.insert("max".to_string(), *sorted_values.last().unwrap());
+
+        stats
+    }
+}
+
+pub fn process_records(records: &mut [DataRecord]) -> Result<Vec<HashMap<String, f64>>, ProcessingError> {
+    let mut results = Vec::new();
+
+    for record in records.iter_mut() {
+        record.validate()?;
+        record.normalize_values()?;
+        let stats = record.calculate_statistics();
+        results.push(stats);
+    }
+
+    Ok(results)
+}
+
+pub fn filter_records_by_threshold(records: &[DataRecord], key: &str, threshold: f64) -> Vec<DataRecord> {
+    records.iter()
+        .filter(|record| {
+            record.values.get(key)
+                .map(|&value| value >= threshold)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value("temperature", 25.5);
+        record.add_metadata("sensor", "sensor_001");
+
+        assert_eq!(record.id, 1);
+        assert_eq!(record.timestamp, 1234567890);
+        assert_eq!(record.values.get("temperature"), Some(&25.5));
+        assert_eq!(record.metadata.as_ref().unwrap().get("sensor"), Some(&"sensor_001".to_string()));
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut valid_record = DataRecord::new(1, 1234567890);
+        valid_record.add_value("temp", 25.5);
+        assert!(valid_record.validate().is_ok());
+
+        let mut invalid_record = DataRecord::new(0, 1234567890);
+        invalid_record.add_value("temp", 25.5);
+        assert!(invalid_record.validate().is_err());
+    }
+
+    #[test]
+    fn test_normalization() {
+        let mut record = DataRecord::new(1, 1234567890);
+        record.add_value("a", 1.0);
+        record.add_value("b", 2.0);
+        record.add_value("c", 3.0);
+
+        assert!(record.normalize_values().is_ok());
+        
+        let stats = record.calculate_statistics();
+        assert!((stats.get("mean").unwrap() - 0.0).abs() < 1e-10);
+        assert!((stats.get("std_dev").unwrap() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_filtering() {
+        let mut records = vec![
+            DataRecord::new(1, 1000),
+            DataRecord::new(2, 2000),
+            DataRecord::new(3, 3000),
+        ];
+
+        records[0].add_value("score", 50.0);
+        records[1].add_value("score", 75.0);
+        records[2].add_value("score", 100.0);
+
+        let filtered = filter_records_by_threshold(&records, "score", 75.0);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 2);
+        assert_eq!(filtered[1].id, 3);
+    }
+}
