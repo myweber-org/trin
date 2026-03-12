@@ -212,4 +212,101 @@ mod tests {
         assert_eq!(config1.get("B"), Some(&"3".to_string()));
         assert_eq!(config1.get("C"), Some(&"4".to_string()));
     }
+}use std::collections::HashMap;
+use std::env;
+use regex::Regex;
+
+pub struct ConfigParser {
+    values: HashMap<String, String>,
+}
+
+impl ConfigParser {
+    pub fn new() -> Self {
+        ConfigParser {
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn parse_file(&mut self, path: &str) -> Result<(), String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
+        
+        let var_pattern = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            
+            if let Some((key, mut value)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                
+                for cap in var_pattern.captures_iter(&value) {
+                    if let Some(var_name) = cap.get(1) {
+                        if let Ok(env_value) = env::var(var_name.as_str()) {
+                            value = value.replace(&cap[0], &env_value);
+                        }
+                    }
+                }
+                
+                self.values.insert(key, value.trim().to_string());
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.values.get(key)
+    }
+
+    pub fn get_or_default(&self, key: &str, default: &str) -> String {
+        self.values.get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_basic_parsing() {
+        let mut config = ConfigParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        
+        writeln!(temp_file, "DATABASE_HOST=localhost").unwrap();
+        writeln!(temp_file, "DATABASE_PORT=5432").unwrap();
+        writeln!(temp_file, "# This is a comment").unwrap();
+        writeln!(temp_file, "MAX_CONNECTIONS=100").unwrap();
+        
+        config.parse_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(config.get("DATABASE_HOST"), Some(&"localhost".to_string()));
+        assert_eq!(config.get("DATABASE_PORT"), Some(&"5432".to_string()));
+        assert_eq!(config.get("MAX_CONNECTIONS"), Some(&"100".to_string()));
+        assert_eq!(config.get("NON_EXISTENT"), None);
+    }
+
+    #[test]
+    fn test_env_substitution() {
+        env::set_var("APP_SECRET", "my_secret_key");
+        
+        let mut config = ConfigParser::new();
+        let mut temp_file = NamedTempFile::new().unwrap();
+        
+        writeln!(temp_file, "SECRET_KEY=${APP_SECRET}").unwrap();
+        writeln!(temp_file, "API_KEY=${NON_EXISTENT_VAR}").unwrap();
+        
+        config.parse_file(temp_file.path().to_str().unwrap()).unwrap();
+        
+        assert_eq!(config.get("SECRET_KEY"), Some(&"my_secret_key".to_string()));
+        assert_eq!(config.get("API_KEY"), Some(&"${NON_EXISTENT_VAR}".to_string()));
+    }
 }
