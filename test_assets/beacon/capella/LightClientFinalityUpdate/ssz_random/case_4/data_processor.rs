@@ -347,4 +347,83 @@ pub fn validate_data_format(data: &[Vec<String>]) -> bool {
 
     let expected_len = data[0].len();
     data.iter().all(|row| row.len() == expected_len)
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+pub struct DataRecord {
+    id: u32,
+    value: f64,
+    category: String,
+}
+
+impl DataRecord {
+    pub fn new(id: u32, value: f64, category: String) -> Result<Self, Box<dyn Error>> {
+        if value < 0.0 {
+            return Err("Value cannot be negative".into());
+        }
+        if category.trim().is_empty() {
+            return Err("Category cannot be empty".into());
+        }
+        Ok(Self { id, value, category })
+    }
+
+    pub fn calculate_tax(&self, rate: f64) -> f64 {
+        self.value * rate
+    }
+}
+
+pub fn process_csv_file(path: &str) -> Result<Vec<DataRecord>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (line_num, line) in reader.lines().enumerate().skip(1) {
+        let line = line?;
+        let parts: Vec<&str> = line.split(',').collect();
+        
+        if parts.len() != 3 {
+            return Err(format!("Invalid CSV format at line {}", line_num + 1).into());
+        }
+
+        let id = parts[0].parse::<u32>()?;
+        let value = parts[1].parse::<f64>()?;
+        let category = parts[2].to_string();
+
+        match DataRecord::new(id, value, category) {
+            Ok(record) => records.push(record),
+            Err(e) => eprintln!("Warning: Skipping invalid record at line {}: {}", line_num + 1, e),
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn calculate_total_value(records: &[DataRecord]) -> f64 {
+    records.iter().map(|r| r.value).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_record_creation() {
+        let record = DataRecord::new(1, 100.0, "A".to_string()).unwrap();
+        assert_eq!(record.id, 1);
+        assert_eq!(record.value, 100.0);
+        assert_eq!(record.category, "A");
+    }
+
+    #[test]
+    fn test_invalid_record() {
+        assert!(DataRecord::new(2, -50.0, "B".to_string()).is_err());
+        assert!(DataRecord::new(3, 50.0, "".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_tax_calculation() {
+        let record = DataRecord::new(4, 200.0, "C".to_string()).unwrap();
+        assert_eq!(record.calculate_tax(0.1), 20.0);
+    }
 }
