@@ -165,3 +165,86 @@ mod tests {
         assert_eq!(original_data.to_vec(), decrypted_data);
     }
 }
+use base64::{engine::general_purpose, Engine as _};
+use std::fs;
+use std::io::{self, Read, Write};
+
+const DEFAULT_KEY: &[u8] = b"secret-encryption-key-2024";
+
+pub fn encrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let mut input_file = fs::File::open(input_path)?;
+    let mut buffer = Vec::new();
+    input_file.read_to_end(&mut buffer)?;
+
+    let encrypted_data: Vec<u8> = buffer
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+
+    let encoded = general_purpose::STANDARD.encode(&encrypted_data);
+    fs::write(output_path, encoded)
+}
+
+pub fn decrypt_file(input_path: &str, output_path: &str, key: Option<&[u8]>) -> io::Result<()> {
+    let key = key.unwrap_or(DEFAULT_KEY);
+    let encoded = fs::read_to_string(input_path)?;
+    let encrypted_data = general_purpose::STANDARD.decode(encoded.trim()).map_err(|e| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("Base64 decode failed: {}", e))
+    })?;
+
+    let decrypted_data: Vec<u8> = encrypted_data
+        .iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect();
+
+    fs::write(output_path, decrypted_data)
+}
+
+pub fn generate_key(length: usize) -> Vec<u8> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..length).map(|_| rng.gen()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_encryption_roundtrip() {
+        let test_data = b"Hello, secure world!";
+        let key = b"test-key-123";
+
+        let input_file = NamedTempFile::new().unwrap();
+        let encrypted_file = NamedTempFile::new().unwrap();
+        let decrypted_file = NamedTempFile::new().unwrap();
+
+        fs::write(input_file.path(), test_data).unwrap();
+
+        encrypt_file(
+            input_file.path().to_str().unwrap(),
+            encrypted_file.path().to_str().unwrap(),
+            Some(key),
+        ).unwrap();
+
+        decrypt_file(
+            encrypted_file.path().to_str().unwrap(),
+            decrypted_file.path().to_str().unwrap(),
+            Some(key),
+        ).unwrap();
+
+        let decrypted_content = fs::read(decrypted_file.path()).unwrap();
+        assert_eq!(decrypted_content, test_data);
+    }
+
+    #[test]
+    fn test_key_generation() {
+        let key = generate_key(32);
+        assert_eq!(key.len(), 32);
+        assert!(key.iter().any(|&b| b != 0));
+    }
+}
