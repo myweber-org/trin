@@ -293,4 +293,101 @@ mod tests {
 
         assert_eq!(normalized_values, &vec![0.25, 0.5, 0.75, 1.0]);
     }
+}use csv::Reader;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs::File;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    id: u32,
+    name: String,
+    value: f64,
+    active: bool,
+}
+
+fn process_csv_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::open(input_path)?;
+    let mut rdr = Reader::from_reader(file);
+    
+    let mut records: Vec<Record> = Vec::new();
+    
+    for result in rdr.deserialize() {
+        let record: Record = result?;
+        if record.active && record.value > 50.0 {
+            records.push(record);
+        }
+    }
+    
+    let output_file = File::create(output_path)?;
+    let mut wtr = csv::Writer::from_writer(output_file);
+    
+    for record in records {
+        wtr.serialize(record)?;
+    }
+    
+    wtr.flush()?;
+    Ok(())
+}
+
+fn calculate_statistics(records: &[Record]) -> (f64, f64, f64) {
+    let count = records.len() as f64;
+    if count == 0.0 {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let sum: f64 = records.iter().map(|r| r.value).sum();
+    let mean = sum / count;
+    
+    let variance: f64 = records.iter()
+        .map(|r| (r.value - mean).powi(2))
+        .sum::<f64>() / count;
+    
+    let std_dev = variance.sqrt();
+    
+    (sum, mean, std_dev)
+}
+
+fn validate_record(record: &Record) -> bool {
+    !record.name.is_empty() && record.value >= 0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_statistics_calculation() {
+        let records = vec![
+            Record { id: 1, name: "Test1".to_string(), value: 100.0, active: true },
+            Record { id: 2, name: "Test2".to_string(), value: 200.0, active: true },
+        ];
+        
+        let (sum, mean, std_dev) = calculate_statistics(&records);
+        
+        assert_eq!(sum, 300.0);
+        assert_eq!(mean, 150.0);
+        assert!(std_dev > 0.0);
+    }
+    
+    #[test]
+    fn test_record_validation() {
+        let valid_record = Record {
+            id: 1,
+            name: "Valid".to_string(),
+            value: 100.0,
+            active: true,
+        };
+        
+        let invalid_record = Record {
+            id: 2,
+            name: "".to_string(),
+            value: -10.0,
+            active: true,
+        };
+        
+        assert!(validate_record(&valid_record));
+        assert!(!validate_record(&invalid_record));
+    }
 }
