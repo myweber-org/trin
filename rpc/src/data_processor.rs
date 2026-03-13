@@ -1166,3 +1166,158 @@ mod tests {
         assert!(!record.is_valid());
     }
 }
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("Invalid input data")]
+    InvalidInput,
+    #[error("Processing timeout")]
+    Timeout,
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataRecord {
+    pub id: u64,
+    pub timestamp: i64,
+    pub values: Vec<f64>,
+    pub metadata: HashMap<String, String>,
+}
+
+pub struct DataProcessor {
+    threshold: f64,
+    max_records: usize,
+}
+
+impl DataProcessor {
+    pub fn new(threshold: f64, max_records: usize) -> Self {
+        DataProcessor {
+            threshold,
+            max_records,
+        }
+    }
+
+    pub fn validate_record(&self, record: &DataRecord) -> Result<(), DataError> {
+        if record.values.is_empty() {
+            return Err(DataError::InvalidInput);
+        }
+
+        if record.values.iter().any(|&v| v.is_nan() || v.is_infinite()) {
+            return Err(DataError::InvalidInput);
+        }
+
+        if record.values.len() > self.max_records {
+            return Err(DataError::InvalidInput);
+        }
+
+        Ok(())
+    }
+
+    pub fn process_records(&self, records: Vec<DataRecord>) -> Result<Vec<DataRecord>, DataError> {
+        let mut processed = Vec::with_capacity(records.len());
+
+        for record in records {
+            self.validate_record(&record)?;
+            
+            let mut processed_record = record.clone();
+            
+            processed_record.values = processed_record
+                .values
+                .into_iter()
+                .map(|v| if v > self.threshold { self.threshold } else { v })
+                .collect();
+
+            processed.push(processed_record);
+        }
+
+        Ok(processed)
+    }
+
+    pub fn calculate_statistics(&self, records: &[DataRecord]) -> HashMap<String, f64> {
+        let mut stats = HashMap::new();
+        
+        if records.is_empty() {
+            return stats;
+        }
+
+        let total_values: Vec<f64> = records
+            .iter()
+            .flat_map(|r| r.values.clone())
+            .collect();
+
+        if !total_values.is_empty() {
+            let sum: f64 = total_values.iter().sum();
+            let count = total_values.len() as f64;
+            let avg = sum / count;
+            
+            let variance: f64 = total_values
+                .iter()
+                .map(|&v| (v - avg).powi(2))
+                .sum::<f64>() / count;
+
+            stats.insert("mean".to_string(), avg);
+            stats.insert("variance".to_string(), variance);
+            stats.insert("count".to_string(), count);
+            stats.insert("sum".to_string(), sum);
+        }
+
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validation() {
+        let processor = DataProcessor::new(100.0, 10);
+        
+        let valid_record = DataRecord {
+            id: 1,
+            timestamp: 1234567890,
+            values: vec![1.0, 2.0, 3.0],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(processor.validate_record(&valid_record).is_ok());
+
+        let invalid_record = DataRecord {
+            id: 2,
+            timestamp: 1234567890,
+            values: vec![f64::NAN],
+            metadata: HashMap::new(),
+        };
+        
+        assert!(processor.validate_record(&invalid_record).is_err());
+    }
+
+    #[test]
+    fn test_processing() {
+        let processor = DataProcessor::new(5.0, 5);
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                timestamp: 1000,
+                values: vec![1.0, 6.0, 3.0],
+                metadata: HashMap::new(),
+            },
+            DataRecord {
+                id: 2,
+                timestamp: 2000,
+                values: vec![4.0, 5.0, 2.0],
+                metadata: HashMap::new(),
+            },
+        ];
+
+        let processed = processor.process_records(records).unwrap();
+        
+        assert_eq!(processed[0].values, vec![1.0, 5.0, 3.0]);
+        assert_eq!(processed[1].values, vec![4.0, 5.0, 2.0]);
+    }
+}
