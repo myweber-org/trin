@@ -203,3 +203,101 @@ mod tests {
         std::fs::remove_file(temp_output).unwrap();
     }
 }
+use std::collections::HashMap;
+
+pub struct DataCleaner {
+    pub strict_mode: bool,
+}
+
+impl DataCleaner {
+    pub fn new(strict: bool) -> Self {
+        DataCleaner {
+            strict_mode: strict,
+        }
+    }
+
+    pub fn clean_string_vector(&self, data: Vec<Option<String>>) -> Vec<String> {
+        data.into_iter()
+            .filter_map(|item| {
+                match item {
+                    Some(mut s) => {
+                        s = s.trim().to_string();
+                        if s.is_empty() && self.strict_mode {
+                            None
+                        } else if s.is_empty() {
+                            Some("N/A".to_string())
+                        } else {
+                            Some(s)
+                        }
+                    }
+                    None if self.strict_mode => None,
+                    None => Some("N/A".to_string()),
+                }
+            })
+            .collect()
+    }
+
+    pub fn clean_hashmap(
+        &self,
+        data: HashMap<String, Option<f64>>,
+    ) -> HashMap<String, f64> {
+        data.into_iter()
+            .filter_map(|(key, value)| {
+                value.and_then(|v| {
+                    if v.is_finite() {
+                        Some((key, v))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    pub fn calculate_statistics(&self, numbers: &[f64]) -> Option<(f64, f64)> {
+        if numbers.is_empty() {
+            return None;
+        }
+
+        let sum: f64 = numbers.iter().sum();
+        let mean = sum / numbers.len() as f64;
+        let variance: f64 = numbers
+            .iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>()
+            / numbers.len() as f64;
+
+        Some((mean, variance.sqrt()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_string_vector_strict() {
+        let cleaner = DataCleaner::new(true);
+        let data = vec![
+            Some("  hello  ".to_string()),
+            Some("".to_string()),
+            None,
+            Some("world".to_string()),
+        ];
+        let result = cleaner.clean_string_vector(data);
+        assert_eq!(result, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_clean_hashmap() {
+        let cleaner = DataCleaner::new(false);
+        let mut data = HashMap::new();
+        data.insert("a".to_string(), Some(1.5));
+        data.insert("b".to_string(), None);
+        data.insert("c".to_string(), Some(f64::NAN));
+
+        let result = cleaner.clean_hashmap(data);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("a"), Some(&1.5));
+    }
+}
