@@ -140,4 +140,105 @@ mod tests {
         assert_eq!(transformed[0].value, 50.0);
         assert_eq!(transformed[1].value, 135.0);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::collections::HashMap;
+
+pub struct CsvProcessor {
+    headers: Vec<String>,
+    records: Vec<Vec<String>>,
+}
+
+impl CsvProcessor {
+    pub fn from_file(file_path: &str) -> Result<Self, Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        
+        let headers_line = lines.next()
+            .ok_or("Empty CSV file")??;
+        let headers: Vec<String> = headers_line
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+        
+        let mut records = Vec::new();
+        for line_result in lines {
+            let line = line_result?;
+            let record: Vec<String> = line
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            if record.len() == headers.len() {
+                records.push(record);
+            }
+        }
+        
+        Ok(CsvProcessor { headers, records })
+    }
+    
+    pub fn filter_by_column(&self, column_name: &str, predicate: impl Fn(&str) -> bool) -> Vec<Vec<String>> {
+        let column_index = self.headers.iter()
+            .position(|h| h == column_name);
+        
+        match column_index {
+            Some(idx) => self.records.iter()
+                .filter(|record| predicate(&record[idx]))
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+    
+    pub fn aggregate_numeric_column(&self, column_name: &str, operation: &str) -> Option<f64> {
+        let column_index = self.headers.iter()
+            .position(|h| h == column_name)?;
+        
+        let numeric_values: Vec<f64> = self.records.iter()
+            .filter_map(|record| record[column_index].parse().ok())
+            .collect();
+        
+        if numeric_values.is_empty() {
+            return None;
+        }
+        
+        match operation {
+            "sum" => Some(numeric_values.iter().sum()),
+            "avg" => Some(numeric_values.iter().sum::<f64>() / numeric_values.len() as f64),
+            "max" => numeric_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).copied(),
+            "min" => numeric_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).copied(),
+            _ => None,
+        }
+    }
+    
+    pub fn group_by_column(&self, group_column: &str, agg_column: &str) -> HashMap<String, f64> {
+        let group_idx = self.headers.iter()
+            .position(|h| h == group_column);
+        let agg_idx = self.headers.iter()
+            .position(|h| h == agg_column);
+        
+        let mut result = HashMap::new();
+        
+        if let (Some(group_idx), Some(agg_idx)) = (group_idx, agg_idx) {
+            for record in &self.records {
+                if let (Some(group_val), Ok(agg_val)) = (
+                    record.get(group_idx),
+                    record.get(agg_idx).and_then(|v| v.parse::<f64>().ok())
+                ) {
+                    *result.entry(group_val.clone()).or_insert(0.0) += agg_val;
+                }
+            }
+        }
+        
+        result
+    }
+    
+    pub fn get_record_count(&self) -> usize {
+        self.records.len()
+    }
+    
+    pub fn get_headers(&self) -> &[String] {
+        &self.headers
+    }
 }
