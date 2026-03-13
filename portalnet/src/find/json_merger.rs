@@ -1,88 +1,81 @@
 use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use std::collections::HashSet;
 
-pub fn merge_json_files(file_paths: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
-    let mut merged_map = Map::new();
-
-    for path_str in file_paths {
-        let path = Path::new(path_str);
-        if !path.exists() {
-            continue;
+pub fn merge_json(base: &mut Value, update: &Value, deep: bool) -> Result<(), String> {
+    match (base, update) {
+        (Value::Object(base_map), Value::Object(update_map)) => {
+            for (key, update_value) in update_map {
+                if deep {
+                    if let Some(base_value) = base_map.get_mut(key) {
+                        merge_json(base_value, update_value, deep)?;
+                    } else {
+                        base_map.insert(key.clone(), update_value.clone());
+                    }
+                } else {
+                    base_map.insert(key.clone(), update_value.clone());
+                }
+            }
+            Ok(())
         }
-
-        let content = fs::read_to_string(path)?;
-        let json_value: Value = serde_json::from_str(&content)?;
-
-        if let Value::Object(obj) = json_value {
-            for (key, value) in obj {
-                merged_map.insert(key, value);
+        (Value::Array(base_arr), Value::Array(update_arr)) => {
+            if deep {
+                base_arr.extend(update_arr.clone());
+                let unique: HashSet<_> = base_arr.drain(..).collect();
+                base_arr.extend(unique);
+                base_arr.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+            } else {
+                *base_arr = update_arr.clone();
+            }
+            Ok(())
+        }
+        (base_val, update_val) => {
+            if deep && base_val.is_null() {
+                *base_val = update_val.clone();
+                Ok(())
+            } else {
+                *base_val = update_val.clone();
+                Ok(())
             }
         }
     }
-
-    Ok(Value::Object(merged_map))
 }
 
 pub fn merge_json_with_strategy(
-    file_paths: &[&str],
+    base: &mut Value,
+    update: &Value,
     strategy: MergeStrategy,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let mut accumulator: HashMap<String, Value> = HashMap::new();
-
-    for path_str in file_paths {
-        let path = Path::new(path_str);
-        if !path.exists() {
-            continue;
-        }
-
-        let content = fs::read_to_string(path)?;
-        let json_value: Value = serde_json::from_str(&content)?;
-
-        if let Value::Object(obj) = json_value {
-            for (key, value) in obj {
-                strategy.apply(&mut accumulator, key, value);
-            }
-        }
+) -> Result<(), String> {
+    match strategy {
+        MergeStrategy::Shallow => merge_json(base, update, false),
+        MergeStrategy::Deep => merge_json(base, update, true),
+        MergeStrategy::Custom(merger) => merger(base, update),
     }
-
-    let final_map: Map<String, Value> = accumulator.into_iter().collect();
-    Ok(Value::Object(final_map))
 }
 
 pub enum MergeStrategy {
-    Overwrite,
-    KeepFirst,
-    MergeObjects,
+    Shallow,
+    Deep,
+    Custom(fn(&mut Value, &Value) -> Result<(), String>),
 }
 
-impl MergeStrategy {
-    fn apply(&self, acc: &mut HashMap<String, Value>, key: String, value: Value) {
-        match self {
-            MergeStrategy::Overwrite => {
-                acc.insert(key, value);
-            }
-            MergeStrategy::KeepFirst => {
-                acc.entry(key).or_insert(value);
-            }
-            MergeStrategy::MergeObjects => {
-                if let Some(existing) = acc.get_mut(&key) {
-                    if let (Value::Object(existing_obj), Value::Object(new_obj)) =
-                        (existing, &value)
-                    {
-                        let mut merged = existing_obj.clone();
-                        for (k, v) in new_obj {
-                            merged.insert(k.clone(), v.clone());
-                        }
-                        *existing = Value::Object(merged);
-                    } else {
-                        acc.insert(key, value);
-                    }
-                } else {
-                    acc.insert(key, value);
-                }
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_shallow_merge() {
+        let mut base = json!({"a": 1, "b": {"inner": 2}});
+        let update = json!({"b": {"new": 3}, "c": 4});
+        merge_json(&mut base, &update, false).unwrap();
+        assert_eq!(base["b"], json!({"new": 3}));
+    }
+
+    #[test]
+    fn test_deep_merge() {
+        let mut base = json!({"a": 1, "b": {"inner": 2}});
+        let update = json!({"b": {"new": 3}, "c": 4});
+        merge_json(&mut base, &update, true).unwrap();
+        assert_eq!(base["b"], json!({"inner": 2, "new": 3}));
     }
 }
