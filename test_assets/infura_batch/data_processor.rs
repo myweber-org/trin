@@ -493,3 +493,302 @@ mod tests {
         assert_eq!(invalid, 0);
     }
 }
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug, Clone)]
+pub struct DataRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum ProcessingError {
+    InvalidData(String),
+    TransformationError(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessingError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            ProcessingError::TransformationError(msg) => write!(f, "Transformation error: {}", msg),
+            ProcessingError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl Error for ProcessingError {}
+
+pub struct DataProcessor {
+    config: ProcessingConfig,
+    statistics: ProcessingStats,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessingConfig {
+    pub max_value: f64,
+    pub min_value: f64,
+    pub allowed_tags: Vec<String>,
+    pub enable_normalization: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct ProcessingStats {
+    pub records_processed: u64,
+    pub validation_errors: u64,
+    pub transformation_errors: u64,
+}
+
+impl DataProcessor {
+    pub fn new(config: ProcessingConfig) -> Self {
+        DataProcessor {
+            config,
+            statistics: ProcessingStats::default(),
+        }
+    }
+
+    pub fn process_record(&mut self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        self.statistics.records_processed += 1;
+
+        self.validate_record(record)?;
+        let transformed = self.transform_record(record)?;
+        
+        Ok(transformed)
+    }
+
+    fn validate_record(&self, record: &DataRecord) -> Result<(), ProcessingError> {
+        if record.value < self.config.min_value || record.value > self.config.max_value {
+            return Err(ProcessingError::ValidationError(
+                format!("Value {} out of range [{}, {}]", 
+                    record.value, self.config.min_value, self.config.max_value)
+            ));
+        }
+
+        if record.name.trim().is_empty() {
+            return Err(ProcessingError::ValidationError(
+                "Record name cannot be empty".to_string()
+            ));
+        }
+
+        for tag in &record.tags {
+            if !self.config.allowed_tags.contains(tag) {
+                return Err(ProcessingError::ValidationError(
+                    format!("Tag '{}' is not allowed", tag)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn transform_record(&self, record: &DataRecord) -> Result<DataRecord, ProcessingError> {
+        let mut transformed = record.clone();
+        
+        if self.config.enable_normalization {
+            transformed.value = self.normalize_value(record.value)?;
+        }
+
+        transformed.name = transformed.name.to_uppercase();
+        transformed.tags.sort();
+        transformed.tags.dedup();
+
+        Ok(transformed)
+    }
+
+    fn normalize_value(&self, value: f64) -> Result<f64, ProcessingError> {
+        let range = self.config.max_value - self.config.min_value;
+        if range <= 0.0 {
+            return Err(ProcessingError::TransformationError(
+                "Invalid range for normalization".to_string()
+            ));
+        }
+
+        let normalized = (value - self.config.min_value) / range;
+        
+        if normalized.is_nan() || normalized.is_infinite() {
+            return Err(ProcessingError::TransformationError(
+                "Normalization produced invalid result".to_string()
+            ));
+        }
+
+        Ok(normalized)
+    }
+
+    pub fn batch_process(
+        &mut self, 
+        records: Vec<DataRecord>
+    ) -> (Vec<DataRecord>, Vec<ProcessingError>) {
+        let mut processed = Vec::new();
+        let mut errors = Vec::new();
+
+        for record in records {
+            match self.process_record(&record) {
+                Ok(transformed) => processed.push(transformed),
+                Err(e) => {
+                    match e {
+                        ProcessingError::ValidationError(_) => {
+                            self.statistics.validation_errors += 1;
+                        }
+                        ProcessingError::TransformationError(_) => {
+                            self.statistics.transformation_errors += 1;
+                        }
+                        _ => {}
+                    }
+                    errors.push(e);
+                }
+            }
+        }
+
+        (processed, errors)
+    }
+
+    pub fn get_statistics(&self) -> &ProcessingStats {
+        &self.statistics
+    }
+
+    pub fn generate_summary(&self) -> HashMap<String, String> {
+        let mut summary = HashMap::new();
+        
+        summary.insert(
+            "total_records".to_string(),
+            self.statistics.records_processed.to_string()
+        );
+        summary.insert(
+            "validation_errors".to_string(),
+            self.statistics.validation_errors.to_string()
+        );
+        summary.insert(
+            "transformation_errors".to_string(),
+            self.statistics.transformation_errors.to_string()
+        );
+        
+        let success_rate = if self.statistics.records_processed > 0 {
+            let errors = self.statistics.validation_errors + self.statistics.transformation_errors;
+            let success = self.statistics.records_processed - errors as u64;
+            (success as f64 / self.statistics.records_processed as f64 * 100.0).round()
+        } else {
+            0.0
+        };
+        
+        summary.insert("success_rate".to_string(), format!("{:.1}%", success_rate));
+        
+        summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_config() -> ProcessingConfig {
+        ProcessingConfig {
+            max_value: 100.0,
+            min_value: 0.0,
+            allowed_tags: vec!["important".to_string(), "normal".to_string(), "low".to_string()],
+            enable_normalization: true,
+        }
+    }
+
+    #[test]
+    fn test_valid_record_processing() {
+        let config = create_test_config();
+        let mut processor = DataProcessor::new(config);
+        
+        let record = DataRecord {
+            id: 1,
+            name: "test record".to_string(),
+            value: 50.0,
+            tags: vec!["important".to_string()],
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_ok());
+        
+        let processed = result.unwrap();
+        assert_eq!(processed.name, "TEST RECORD");
+        assert_eq!(processed.tags, vec!["important"]);
+    }
+
+    #[test]
+    fn test_invalid_value_validation() {
+        let config = create_test_config();
+        let mut processor = DataProcessor::new(config);
+        
+        let record = DataRecord {
+            id: 1,
+            name: "test".to_string(),
+            value: 150.0,
+            tags: vec![],
+        };
+
+        let result = processor.process_record(&record);
+        assert!(result.is_err());
+        
+        if let Err(ProcessingError::ValidationError(msg)) = result {
+            assert!(msg.contains("out of range"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let config = create_test_config();
+        let mut processor = DataProcessor::new(config);
+        
+        let records = vec![
+            DataRecord {
+                id: 1,
+                name: "record1".to_string(),
+                value: 25.0,
+                tags: vec!["normal".to_string()],
+            },
+            DataRecord {
+                id: 2,
+                name: "record2".to_string(),
+                value: 75.0,
+                tags: vec!["important".to_string()],
+            },
+            DataRecord {
+                id: 3,
+                name: "".to_string(),
+                value: 50.0,
+                tags: vec![],
+            },
+        ];
+
+        let (processed, errors) = processor.batch_process(records);
+        
+        assert_eq!(processed.len(), 2);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(processor.get_statistics().records_processed, 3);
+        assert_eq!(processor.get_statistics().validation_errors, 1);
+    }
+
+    #[test]
+    fn test_normalization() {
+        let config = ProcessingConfig {
+            max_value: 200.0,
+            min_value: 0.0,
+            allowed_tags: vec![],
+            enable_normalization: true,
+        };
+        
+        let mut processor = DataProcessor::new(config);
+        
+        let record = DataRecord {
+            id: 1,
+            name: "test".to_string(),
+            value: 100.0,
+            tags: vec![],
+        };
+
+        let result = processor.process_record(&record).unwrap();
+        assert_eq!(result.value, 0.5);
+    }
+}
