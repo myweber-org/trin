@@ -153,4 +153,41 @@ mod tests {
         assert_eq!(parsed["c"], 3);
         assert_eq!(parsed["d"], 4);
     }
+}use serde_json::{Value, Map};
+use std::fs;
+use std::path::Path;
+
+pub fn merge_json_files(file_paths: &[&str], output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut merged_map = Map::new();
+    let mut seen_keys = std::collections::HashSet::new();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            eprintln!("Warning: File {} not found, skipping.", file_path);
+            continue;
+        }
+
+        let content = fs::read_to_string(path)?;
+        let json_value: Value = serde_json::from_str(&content)?;
+
+        if let Value::Object(map) = json_value {
+            for (key, value) in map {
+                if seen_keys.insert(key.clone()) {
+                    merged_map.insert(key, value);
+                } else {
+                    eprintln!("Warning: Duplicate key '{}' found in {}, skipping.", key, file_path);
+                }
+            }
+        } else {
+            eprintln!("Warning: {} does not contain a JSON object, skipping.", file_path);
+        }
+    }
+
+    let merged_value = Value::Object(merged_map);
+    let json_string = serde_json::to_string_pretty(&merged_value)?;
+    fs::write(output_path, json_string)?;
+
+    println!("Successfully merged JSON files into {}", output_path);
+    Ok(())
 }
