@@ -94,4 +94,152 @@ mod tests {
         assert_eq!(processor.filter_by_level("ERROR").len(), 1);
         assert_eq!(processor.filter_by_level("INFO").len(), 1);
     }
+}use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    service: String,
+    message: String,
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+enum LogError {
+    IoError(std::io::Error),
+    ParseError(serde_json::Error),
+    InvalidTimestamp(String),
+}
+
+impl From<std::io::Error> for LogError {
+    fn from(err: std::io::Error) -> Self {
+        LogError::IoError(err)
+    }
+}
+
+impl From<serde_json::Error> for LogError {
+    fn from(err: serde_json::Error) -> Self {
+        LogError::ParseError(err)
+    }
+}
+
+struct LogProcessor {
+    min_timestamp: Option<DateTime<Utc>>,
+    max_timestamp: Option<DateTime<Utc>>,
+    level_filter: Option<String>,
+}
+
+impl LogProcessor {
+    fn new() -> Self {
+        LogProcessor {
+            min_timestamp: None,
+            max_timestamp: None,
+            level_filter: None,
+        }
+    }
+
+    fn with_time_range(mut self, min: Option<DateTime<Utc>>, max: Option<DateTime<Utc>>) -> Self {
+        self.min_timestamp = min;
+        self.max_timestamp = max;
+        self
+    }
+
+    fn with_level_filter(mut self, level: Option<String>) -> Self {
+        self.level_filter = level;
+        self
+    }
+
+    fn process_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<LogEntry>, LogError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let entry: LogEntry = serde_json::from_str(&line)?;
+            
+            if self.filter_entry(&entry) {
+                entries.push(entry);
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn filter_entry(&self, entry: &LogEntry) -> bool {
+        if let Some(ref level_filter) = self.level_filter {
+            if !entry.level.eq_ignore_ascii_case(level_filter) {
+                return false;
+            }
+        }
+
+        match DateTime::parse_from_rfc3339(&entry.timestamp) {
+            Ok(dt) => {
+                let utc_dt = dt.with_timezone(&Utc);
+                
+                if let Some(min) = self.min_timestamp {
+                    if utc_dt < min {
+                        return false;
+                    }
+                }
+                
+                if let Some(max) = self.max_timestamp {
+                    if utc_dt > max {
+                        return false;
+                    }
+                }
+                
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+fn analyze_logs(entries: &[LogEntry]) -> (usize, Vec<String>, Vec<String>) {
+    let total = entries.len();
+    let mut services = Vec::new();
+    let mut levels = Vec::new();
+
+    for entry in entries {
+        if !services.contains(&entry.service) {
+            services.push(entry.service.clone());
+        }
+        if !levels.contains(&entry.level) {
+            levels.push(entry.level.clone());
+        }
+    }
+
+    services.sort();
+    levels.sort();
+    (total, services, levels)
+}
+
+fn main() -> Result<(), LogError> {
+    let processor = LogProcessor::new()
+        .with_level_filter(Some("ERROR".to_string()))
+        .with_time_range(None, Some(Utc::now()));
+
+    let entries = processor.process_file("logs/app.log")?;
+    
+    let (total, services, levels) = analyze_logs(&entries);
+    
+    println!("Found {} error entries", total);
+    println!("Services: {:?}", services);
+    println!("Levels: {:?}", levels);
+    
+    for entry in entries.iter().take(5) {
+        println!("{:?}", entry);
+    }
+    
+    Ok(())
 }
