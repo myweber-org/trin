@@ -131,4 +131,140 @@ mod tests {
         assert_eq!(max, 250.5);
         assert!((avg_stat - 162.08).abs() < 0.01);
     }
+}use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
+#[derive(Debug)]
+pub struct CsvRecord {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub category: String,
+}
+
+pub fn load_csv_data(file_path: &str) -> Result<Vec<CsvRecord>, Box<dyn Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        if index == 0 {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() >= 4 {
+            let id = parts[0].parse::<u32>()?;
+            let name = parts[1].to_string();
+            let value = parts[2].parse::<f64>()?;
+            let category = parts[3].to_string();
+
+            records.push(CsvRecord {
+                id,
+                name,
+                value,
+                category,
+            });
+        }
+    }
+
+    Ok(records)
+}
+
+pub fn filter_by_category(records: &[CsvRecord], category: &str) -> Vec<&CsvRecord> {
+    records
+        .iter()
+        .filter(|record| record.category == category)
+        .collect()
+}
+
+pub fn calculate_average(records: &[&CsvRecord]) -> Option<f64> {
+    if records.is_empty() {
+        return None;
+    }
+
+    let sum: f64 = records.iter().map(|record| record.value).sum();
+    Some(sum / records.len() as f64)
+}
+
+pub fn find_max_value(records: &[CsvRecord]) -> Option<&CsvRecord> {
+    records.iter().max_by(|a, b| a.value.partial_cmp(&b.value).unwrap())
+}
+
+pub fn aggregate_by_category(records: &[CsvRecord]) -> Vec<(String, f64)> {
+    use std::collections::HashMap;
+
+    let mut category_totals: HashMap<String, f64> = HashMap::new();
+
+    for record in records {
+        *category_totals.entry(record.category.clone()).or_insert(0.0) += record.value;
+    }
+
+    let mut result: Vec<(String, f64)> = category_totals.into_iter().collect();
+    result.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_csv() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "id,name,value,category").unwrap();
+        writeln!(file, "1,ItemA,100.5,Electronics").unwrap();
+        writeln!(file, "2,ItemB,75.2,Books").unwrap();
+        writeln!(file, "3,ItemC,150.0,Electronics").unwrap();
+        writeln!(file, "4,ItemD,50.8,Books").unwrap();
+        file
+    }
+
+    #[test]
+    fn test_load_csv_data() {
+        let test_file = create_test_csv();
+        let records = load_csv_data(test_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0].name, "ItemA");
+        assert_eq!(records[1].category, "Books");
+    }
+
+    #[test]
+    fn test_filter_by_category() {
+        let test_file = create_test_csv();
+        let records = load_csv_data(test_file.path().to_str().unwrap()).unwrap();
+        let electronics = filter_by_category(&records, "Electronics");
+        assert_eq!(electronics.len(), 2);
+    }
+
+    #[test]
+    fn test_calculate_average() {
+        let test_file = create_test_csv();
+        let records = load_csv_data(test_file.path().to_str().unwrap()).unwrap();
+        let electronics = filter_by_category(&records, "Electronics");
+        let avg = calculate_average(&electronics).unwrap();
+        assert!((avg - 125.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_find_max_value() {
+        let test_file = create_test_csv();
+        let records = load_csv_data(test_file.path().to_str().unwrap()).unwrap();
+        let max_record = find_max_value(&records).unwrap();
+        assert_eq!(max_record.id, 3);
+        assert_eq!(max_record.value, 150.0);
+    }
+
+    #[test]
+    fn test_aggregate_by_category() {
+        let test_file = create_test_csv();
+        let records = load_csv_data(test_file.path().to_str().unwrap()).unwrap();
+        let aggregates = aggregate_by_category(&records);
+        assert_eq!(aggregates.len(), 2);
+        assert_eq!(aggregates[0].0, "Electronics");
+        assert_eq!(aggregates[0].1, 250.5);
+    }
 }
