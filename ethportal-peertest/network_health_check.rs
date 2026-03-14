@@ -128,3 +128,150 @@ mod tests {
         }
     }
 }
+use std::net::{IpAddr, IcmpSocket, TcpStream};
+use std::time::{Duration, Instant};
+use std::thread;
+
+pub struct NetworkProbe {
+    target: IpAddr,
+    timeout: Duration,
+}
+
+impl NetworkProbe {
+    pub fn new(target: IpAddr) -> Self {
+        Self {
+            target,
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn icmp_ping(&self) -> Result<Duration, String> {
+        let socket = IcmpSocket::bind("0.0.0.0:0")
+            .map_err(|e| format!("Failed to bind ICMP socket: {}", e))?;
+
+        let start = Instant::now();
+        socket.set_read_timeout(Some(self.timeout))
+            .map_err(|e| format!("Failed to set timeout: {}", e))?;
+
+        let payload = [0u8; 56];
+        socket.send_to(&payload, (self.target, 0))
+            .map_err(|e| format!("Failed to send ICMP packet: {}", e))?;
+
+        let mut buffer = [0u8; 1024];
+        socket.recv_from(&mut buffer)
+            .map_err(|e| format!("Failed to receive response: {}", e))?;
+
+        Ok(start.elapsed())
+    }
+
+    pub fn tcp_port_scan(&self, port: u16) -> Result<bool, String> {
+        let addr = format!("{}:{}", self.target, port);
+        match TcpStream::connect_timeout(&addr.parse().unwrap(), self.timeout) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(false),
+            Err(e) => Err(format!("Connection error: {}", e)),
+        }
+    }
+
+    pub fn perform_health_check(&self, ports: &[u16]) -> HealthReport {
+        let mut report = HealthReport::new(self.target);
+
+        match self.icmp_ping() {
+            Ok(latency) => report.set_ping_latency(latency),
+            Err(e) => report.add_error(e),
+        }
+
+        for &port in ports {
+            thread::sleep(Duration::from_millis(100));
+            match self.tcp_port_scan(port) {
+                Ok(true) => report.add_open_port(port),
+                Ok(false) => report.add_closed_port(port),
+                Err(e) => report.add_error(format!("Port {}: {}", port, e)),
+            }
+        }
+
+        report
+    }
+}
+
+pub struct HealthReport {
+    target: IpAddr,
+    ping_latency: Option<Duration>,
+    open_ports: Vec<u16>,
+    closed_ports: Vec<u16>,
+    errors: Vec<String>,
+}
+
+impl HealthReport {
+    fn new(target: IpAddr) -> Self {
+        Self {
+            target,
+            ping_latency: None,
+            open_ports: Vec::new(),
+            closed_ports: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    fn set_ping_latency(&mut self, latency: Duration) {
+        self.ping_latency = Some(latency);
+    }
+
+    fn add_open_port(&mut self, port: u16) {
+        self.open_ports.push(port);
+    }
+
+    fn add_closed_port(&mut self, port: u16) {
+        self.closed_ports.push(port);
+    }
+
+    fn add_error(&mut self, error: String) {
+        self.errors.push(error);
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        self.ping_latency.is_some() && self.errors.is_empty()
+    }
+
+    pub fn summary(&self) -> String {
+        let mut summary = format!("Target: {}\n", self.target);
+        
+        if let Some(latency) = self.ping_latency {
+            summary.push_str(&format!("Ping latency: {:?}\n", latency));
+        } else {
+            summary.push_str("Ping: Failed\n");
+        }
+
+        summary.push_str(&format!("Open ports: {:?}\n", self.open_ports));
+        summary.push_str(&format!("Closed ports: {:?}\n", self.closed_ports));
+        
+        if !self.errors.is_empty() {
+            summary.push_str(&format!("Errors: {:?}\n", self.errors));
+        }
+
+        summary.push_str(&format!("Overall health: {}", self.is_healthy()));
+        summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn test_localhost_scan() {
+        let probe = NetworkProbe::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))
+            .with_timeout(Duration::from_secs(2));
+
+        let report = probe.perform_health_check(&[80, 443, 8080]);
+        
+        println!("{}", report.summary());
+        assert!(report.ping_latency.is_some());
+    }
+}
