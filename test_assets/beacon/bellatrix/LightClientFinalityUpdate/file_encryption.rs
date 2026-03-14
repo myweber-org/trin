@@ -93,4 +93,134 @@ mod tests {
         let decrypted_data = fs::read(decrypted_file.path()).unwrap();
         assert_eq!(test_data.as_slice(), decrypted_data.as_slice());
     }
+}use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce as ChaChaNonce};
+use rand::RngCore;
+use std::error::Error;
+
+#[derive(Debug)]
+pub enum CipherAlgorithm {
+    Aes256Gcm,
+    ChaCha20Poly1305,
+}
+
+pub struct EncryptionResult {
+    pub ciphertext: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub algorithm: CipherAlgorithm,
+}
+
+pub fn encrypt_data(
+    plaintext: &[u8],
+    key: &[u8],
+    algorithm: CipherAlgorithm,
+) -> Result<EncryptionResult, Box<dyn Error>> {
+    match algorithm {
+        CipherAlgorithm::Aes256Gcm => {
+            if key.len() != 32 {
+                return Err("AES-256-GCM requires 32-byte key".into());
+            }
+            
+            let cipher = Aes256Gcm::new_from_slice(key)?;
+            let mut nonce_bytes = [0u8; 12];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            
+            let ciphertext = cipher.encrypt(nonce, plaintext)?;
+            
+            Ok(EncryptionResult {
+                ciphertext,
+                nonce: nonce_bytes.to_vec(),
+                algorithm: CipherAlgorithm::Aes256Gcm,
+            })
+        }
+        
+        CipherAlgorithm::ChaCha20Poly1305 => {
+            if key.len() != 32 {
+                return Err("ChaCha20Poly1305 requires 32-byte key".into());
+            }
+            
+            let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+            let mut nonce_bytes = [0u8; 12];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            let nonce = ChaChaNonce::from_slice(&nonce_bytes);
+            
+            let ciphertext = cipher.encrypt(nonce, plaintext)?;
+            
+            Ok(EncryptionResult {
+                ciphertext,
+                nonce: nonce_bytes.to_vec(),
+                algorithm: CipherAlgorithm::ChaCha20Poly1305,
+            })
+        }
+    }
+}
+
+pub fn decrypt_data(
+    encrypted: &EncryptionResult,
+    key: &[u8],
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    match encrypted.algorithm {
+        CipherAlgorithm::Aes256Gcm => {
+            if key.len() != 32 {
+                return Err("AES-256-GCM requires 32-byte key".into());
+            }
+            
+            let cipher = Aes256Gcm::new_from_slice(key)?;
+            let nonce = Nonce::from_slice(&encrypted.nonce);
+            cipher.decrypt(nonce, encrypted.ciphertext.as_ref())
+                .map_err(|e| e.into())
+        }
+        
+        CipherAlgorithm::ChaCha20Poly1305 => {
+            if key.len() != 32 {
+                return Err("ChaCha20Poly1305 requires 32-byte key".into());
+            }
+            
+            let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+            let nonce = ChaChaNonce::from_slice(&encrypted.nonce);
+            cipher.decrypt(nonce, encrypted.ciphertext.as_ref())
+                .map_err(|e| e.into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_aes_encryption_decryption() {
+        let plaintext = b"Secret message for AES";
+        let key = [0x42u8; 32];
+        
+        let encrypted = encrypt_data(
+            plaintext,
+            &key,
+            CipherAlgorithm::Aes256Gcm
+        ).unwrap();
+        
+        let decrypted = decrypt_data(&encrypted, &key).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+    
+    #[test]
+    fn test_chacha_encryption_decryption() {
+        let plaintext = b"Secret message for ChaCha";
+        let key = [0x24u8; 32];
+        
+        let encrypted = encrypt_data(
+            plaintext,
+            &key,
+            CipherAlgorithm::ChaCha20Poly1305
+        ).unwrap();
+        
+        let decrypted = decrypt_data(&encrypted, &key).unwrap();
+        
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
 }
